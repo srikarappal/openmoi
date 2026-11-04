@@ -1,0 +1,27 @@
+[project]
+name = "moi_brain"
+version = "0.1.0"
+description = "openMoi brain: compiles your files, reads feeds, ranks items and generates lenses"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.8",
+    "feedparser>=6.0",
+    "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["moi_brain"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["../fixtures"]
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]

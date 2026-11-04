@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>openMoi</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --card: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
+    --line: #e4e2dd; --accent: #3a5bd9; --chip: #eef0fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141416; --card: #1e1e21; --text: #ececef; --muted: #9a9aa2; --line: #2c2c31; --accent: #8ea2ff; --chip: #262a3d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 16px 8px; display: grid; gap: 12px; }
+  main.grid { max-width: 1100px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; cursor: pointer; display: flex; flex-direction: column; }
+  .card:hover { border-color: var(--accent); }
+  .thumb { width: 100%; max-height: 320px; object-fit: cover; background: var(--line); }
+  .body { padding: 12px 14px 10px; display: grid; gap: 6px; }
+  .meta { color: var(--muted); font-size: 12.5px; }
+  .title { font-weight: 650; font-size: 16.5px; line-height: 1.3; }
+  .text { color: var(--text); opacity: 0.88; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { background: var(--chip); color: var(--muted); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; }
+  .less { border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
+  .less:hover { color: var(--accent); }
+  footer { text-align: center; color: var(--muted); padding: 24px 16px 40px; font-size: 13px; }
+  article.reader { max-width: 700px; margin: 0 auto; padding: 32px 20px 60px; font-size: 18px; line-height: 1.65; }
+  article.reader h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; }
+  article.reader img { max-width: 100%; border-radius: 8px; }
+  article.reader blockquote { border-left: 3px solid var(--line); margin: 0; padding-left: 16px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main id="items"></main>
+<footer id="footer"></footer>
+<script>
+  const items_root = document.getElementById("items")
+  const footer = document.getElementById("footer")
+  const rendered = new Set()
+  const visible_since = new Map()
+  const seen_sent = new Set()
+  let next_cursor = null
+
+  const seen_observer = new IntersectionObserver(track_visibility, { threshold: 0.6 })
+  const more_observer = new IntersectionObserver(load_more_when_visible)
+  more_observer.observe(footer)
+  setInterval(flush_seen, 500)
+
+  function track_visibility(entries) {
+    for (const entry of entries) {
+      const item_id = entry.target.dataset.itemId
+      if (entry.isIntersecting) visible_since.set(item_id, Date.now())
+      else visible_since.delete(item_id)
+    }
+  }
+
+  function flush_seen() {
+    const now = Date.now()
+    const ready = []
+    for (const [item_id, since] of visible_since) {
+      if (now - since >= 1000 && !seen_sent.has(item_id)) {
+        seen_sent.add(item_id)
+        ready.push(item_id)
+      }
+    }
+    if (ready.length) moi.seen(ready)
+  }
+
+  function load_more_when_visible(entries) {
+    if (next_cursor && entries.some((entry) => entry.isIntersecting)) {
+      const cursor = next_cursor
+      next_cursor = null
+      moi.more(cursor)
+    }
+  }
+
+  function element(tag, class_name, text) {
+    const node = document.createElement(tag)
+    if (class_name) node.className = class_name
+    if (text) node.textContent = text
+    return node
+  }
+
+  function time_ago(iso) {
+    if (!iso) return ""
+    const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000))
+    if (minutes < 60) return `${minutes}m`
+    if (minutes < 1440) return `${Math.round(minutes / 60)}h`
+    return `${Math.round(minutes / 1440)}d`
+  }
+
+  function source_label(source_id) {
+    const [family, name] = source_id.split(":")
+    return name ? `${family} ${name}` : family
+  }
+
+  function card(view_item) {
+    const item = view_item.item
+    const node = element("article", "card")
+    node.dataset.itemId = item.item_id
+    if (item.image_url) {
+      const image = element("img", "thumb")
+      image.src = item.image_url
+      image.loading = "lazy"
+      image.referrerPolicy = "no-referrer"
+      node.append(image)
+    }
+    const body = element("div", "body")
+    const meta = [source_label(item.source_id), item.author_name || item.author_handle, time_ago(item.published_at)]
+    body.append(element("div", "meta", meta.filter(Boolean).join(" · ")))
+    if (item.title) body.append(element("div", "title", item.title))
+    if (item.text && item.text !== item.title) body.append(element("div", "text", item.text))
+    const row = element("div", "row")
+    const chips = element("div", "chips")
+    for (const reason of view_item.reasons.filter((reason) => !reason.startsWith("from "))) chips.append(element("span", "chip", reason))
+    const less = element("button", "less", "less like this")
+    less.addEventListener("click", (event) => {
+      event.stopPropagation()
+      moi.less_like_this(item.item_id)
+    })
+    row.append(chips, less)
+    body.append(row)
+    node.append(body)
+    node.addEventListener("click", () => moi.open(item.item_id))
+    seen_observer.observe(node)
+    return node
+  }
+
+  function reader(view_item) {
+    const item = view_item.item
+    const node = element("article", "reader")
+    node.dataset.itemId = item.item_id
+    node.append(element("h1", "", item.title || ""))
+    node.append(element("div", "meta", [item.author_name, source_label(item.source_id)].filter(Boolean).join(" · ")))
+    const blocks = JSON.parse(item.extra.blocks || "[]")
+    for (const block of blocks) {
+      if (block.type === "img" && block.src) {
+        const image = element("img")
+        image.src = block.src
+        image.referrerPolicy = "no-referrer"
+        node.append(image)
+      } else if (block.text) {
+        const tags = { h: "h2", quote: "blockquote", li: "li" }
+        node.append(element(tags[block.type] || "p", "", block.text))
+      }
+    }
+    if (!blocks.length && item.text) node.append(element("p", "", item.text))
+    return node
+  }
+
+  function is_reader(items) {
+    return items.length === 1 && items[0].item.kind === "article" && items[0].item.extra.blocks
+  }
+
+  function is_grid(items) {
+    return items.length > 0 && items.every((view_item) => ["product", "link"].includes(view_item.item.kind))
+  }
+
+  function add(items) {
+    for (const view_item of items) {
+      if (rendered.has(view_item.item.item_id)) continue
+      rendered.add(view_item.item.item_id)
+      items_root.append(is_reader(items) ? reader(view_item) : card(view_item))
+    }
+  }
+
+  function update_footer(cursor) {
+    next_cursor = cursor
+    footer.textContent = cursor ? "Loading more" : rendered.size ? "You're caught up." : "Nothing new yet."
+  }
+
+  moi.on_render((items, cursor) => {
+    items_root.replaceChildren()
+    rendered.clear()
+    items_root.className = is_grid(items) ? "grid" : ""
+    add(items)
+    update_footer(cursor)
+  })
+
+  moi.on_append((items, cursor) => {
+    add(items)
+    update_footer(cursor)
+  })
+
+  moi.ready()
+</script>
+</body>
+</html>

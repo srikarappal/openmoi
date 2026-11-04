@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Home / X</title>
+<style> article { height: 320px; border-bottom: 1px solid #ddd; } </style>
+</head>
+<body>
+<main id="timeline"></main>
+<script>
+  // A small single page app: posts render after a delay and more load on scroll, like a real timeline.
+  const authors = [["Maya R", "maya"], ["Bob Builder", "bob"], ["News Wire", "newswire"]]
+  const total = 20
+  let count = 0
+
+  function add_posts(how_many) {
+    const timeline = document.getElementById("timeline")
+    for (let index = 0; index < how_many && count < total; index++, count++) {
+      const [name, handle] = authors[count % authors.length]
+      const post_id = 1000 + count
+      const posted = new Date(Date.now() - (count + 1) * 600000).toISOString()
+      const topic = count % 4 === 1 ? " about the election" : ""
+      const photo = count % 3 === 0 ? `<div data-testid="tweetPhoto"><img src="https://pbs.twimg.com/media/p${post_id}.jpg"></div>` : ""
+      const video = count % 5 === 4 ? `<div data-testid="videoPlayer"></div>` : ""
+      const article = document.createElement("article")
+      article.setAttribute("data-testid", "tweet")
+      article.innerHTML = `<div data-testid="User-Name"><a href="/${handle}"><span>${name}</span></a></div>
+        <a href="/${handle}/status/${post_id}"><time datetime="${posted}">${count + 1}0m</time></a>
+        <div data-testid="tweetText">Post number ${count} from ${handle}${topic}</div>${photo}${video}`
+      timeline.append(article)
+    }
+  }
+
+  setTimeout(() => add_posts(5), 300)
+  window.addEventListener("scroll", () => {
+    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 400) add_posts(5)
+  })
+</script>
+</body>
+</html>

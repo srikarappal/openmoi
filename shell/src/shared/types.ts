@@ -1,0 +1,149 @@
+// Shapes shared by the main process, preloads and the chrome UI. They mirror the brain's pydantic models.
+
+export type ItemKind = "post" | "article" | "video" | "product" | "link"
+
+export interface Item {
+  item_id: string
+  source_id: string
+  native_id: string
+  kind: ItemKind
+  url: string
+  title: string | null
+  text: string | null
+  author_name: string | null
+  author_handle: string | null
+  image_url: string | null
+  media_kind: string | null
+  published_at: string | null
+  fetched_at: string
+  topics: string[]
+  available_actions: string[]
+  extra: Record<string, string>
+}
+
+export interface ViewItem {
+  item: Item
+  reasons: string[]
+}
+
+export type RawRecord = Record<string, string>
+
+export interface FieldRule {
+  select: string
+  take: string
+  transform?: string | null
+  optional?: boolean
+  nth?: number
+}
+
+export interface ExtractorSpec {
+  domain: string
+  path_pattern: string
+  page_type: string
+  version: number
+  start_url?: string | null
+  item_root: string
+  native_id?: FieldRule | null
+  fields: Record<string, FieldRule>
+  pagination: { kind: "none" | "scroll"; step_px: number }
+}
+
+export interface PilotBudget {
+  page_loads: number
+  scroll_steps: number
+  min_step_interval_ms: number
+}
+
+export interface PageSource {
+  source_id: string
+  page_type: string
+  start_url: string
+  spec: ExtractorSpec
+  budget: PilotBudget
+}
+
+export interface ViewPage {
+  view_id: string
+  items: ViewItem[]
+  has_more: boolean
+  refreshing: boolean
+  caught_up: boolean
+  summary: string
+  warnings: string[]
+  lens_stale: boolean
+}
+
+export interface ViewInfo {
+  view_id: string
+  title: string
+}
+
+export type EventKind = "open" | "seen" | "less_like_this"
+
+export interface BrainEvent {
+  view_id: string
+  item_id: string | null
+  event_kind: EventKind
+}
+
+export type LensKind = "feed" | "article" | "listing"
+
+export interface HostToLens {
+  type: "render" | "append"
+  items: ViewItem[]
+  cursor: string | null
+}
+
+export type LensToHost =
+  | { type: "ready" }
+  | { type: "open"; item_id: string }
+  | { type: "more"; cursor: string }
+  | { type: "seen"; item_ids: string[] }
+  | { type: "less_like_this"; item_id: string }
+
+export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability"
+
+export interface PageRequest {
+  request_id: number
+  op: PageOp
+  args: Record<string, unknown>
+}
+
+export interface PageResponse {
+  request_id: number
+  result?: unknown
+  error?: string
+}
+
+export interface TabInfo {
+  tab_id: number
+  title: string
+  url: string
+  mine: boolean
+}
+
+export type ActiveTarget = { kind: "view"; view_id: string } | { kind: "tab"; tab_id: number }
+
+export interface Notice {
+  notice_id: number
+  text: string
+  url?: string
+}
+
+export interface ShellState {
+  views: ViewInfo[]
+  tabs: TabInfo[]
+  active: ActiveTarget
+  address: string
+  notices: Notice[]
+}
+
+export type ShellCommand =
+  | { type: "open_view"; view_id: string }
+  | { type: "open_tab"; url: string }
+  | { type: "select_tab"; tab_id: number }
+  | { type: "close_tab"; tab_id: number }
+  | { type: "navigate"; url: string }
+  | { type: "refresh" }
+  | { type: "open_notice"; notice_id: number }
+  | { type: "dismiss_notice"; notice_id: number }

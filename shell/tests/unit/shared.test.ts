@@ -1,0 +1,158 @@
+import { describe, expect, it, vi } from "vitest"
+import { normalize_address, site_domain } from "../../src/shared/address"
+import { looks_like_challenge } from "../../src/shared/challenge"
+import { LENS_CSP, lens_data_url, lens_request_allowed, parse_lens_message, wrap_lens } from "../../src/shared/lens_doc"
+import { PendingRequests } from "../../src/shared/pending"
+import { Throttle, sleep, wait_for } from "../../src/shared/timing"
+
+function doc(html: string): Document {
+  return new DOMParser().parseFromString(html, "text/html")
+}
+
+describe("looks_like_challenge", () => {
+  it.each([
+    ["https://x.com/i/flow/login?redirect=home", "X", "<p>x</p>", true],
+    ["https://www.facebook.com/checkpoint/1", "Facebook", "<p>x</p>", true],
+    ["https://example.com/login", "Example", "<p>x</p>", true],
+    ["https://example.com/home", "Just a moment... verify you are human", "<p>x</p>", true],
+    ["https://example.com/home", "Home", "<iframe src='https://captcha.example/x'></iframe>", true],
+    ["https://example.com/home", "Home", "<form><input type='password'></form>", true],
+    ["https://example.com/home", "Home", "<article>posts</article>", false],
+    ["https://example.com/blog/logins-explained", "Logins explained", "<p>x</p>", false],
+    ["not a url", "Home", "<p>x</p>", false],
+  ])("%s %s", (url, title, html, expected) => {
+    expect(looks_like_challenge(url, title, doc(html))).toBe(expected)
+  })
+})
+
+describe("Throttle", () => {
+  it("allows one automatic run per interval and always allows forced runs", () => {
+    let now = 0
+    const throttle = new Throttle(1000, () => now)
+    expect(throttle.allow("x", false)).toBe(true)
+    now = 500
+    expect(throttle.allow("x", false)).toBe(false)
+    expect(throttle.allow("other", false)).toBe(true)
+    expect(throttle.allow("x", true)).toBe(true)
+    now = 1400
+    expect(throttle.allow("x", false)).toBe(false)
+    now = 1600
+    expect(throttle.allow("x", false)).toBe(true)
+  })
+})
+
+describe("wait_for", () => {
+  it("retries until the probe succeeds", async () => {
+    let calls = 0
+    const probe = vi.fn(async () => {
+      calls += 1
+      if (calls < 3) throw new Error("not yet")
+      return "ok"
+    })
+    await expect(wait_for(probe, 1000, 1)).resolves.toBe("ok")
+    expect(probe).toHaveBeenCalledTimes(3)
+  })
+
+  it("rethrows the last error after the timeout", async () => {
+    await expect(wait_for(async () => Promise.reject(new Error("never")), 20, 5)).rejects.toThrow("never")
+  })
+
+  it("sleep waits", async () => {
+    const started = Date.now()
+    await sleep(15)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(10)
+  })
+})
+
+describe("PendingRequests", () => {
+  it("resolves, rejects and times out by id", async () => {
+    const pending = new PendingRequests()
+    const first = pending.create<number>(1000, "first")
+    const second = pending.create<number>(1000, "second")
+    const third = pending.create<number>(5, "third")
+    expect(first.request_id).not.toBe(second.request_id)
+    expect(pending.settle(first.request_id, 42)).toBe(true)
+    expect(pending.settle(second.request_id, null, "boom")).toBe(true)
+    await expect(first.promise).resolves.toBe(42)
+    await expect(second.promise).rejects.toThrow("boom")
+    await expect(third.promise).rejects.toThrow("third timed out")
+    expect(pending.settle(first.request_id, 1)).toBe(false)
+    expect(pending.size).toBe(0)
+  })
+})
+
+describe("lens documents", () => {
+  it("puts the CSP first in an existing head", () => {
+    const wrapped = wrap_lens("<html><head><script>x()</script></head><body></body></html>")
+    expect(wrapped.indexOf("Content-Security-Policy")).toBeLessThan(wrapped.indexOf("<script>"))
+    expect(wrapped).toContain(LENS_CSP)
+  })
+
+  it("wraps a fragment into a full document", () => {
+    expect(wrap_lens("<p>hi</p>")).toMatch(/^<!doctype html><html><head><meta http-equiv="Content-Security-Policy"/)
+  })
+
+  it("encodes as a base64 data url", () => {
+    const url = lens_data_url("<p>é</p>")
+    expect(url.startsWith("data:text/html;charset=utf-8;base64,")).toBe(true)
+    expect(Buffer.from(url.split(",")[1], "base64").toString("utf-8")).toContain("<p>é</p>")
+  })
+
+  it.each([
+    ["data:text/html;base64,AA", "mainFrame", true],
+    ["https://pbs.twimg.com/a.jpg", "image", true],
+    ["https://cdn.example/v.mp4", "media", true],
+    ["http://insecure.example/a.jpg", "image", false],
+    ["https://evil.example/collect", "xhr", false],
+    ["https://evil.example/script.js", "script", false],
+    ["https://evil.example/frame", "subFrame", false],
+  ])("lens request %s as %s", (url, resource_type, allowed) => {
+    expect(lens_request_allowed(url, resource_type)).toBe(allowed)
+  })
+})
+
+describe("parse_lens_message", () => {
+  it.each([
+    [{ type: "ready" }, { type: "ready" }],
+    [{ type: "open", item_id: "abc" }, { type: "open", item_id: "abc" }],
+    [{ type: "less_like_this", item_id: "abc", extra: 1 }, { type: "less_like_this", item_id: "abc" }],
+    [{ type: "more", cursor: "more" }, { type: "more", cursor: "more" }],
+    [{ type: "seen", item_ids: ["a", "b"] }, { type: "seen", item_ids: ["a", "b"] }],
+  ])("accepts %j", (raw, expected) => {
+    expect(parse_lens_message(raw)).toEqual(expected)
+  })
+
+  it.each([
+    null,
+    "ready",
+    { type: "navigate", url: "https://evil" },
+    { type: "open" },
+    { type: "open", item_id: 5 },
+    { type: "open", item_id: "x".repeat(500) },
+    { type: "more" },
+    { type: "seen", item_ids: "a" },
+    { type: "seen", item_ids: [1] },
+    { type: "seen", item_ids: Array.from({ length: 500 }, (_, index) => `id${index}`) },
+  ])("rejects %j", (raw) => {
+    expect(parse_lens_message(raw)).toBeNull()
+  })
+})
+
+describe("addresses", () => {
+  it.each([
+    ["https://x.com/home", "https://x.com/home"],
+    ["  news.ycombinator.com ", "https://news.ycombinator.com"],
+    ["amazon.com/s?k=lamp", "https://amazon.com/s?k=lamp"],
+    ["localhost:8000/path", "http://localhost:8000/path"],
+    ["127.0.0.1:9000", "http://127.0.0.1:9000"],
+    ["best lamp for reading", "https://duckduckgo.com/?q=best%20lamp%20for%20reading"],
+    ["about:blank", "about:blank"],
+  ])("%s", (typed, expected) => {
+    expect(normalize_address(typed)).toBe(expected)
+  })
+
+  it("site_domain", () => {
+    expect(site_domain("https://www.amazon.com/s?k=lamp")).toBe("amazon.com")
+    expect(site_domain("nonsense")).toBe("")
+  })
+})

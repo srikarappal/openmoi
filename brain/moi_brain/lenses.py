@@ -1,0 +1,64 @@
+"""Lens files: the default lens plus numbered generated versions per view."""
+
+import json
+from pathlib import Path
+
+from pydantic import BaseModel
+
+SITE_PREFIX = "site_"
+LENS_KINDS = ("feed", "article", "listing")
+
+
+class LensPointer(BaseModel):
+    """Which version is live and which layout text the live lens was made for."""
+
+    version: int = 0
+    layout_hash: str | None = None
+
+
+def lens_key(view_id: str, kind: str) -> str:
+    return view_id if kind == "feed" else f"{view_id}_{kind}"
+
+
+class LensStore:
+    def __init__(self, default_path: Path, lenses_dir: Path):
+        self.default_path = default_path
+        self.lenses_dir = lenses_dir
+
+    def pointer(self, key: str) -> LensPointer:
+        path = self.lenses_dir / key / "current.json"
+        return LensPointer.model_validate_json(path.read_text()) if path.exists() else LensPointer()
+
+    def html(self, key: str) -> str:
+        version = self.pointer(key).version
+        path = self.lenses_dir / key / f"v{version}.html"
+        return path.read_text() if version and path.exists() else self.default_path.read_text()
+
+    def versions(self, key: str) -> list[int]:
+        return sorted(int(path.stem[1:]) for path in (self.lenses_dir / key).glob("v*.html") if path.stem[1:].isdigit())
+
+    def save(self, key: str, html: str, layout_hash: str) -> int:
+        """Store html as the next version and make it live."""
+        folder = self.lenses_dir / key
+        folder.mkdir(parents=True, exist_ok=True)
+        version = max(self.versions(key), default=0) + 1
+        (folder / f"v{version}.html").write_text(html)
+        self.write_pointer(key, LensPointer(version=version, layout_hash=layout_hash))
+        return version
+
+    def rollback(self, key: str, layout_hash: str) -> int:
+        """Make the version before the live one current; 0 means back to the default lens."""
+        current = self.pointer(key).version
+        earlier = [version for version in self.versions(key) if version < current]
+        version = max(earlier, default=0)
+        self.write_pointer(key, LensPointer(version=version, layout_hash=layout_hash))
+        return version
+
+    def is_stale(self, key: str, layout: str, layout_hash: str) -> bool:
+        """A non empty layout that the live lens was not made for."""
+        return bool(layout.strip()) and self.pointer(key).layout_hash != layout_hash
+
+    def write_pointer(self, key: str, pointer: LensPointer) -> None:
+        folder = self.lenses_dir / key
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "current.json").write_text(json.dumps(pointer.model_dump(), indent=2))

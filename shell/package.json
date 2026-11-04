@@ -1,0 +1,31 @@
+{
+  "name": "openmoi_shell",
+  "version": "0.1.0",
+  "private": true,
+  "description": "openMoi shell: a Chromium browser that shows your own version of the sites you use",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "node build.mjs && playwright test",
+    "start": "node build.mjs && electron ."
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "electron": "^45.2.2",
+    "esbuild": "^0.28.2",
+    "jsdom": "^29.1.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

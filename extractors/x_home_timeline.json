@@ -1,0 +1,19 @@
+{
+  "domain": "x.com",
+  "path_pattern": "/home",
+  "page_type": "home_timeline",
+  "version": 1,
+  "start_url": "https://x.com/home",
+  "item_root": "article[data-testid='tweet']",
+  "native_id": {"select": "a[href*='/status/']:has(time)", "take": "attr:href", "transform": "regex:/status/(\\d+)"},
+  "fields": {
+    "url": {"select": "a[href*='/status/']:has(time)", "take": "attr:href", "transform": "absolute_url"},
+    "author_name": {"select": "[data-testid='User-Name'] span", "take": "text", "optional": true},
+    "author_handle": {"select": "[data-testid='User-Name'] a[href^='/']", "take": "attr:href", "transform": "strip_prefix:/", "optional": true},
+    "text": {"select": "[data-testid='tweetText']", "take": "text", "optional": true},
+    "published_at": {"select": "time", "take": "attr:datetime", "optional": true},
+    "image_url": {"select": "[data-testid='tweetPhoto'] img", "take": "attr:src", "optional": true},
+    "media_kind": {"select": "[data-testid='videoPlayer']", "take": "const:video", "optional": true}
+  },
+  "pagination": {"kind": "scroll", "step_px": 1200}
+}
