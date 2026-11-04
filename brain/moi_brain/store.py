@@ -78,10 +78,17 @@ class Store:
             ).fetchall()
         return [Item.model_validate_json(row[0]) for row in rows]
 
-    def get_item(self, item_id: str) -> Item | None:
+    def get_items(self, item_ids: list[str]) -> dict[str, Item]:
+        if not item_ids:
+            return {}
+        marks = ", ".join("?" for _ in item_ids)
         with self.lock:
-            row = self.connection.execute("SELECT item_json FROM items WHERE item_id = ?", (item_id,)).fetchone()
-        return Item.model_validate_json(row[0]) if row else None
+            rows = self.connection.execute(f"SELECT item_json FROM items WHERE item_id IN ({marks})", item_ids).fetchall()
+        items = [Item.model_validate_json(row[0]) for row in rows]
+        return {item.item_id: item for item in items}
+
+    def get_item(self, item_id: str) -> Item | None:
+        return self.get_items([item_id]).get(item_id)
 
     def update_topics(self, topics_by_id: dict[str, list[str]]) -> None:
         with self.lock, self.connection:

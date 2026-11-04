@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto"
 import { createServer } from "node:net"
 import path from "node:path"
 import { wait_for } from "../shared/timing"
-import type { BrainEvent, Item, LensKind, PageSource, RawRecord, ViewInfo, ViewPage } from "../shared/types"
+import type { BrainEvent, Item, LensKind, PageSource, Proposal, RawRecord, ViewInfo, ViewPage } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
 const RESTART_DELAY_MS = 1_000
@@ -62,6 +62,18 @@ export class BrainClient {
 
   events(events: BrainEvent[]): Promise<{ recorded: number }> {
     return this.request("POST", "/events", { events })
+  }
+
+  edit(view_id: string, text: string, item_id?: string): Promise<Proposal> {
+    return this.request("POST", "/edit", { view_id, text, item_id })
+  }
+
+  apply_edit(proposal_id: string): Promise<Proposal> {
+    return this.request("POST", "/edit/apply", { proposal_id })
+  }
+
+  discard_edit(proposal_id: string): Promise<{ status: string }> {
+    return this.request("POST", "/edit/discard", { proposal_id })
   }
 
   lens(view_id: string, kind: LensKind): Promise<string> {

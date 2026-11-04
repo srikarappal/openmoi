@@ -5,8 +5,10 @@ flat JSON by the fast model, cached by the hash of every file they depend on.
 """
 
 import hashlib
+import json
 import re
 import threading
+import time
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -15,12 +17,34 @@ from moi_brain.config import Paths
 from moi_brain.feeds import CHANNEL_ID, read_takeout
 from moi_brain.items import rss_source_id, youtube_source_id
 from moi_brain.lenses import SITE_PREFIX
+from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import bullets, parse_sections, section_text
+from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.]+$")
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]+")
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
+DEFAULT_BOOST = 3.0
+RETRY_AFTER_SECONDS = 60.0
+RULES_PROMPT = """You turn rules written in plain words into JSON for openMoi, a personal feed reader.
+Reply with one JSON object: {"rules": [<rule>, ...], "summary": "<one short sentence>"}.
+
+A rule is {"when": <condition>, "unless": <condition or null>, "do": "hide" | "boost" | "limit", "weight": <number>, "count_per_day": <integer or null>}.
+A condition is {"field": <field>, "op": "eq" | "in" | "contains" | "gt" | "lt", "value": <string, number or list of strings>}.
+Fields:
+* source_id: where an item comes from. Use one of the given sources, or "x", "youtube" or "rss" for a whole family.
+* author_handle: a handle without @, such as maya.
+* topic: one short lowercase word such as politics, crypto or sports. Items are tagged with every topic you use.
+* media_kind: image, short_video, long_video or video. Shorts and reels are short_video.
+* text: words in the title or text; use op contains.
+* age_hours: hours since publishing; use gt or lt.
+
+"hide", "no" and "never" mean do hide. "first" or "always show" mean boost with weight 10; "more of" means boost with weight 3.
+"at most N a day" means limit with count_per_day N.
+"unless" or "except" becomes the unless condition.
+view_rules apply to this view. likes are boosts with weight 3 on that topic, author or source; dislikes are hides.
+Skip lines that are not rules. The summary describes every rule in plain words."""
 
 
 class BadInput(ValueError):
@@ -63,13 +87,12 @@ class CompiledView(BaseModel):
         return hashlib.sha256(self.layout.encode()).hexdigest()
 
     def source_ids(self) -> list[str]:
-        ids = []
-        for source in self.sources:
-            if source.source_id == "x":
-                ids.append("x")
-            ids += [youtube_source_id(channel) for channel in source.channels]
-            ids += [rss_source_id(feed) for feed in source.feeds]
-        return list(dict.fromkeys(ids))
+        return source_ids(self.sources)
+
+
+class RulesDraft(BaseModel):
+    rules: list[Rule] = Field(default_factory=list)
+    summary: str = ""
 
 
 class ViewInfo(BaseModel):
@@ -108,6 +131,31 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
     return sources, warnings
 
 
+def source_ids(sources: list[SourceRef]) -> list[str]:
+    ids = []
+    for source in sources:
+        if source.source_id == "x":
+            ids.append("x")
+        ids += [youtube_source_id(channel) for channel in source.channels]
+        ids += [rss_source_id(feed) for feed in source.feeds]
+    return list(dict.fromkeys(ids))
+
+
+def usable_rules(rules: list[Rule]) -> list[Rule]:
+    """Rules that can run: a boost without a weight gets the default, a limit without a count is dropped."""
+    usable = []
+    for rule in rules:
+        if rule.do == "limit" and not rule.count_per_day:
+            continue
+        usable.append(rule.model_copy(update={"weight": rule.weight or DEFAULT_BOOST}) if rule.do == "boost" else rule)
+    return usable
+
+
+def rules_prompt(rules_text: str, likes: str, dislikes: str, sources: list[str]) -> list[dict[str, str]]:
+    payload = {"view_rules": bullets(rules_text), "likes": bullets(likes), "dislikes": bullets(dislikes), "sources": sources}
+    return [{"role": "system", "content": RULES_PROMPT}, {"role": "user", "content": json.dumps(payload)}]
+
+
 def describe_sources(sources: list[SourceRef]) -> str:
     parts = []
     for source in sources:
@@ -124,18 +172,29 @@ def describe_sources(sources: list[SourceRef]) -> str:
 
 
 class Compiler:
-    def __init__(self, paths: Paths):
+    """Caches compiled views by the hash of every file they read; a failed rules compile retries after a minute."""
+
+    def __init__(self, paths: Paths, gateway: Gateway, memory: Memory):
         self.paths = paths
+        self.gateway = gateway
+        self.memory = memory
         self.lock = threading.Lock()
+        self.failures: dict[str, tuple[str, float, CompiledView]] = {}
+
+    def view_ids(self) -> list[str]:
+        return [path.stem for path in sorted(self.paths.views.glob("*.md")) if VIEW_ID.fullmatch(path.stem)]
 
     def view_infos(self) -> list[ViewInfo]:
         """Views shown as tabs: every views/*.md except per site files, Feed first."""
         infos = []
-        for path in sorted(self.paths.views.glob("*.md")):
-            if not path.stem.startswith(SITE_PREFIX) and VIEW_ID.fullmatch(path.stem):
-                title, _ = parse_sections(path.read_text())
-                infos.append(ViewInfo(view_id=path.stem, title=title or path.stem))
+        for view_id in self.view_ids():
+            if not view_id.startswith(SITE_PREFIX):
+                title, _ = parse_sections(self.view_text(view_id))
+                infos.append(ViewInfo(view_id=view_id, title=title or view_id))
         return [info for info in infos if info.view_id == "feed"] + [info for info in infos if info.view_id != "feed"]
+
+    def all_compiled(self) -> list[CompiledView]:
+        return [self.compiled(view_id) for view_id in self.view_ids()]
 
     def view_text(self, view_id: str) -> str:
         path = self.paths.views / f"{check_view_id(view_id)}.md"
@@ -143,7 +202,8 @@ class Compiler:
 
     def input_hash(self, view_text: str) -> str:
         takeout = self.paths.takeout.read_text() if self.paths.takeout.exists() else ""
-        return hashlib.sha256(f"{view_text}\0{takeout}".encode()).hexdigest()
+        parts = [view_text, takeout, self.memory.likes(), self.memory.dislikes()]
+        return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
     def compiled(self, view_id: str) -> CompiledView:
         """The compiled view, recompiling only when one of its input files changed."""
@@ -154,19 +214,42 @@ class Compiler:
             previous = CompiledView.model_validate_json(cache.read_text()) if cache.exists() else None
             if previous and previous.file_hash == file_hash:
                 return previous
-            compiled = self.compile(view_id, view_text, file_hash)
-            cache.write_text(compiled.model_dump_json(indent=2))
+            failure = self.failures.get(view_id)
+            if failure and failure[0] == file_hash and time.monotonic() - failure[1] < RETRY_AFTER_SECONDS:
+                return failure[2]
+            compiled, succeeded = self.compile(view_id, view_text, file_hash, previous)
+            if succeeded:
+                cache.write_text(compiled.model_dump_json(indent=2))
+                self.failures.pop(view_id, None)
+            else:
+                self.failures[view_id] = (file_hash, time.monotonic(), compiled)
         return compiled
 
-    def compile(self, view_id: str, view_text: str, file_hash: str) -> CompiledView:
+    def compile(self, view_id: str, view_text: str, file_hash: str, previous: CompiledView | None) -> tuple[CompiledView, bool]:
         title, sections = parse_sections(view_text)
         sources, warnings = parse_sources(section_text(sections, "sources"), read_takeout(self.paths.takeout))
-        return CompiledView(
+        try:
+            rules, rules_summary = self.compile_rules(section_text(sections, "rules"), sources)
+            succeeded = True
+        except LlmError as error:
+            rules, rules_summary, succeeded = (previous.rules if previous else []), "", False
+            warnings.append(f"Rules not updated: {error}")
+        compiled = CompiledView(
             view_id=view_id,
             title=title or view_id,
             file_hash=file_hash,
             sources=sources,
+            rules=rules,
             layout=section_text(sections, "layout"),
-            summary=describe_sources(sources),
+            summary=" ".join(part for part in (describe_sources(sources), rules_summary) if part),
             warnings=warnings,
         )
+        return compiled, succeeded
+
+    def compile_rules(self, rules_text: str, sources: list[SourceRef]) -> tuple[list[Rule], str]:
+        likes, dislikes = self.memory.likes(), self.memory.dislikes()
+        if not (bullets(rules_text) or bullets(likes) or bullets(dislikes)):
+            return [], ""
+        prompt = rules_prompt(rules_text, likes, dislikes, source_ids(sources))
+        draft = self.gateway.complete_json("fast", "compile_rules", prompt, True, RulesDraft)
+        return usable_rules(draft.rules), draft.summary.strip()

@@ -1,7 +1,7 @@
 // The chrome UI: view and web tabs, the address bar and the side panel.
 import { useEffect, useState, type FormEvent } from "react"
 import { createRoot } from "react-dom/client"
-import type { ShellCommand, ShellState } from "../shared/types"
+import type { ChatEntry, ShellCommand, ShellState } from "../shared/types"
 
 interface ShellBridge {
   command(command: ShellCommand): void
@@ -60,6 +60,77 @@ function TopBar({ state }: { state: ShellState }) {
   )
 }
 
+function diff_class(line: string): string {
+  if (line.startsWith("+")) return "add"
+  if (line.startsWith("-")) return "remove"
+  return "same"
+}
+
+function DiffView({ file, diff }: { file: string; diff: string }) {
+  const lines = diff.split("\n").filter((line) => !/^(---|\+\+\+|@@)/.test(line))
+  return (
+    <div className="diff">
+      <div className="diff_file">{file}</div>
+      {lines.map((line, index) => (
+        <div key={index} className={diff_class(line)}>
+          {line || " "}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ChatMessage({ entry }: { entry: ChatEntry }) {
+  const proposal = entry.proposal
+  return (
+    <div className={`message ${entry.role}`}>
+      <div className="message_text">{entry.text}</div>
+      {proposal && (
+        <div className="proposal">
+          {proposal.changes.map((change) => (
+            <DiffView key={change.file} file={change.file} diff={change.diff} />
+          ))}
+          {proposal.lens_action === "rollback" && <div className="lens_action">Bring back the previous look</div>}
+          {entry.status === "pending" ? (
+            <div className="proposal_actions">
+              <button className="confirm" onClick={() => send({ type: "proposal_apply", proposal_id: proposal.proposal_id })}>
+                Confirm
+              </button>
+              <button onClick={() => send({ type: "proposal_discard", proposal_id: proposal.proposal_id })}>Discard</button>
+            </div>
+          ) : (
+            <div className={`proposal_status ${entry.status}`}>{entry.status}</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Chat({ state }: { state: ShellState }) {
+  const [text, set_text] = useState("")
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (!text.trim()) return
+    send({ type: "chat_send", text: text.trim() })
+    set_text("")
+  }
+  return (
+    <section className="chat">
+      <div className="messages">
+        {state.chat.map((entry) => (
+          <ChatMessage key={entry.entry_id} entry={entry} />
+        ))}
+        {state.thinking && <div className="message moi thinking">Thinking</div>}
+      </div>
+      <form className="composer" onSubmit={submit}>
+        <div className="chat_view">Changes apply to {state.chat_view}</div>
+        <input value={text} placeholder="Tell openMoi what you want" onChange={(event) => set_text(event.target.value)} />
+      </form>
+    </section>
+  )
+}
+
 function SidePanel({ state }: { state: ShellState }) {
   return (
     <aside className="side">
@@ -74,6 +145,7 @@ function SidePanel({ state }: { state: ShellState }) {
           </div>
         ))}
       </section>
+      <Chat state={state} />
     </aside>
   )
 }

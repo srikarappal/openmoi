@@ -1,6 +1,6 @@
-// Feed style views: first render from cache, refresh sources, append new items, forward lens events.
+// Feed style views: render from cache, refresh sources, append new items, re-render after edits, forward lens events.
 import { sleep } from "../shared/timing"
-import type { LensToHost, PageSource, RawRecord, ViewPage } from "../shared/types"
+import type { Item, LensToHost, PageSource, RawRecord, ViewPage } from "../shared/types"
 import type { BrainClient } from "./brain"
 import type { LensContext, LensManager } from "./lenses"
 import type { SourceReader } from "./sources"
@@ -11,6 +11,8 @@ const SETTLE_ATTEMPTS = 30
 export interface ViewHooks {
   open_tab(url: string): void
   notify(text: string, url?: string): void
+  echo(text: string): void
+  less_like_this(view_id: string, item: Item): void
 }
 
 export function view_lens_key(view_id: string): string {
@@ -22,6 +24,10 @@ function cursor_for(page: ViewPage): string | null {
 }
 
 export class ViewController {
+  private readonly versions = new Map<string, string>()
+  private readonly summaries = new Map<string, string>()
+  private readonly reported = new Set<string>()
+
   constructor(
     private readonly brain: BrainClient,
     private readonly lenses: LensManager,
@@ -29,10 +35,13 @@ export class ViewController {
     private readonly hooks: ViewHooks,
   ) {}
 
+  // Opens the view's lens, or re-renders an open one whose files changed since it last rendered.
   async show(view_id: string): Promise<LensContext> {
     const existing = this.lenses.get(view_lens_key(view_id))
-    if (existing) return existing
-    return this.lenses.open(view_lens_key(view_id), view_id, await this.brain.lens(view_id, "feed"))
+    if (!existing) return this.lenses.open(view_lens_key(view_id), view_id, await this.brain.lens(view_id, "feed"))
+    const page = await this.brain.view_page(view_id, [])
+    if (page.version !== this.versions.get(view_id)) await existing.serial(() => this.render(existing))
+    return existing
   }
 
   owns(context: LensContext): boolean {
@@ -41,15 +50,29 @@ export class ViewController {
 
   on_ready(context: LensContext): void {
     context
-      .serial(() => this.render_first(context))
+      .serial(() => this.render(context))
       .then(() => this.refresh(context, false))
       .catch((error) => this.hooks.notify(`${context.view_id} could not load: ${error}`))
   }
 
-  private async render_first(context: LensContext): Promise<void> {
+  private async render(context: LensContext): Promise<void> {
     const page = await this.brain.view_page(context.view_id, [])
     context.send({ type: "render", items: page.items, cursor: cursor_for(page) })
-    for (const warning of page.warnings) this.hooks.notify(warning)
+    this.versions.set(context.view_id, page.version)
+    const previous = this.summaries.get(context.view_id)
+    if (previous !== undefined && previous !== page.summary) this.hooks.echo(`I understood: ${page.summary}`)
+    this.summaries.set(context.view_id, page.summary)
+    this.report(page)
+  }
+
+  // Each warning shows once per view, so a notice you dismissed stays dismissed.
+  private report(page: ViewPage): void {
+    for (const warning of page.warnings) {
+      const key = `${page.view_id}\0${page.version}\0${warning}`
+      if (this.reported.has(key)) continue
+      this.reported.add(key)
+      this.hooks.notify(warning)
+    }
   }
 
   // Reads page sources in your session, then appends whatever is new until the brain finishes its own feeds.
@@ -67,6 +90,28 @@ export class ViewController {
     }
   }
 
+  // After an edit: re-render now, and once more if the brain was still retagging items for new rules.
+  async after_edit(view_id: string): Promise<void> {
+    const context = this.lenses.get(view_lens_key(view_id))
+    if (!context) return
+    await context.serial(() => this.render(context))
+    if (await this.waited_for_brain(view_id)) await context.serial(() => this.render(context))
+  }
+
+  // Loads the view's current lens HTML; the lens announces ready and gets a fresh render.
+  async reload_lens(view_id: string): Promise<void> {
+    const context = this.lenses.get(view_lens_key(view_id))
+    if (context) await this.lenses.load(context, await this.brain.lens(view_id, "feed"))
+  }
+
+  private async waited_for_brain(view_id: string): Promise<boolean> {
+    for (let attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
+      if (!(await this.brain.view_page(view_id, [])).refreshing) return attempt > 0
+      await sleep(SETTLE_POLL_MS)
+    }
+    return true
+  }
+
   private async ingest_batch(context: LensContext, source: PageSource, records: RawRecord[]): Promise<void> {
     await this.brain.ingest(source.source_id, records, source.start_url)
     await this.append_next(context)
@@ -76,16 +121,19 @@ export class ViewController {
     return context.serial(async () => {
       const page = await this.brain.view_page(context.view_id, [...context.rendered.keys()])
       if (page.items.length || !page.has_more) context.send({ type: "append", items: page.items, cursor: cursor_for(page) })
+      this.report(page)
       return page
     })
   }
 
   async on_event(context: LensContext, message: LensToHost): Promise<void> {
-    if (message.type === "open") {
-      const item = context.rendered.get(message.item_id)
-      if (!item) return
+    const item = "item_id" in message ? context.rendered.get(message.item_id) : undefined
+    if (message.type === "open" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "open" }])
       this.hooks.open_tab(item.url)
+    } else if (message.type === "less_like_this" && item) {
+      await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "less_like_this" }])
+      this.hooks.less_like_this(context.view_id, item)
     } else if (message.type === "more") {
       await this.append_next(context)
     } else if (message.type === "seen") {

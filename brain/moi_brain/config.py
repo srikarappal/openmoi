@@ -92,6 +92,10 @@ class Paths:
         return self.logs / "llm_calls.jsonl"
 
     @property
+    def tagging_state(self) -> Path:
+        return self.state / "tagged_topics.json"
+
+    @property
     def channel_cache(self) -> Path:
         return self.state / "youtube_channels.json"
 

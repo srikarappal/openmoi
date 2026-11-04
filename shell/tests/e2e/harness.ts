@@ -50,6 +50,7 @@ export function fixture_view(name: string, base_url: string): string {
 export interface LaunchOptions {
   x_page?: string
   views?: Record<string, string>
+  fast_slot?: { base_url: string; model: string }
 }
 
 export class Harness {
@@ -78,7 +79,7 @@ export class Harness {
     const views = options.views ?? { feed: fixture_view("feed", world.base_url) }
     for (const [view_id, text] of Object.entries(views)) writeFileSync(path.join(home, "views", `${view_id}.md`), text)
     const slot = { base_url: `${world.base_url}/llm/v1`, model: "fake" }
-    writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: slot, smart: slot }))
+    writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot }))
     const brain_port = await free_port()
     const app = await electron.launch({
       args: [path.join(SHELL_DIR, "dist", "main.js")],
@@ -122,6 +123,22 @@ export class Harness {
 
   async lens_text(): Promise<string> {
     return (await this.in_lenses<string>("document.body.innerText")).join("\n")
+  }
+
+  // Types into the chat panel and waits for openMoi's answer.
+  async chat(text: string): Promise<void> {
+    const before = await this.chrome.locator(".message.moi").count()
+    await this.chrome.locator(".composer input").fill(text)
+    await this.chrome.locator(".composer input").press("Enter")
+    await this.chrome.locator(".message.moi").nth(before).waitFor()
+  }
+
+  file(relative: string): string {
+    return readFileSync(path.join(this.home, relative), "utf-8")
+  }
+
+  write(relative: string, content: string): void {
+    writeFileSync(path.join(this.home, relative), content)
   }
 
   async close(): Promise<void> {

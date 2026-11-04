@@ -70,6 +70,7 @@ export interface ViewPage {
   caught_up: boolean
   summary: string
   warnings: string[]
+  version: string
   lens_stale: boolean
 }
 
@@ -115,6 +116,27 @@ export interface PageResponse {
   error?: string
 }
 
+export interface Change {
+  file: string
+  diff: string
+}
+
+export interface Proposal {
+  proposal_id: string
+  view_id: string
+  changes: Change[]
+  lens_action: "rollback" | null
+  reply: string
+}
+
+export interface ChatEntry {
+  entry_id: number
+  role: "you" | "moi"
+  text: string
+  proposal?: Proposal
+  status?: "pending" | "applied" | "discarded"
+}
+
 export interface TabInfo {
   tab_id: number
   title: string
@@ -136,6 +158,9 @@ export interface ShellState {
   active: ActiveTarget
   address: string
   notices: Notice[]
+  chat: ChatEntry[]
+  chat_view: string
+  thinking: boolean
 }
 
 export type ShellCommand =
@@ -147,3 +172,6 @@ export type ShellCommand =
   | { type: "refresh" }
   | { type: "open_notice"; notice_id: number }
   | { type: "dismiss_notice"; notice_id: number }
+  | { type: "chat_send"; text: string }
+  | { type: "proposal_apply"; proposal_id: string }
+  | { type: "proposal_discard"; proposal_id: string }

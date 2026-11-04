@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from moi_brain.brain import Brain, PageSource, ViewPage
 from moi_brain.compile import BadInput, ViewInfo
+from moi_brain.edits import Proposal
 from moi_brain.items import Event, Item
 from moi_brain.llm import LlmError, PrivacyBlocked
 from moi_brain.rank import PAGE_SIZE
@@ -56,6 +57,16 @@ class EventsRequest(BaseModel):
     events: list[Event]
 
 
+class EditRequest(BaseModel):
+    view_id: str
+    text: str = Field(min_length=1, max_length=2000)
+    item_id: str | None = None
+
+
+class ProposalRequest(BaseModel):
+    proposal_id: str
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -85,6 +96,22 @@ def view_page(view_id: str, body: ViewRequest, brain: BrainDep) -> ViewPage:
 def events(body: EventsRequest, brain: BrainDep) -> dict[str, int]:
     brain.record_events(body.events)
     return {"recorded": len(body.events)}
+
+
+@router.post("/edit")
+def edit(body: EditRequest, brain: BrainDep) -> Proposal:
+    return brain.propose_edit(body.view_id, body.text, body.item_id)
+
+
+@router.post("/edit/apply")
+def apply_edit(body: ProposalRequest, brain: BrainDep) -> Proposal:
+    return brain.apply_edit(body.proposal_id)
+
+
+@router.post("/edit/discard")
+def discard_edit(body: ProposalRequest, brain: BrainDep) -> dict[str, str]:
+    brain.editor.discard(body.proposal_id)
+    return {"status": "discarded"}
 
 
 @router.get("/lens/{view_id}", response_class=HTMLResponse)

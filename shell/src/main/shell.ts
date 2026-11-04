@@ -1,8 +1,9 @@
 // The window: chrome UI on top and on the right, one content area showing a lens or a web tab.
 import path from "node:path"
 import { BrowserWindow, ipcMain, type WebContentsView } from "electron"
-import type { ActiveTarget, LensToHost, Notice, ShellCommand, ShellState, ViewInfo } from "../shared/types"
+import type { ActiveTarget, Item, LensToHost, Notice, Proposal, ShellCommand, ShellState, ViewInfo } from "../shared/types"
 import type { BrainClient } from "./brain"
+import { ChatController } from "./chat"
 import type { ViewHost } from "./host"
 import { LensManager, type LensContext } from "./lenses"
 import { SourceReader } from "./sources"
@@ -21,7 +22,9 @@ export class Shell implements ViewHost {
   readonly lenses: LensManager
   readonly sources: SourceReader
   readonly views: ViewController
+  readonly chat: ChatController
   private active: ActiveTarget = { kind: "view", view_id: "feed" }
+  private last_view_id = "feed"
   private view_infos: ViewInfo[] = []
   private notices: Notice[] = []
   private next_notice_id = 1
@@ -43,7 +46,17 @@ export class Shell implements ViewHost {
     this.tabs = new TabManager(this, () => this.push_state(), (tab) => this.activate({ kind: "tab", tab_id: tab.tab_id }))
     this.sources = new SourceReader(this)
     this.lenses = new LensManager(this, { on_ready: (context) => this.on_lens_ready(context), on_event: (context, message) => this.on_lens_event(context, message) })
-    this.views = new ViewController(brain, this.lenses, this.sources, { open_tab: (url) => this.open_tab(url), notify: (text, url) => this.notify(text, url) })
+    this.views = new ViewController(brain, this.lenses, this.sources, {
+      open_tab: (url) => this.open_tab(url),
+      notify: (text, url) => this.notify(text, url),
+      echo: (text) => this.chat.say(text),
+      less_like_this: (view_id, item) => this.less_like_this(view_id, item),
+    })
+    this.chat = new ChatController(brain, {
+      chat_view: () => this.last_view_id,
+      on_applied: (proposal) => this.on_applied(proposal),
+      changed: () => this.push_state(),
+    })
     this.window.on("resize", () => this.layout())
     ipcMain.on("moi:command", (event, command: ShellCommand) => {
       if (event.sender === this.window.webContents) this.run(command).catch((error) => this.notify(String(error)))
@@ -94,6 +107,7 @@ export class Shell implements ViewHost {
   // Shows the active lens or tab on top; hidden source views stay attached underneath and keep rendering.
   private activate(target: ActiveTarget): void {
     this.active = target
+    if (target.kind === "view") this.last_view_id = target.view_id
     const shown = this.active_view()
     for (const view of [...this.lenses.all().map((context) => context.view), ...this.tabs.all().map((tab) => tab.view)]) {
       view.setVisible(view === shown)
@@ -114,6 +128,19 @@ export class Shell implements ViewHost {
   notify(text: string, url?: string): void {
     if (this.notices.some((notice) => notice.text === text)) return
     this.notices = [...this.notices, { notice_id: this.next_notice_id++, text, url }].slice(-MAX_NOTICES)
+    this.push_state()
+  }
+
+  private less_like_this(view_id: string, item: Item): void {
+    const label = item.title || item.text?.slice(0, 80) || item.url
+    this.chat.send(`Less like this: ${label}`, item.item_id, view_id).catch((error) => this.notify(String(error)))
+  }
+
+  // An applied edit can rename views, change rules or roll the lens back; refresh whatever it touched.
+  private async on_applied(proposal: Proposal): Promise<void> {
+    this.view_infos = await this.brain.views()
+    if (proposal.lens_action === "rollback") await this.views.reload_lens(proposal.view_id)
+    else await this.views.after_edit(proposal.view_id)
     this.push_state()
   }
 
@@ -166,6 +193,15 @@ export class Shell implements ViewHost {
         this.notices = this.notices.filter((notice) => notice.notice_id !== command.notice_id)
         this.push_state()
         return
+      case "chat_send":
+        await this.chat.send(command.text)
+        return
+      case "proposal_apply":
+        await this.chat.apply(command.proposal_id)
+        return
+      case "proposal_discard":
+        await this.chat.discard(command.proposal_id)
+        return
     }
   }
 
@@ -177,6 +213,9 @@ export class Shell implements ViewHost {
       active: this.active,
       address: tab ? tab.view.webContents.getURL() : "",
       notices: this.notices,
+      chat: this.chat.list(),
+      chat_view: this.view_infos.find((view) => view.view_id === this.last_view_id)?.title ?? this.last_view_id,
+      thinking: this.chat.thinking,
     }
   }
 
