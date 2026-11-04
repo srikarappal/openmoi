@@ -1,0 +1,126 @@
+// The Chrome relay in the real app: a real Chromium with the openMoi extension, signed in where openMoi is not.
+import { expect, test } from "@playwright/test"
+import { ChromeWithExtension, FakeWorld, Harness, eventually } from "./harness"
+
+interface Debug {
+  store: { items: Record<string, number> }
+  relay: { connected: boolean; passive_batches: number }
+}
+
+let world: FakeWorld
+
+test.beforeAll(async () => {
+  world = await FakeWorld.start()
+})
+
+test.afterAll(() => world.stop())
+
+async function launch_both(): Promise<{ app: Harness; chrome: ChromeWithExtension }> {
+  const app = await Harness.launch(world, { x_page: "x_home_signed_in.html" })
+  const chrome = await ChromeWithExtension.launch(world, app.relay_port)
+  return { app, chrome }
+}
+
+async function approve(app: Harness): Promise<void> {
+  await app.chrome.locator(".notice", { hasText: "wants to read pages for openMoi" }).locator("button", { hasText: "Allow" }).click({ timeout: 30_000 })
+  await expect(app.chrome.locator(".relay.on")).toHaveText("Chrome connected")
+}
+
+async function close_both(app: Harness, chrome: ChromeWithExtension): Promise<void> {
+  await chrome.close()
+  await app.close()
+}
+
+test("until you allow Chrome nothing is read there; after, X comes through your Chrome sign in", async () => {
+  const { app, chrome } = await launch_both()
+  try {
+    await expect(app.chrome.locator(".notice", { hasText: "connect Chrome (the openMoi extension)" })).toHaveCount(1, { timeout: 30_000 })
+    await expect(app.chrome.locator(".relay")).toHaveText("Chrome waiting")
+    expect((await app.brain<Debug>("/debug")).relay.connected).toBe(false)
+    expect(await app.lens_text()).not.toContain("Post number")
+
+    await approve(app)
+    await expect(app.chrome.locator(".message.moi", { hasText: "Chrome is connected" })).toHaveCount(1)
+    await app.chrome.locator("button.action", { hasText: "Refresh" }).click()
+    const text = await eventually(
+      () => app.lens_text(),
+      (value) => value.includes("Post number 0 from maya"),
+    )
+    expect(text).toContain("Post number 0 from maya")
+    expect((await app.brain<Debug>("/debug")).store.items.x).toBeGreaterThanOrEqual(5)
+    const tabs = await eventually(
+      async () => chrome.urls(),
+      (urls) => !urls.some((url) => url.includes("x_home_signed_in")),
+    )
+    expect(tabs.some((url) => url.includes("x_home_signed_in"))).toBe(false)
+  } finally {
+    await close_both(app, chrome)
+  }
+})
+
+test("opening an item opens it in your Chrome, not in openMoi", async () => {
+  const { app, chrome } = await launch_both()
+  try {
+    await approve(app)
+    await eventually(
+      () => app.lens_text(),
+      (value) => value.includes("New laptop chip"),
+    )
+    await app.in_lenses(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("New laptop chip"))?.click()`)
+    const urls = await eventually(
+      async () => chrome.urls(),
+      (values) => values.some((url) => url.includes("/articles/tech1")),
+    )
+    expect(urls.some((url) => url.includes("/articles/tech1"))).toBe(true)
+    await expect(app.chrome.locator(".tab.web")).toHaveCount(0)
+  } finally {
+    await close_both(app, chrome)
+  }
+})
+
+test("Mine this page in Chrome shows your version in openMoi and leaves your tab alone", async () => {
+  const { app, chrome } = await launch_both()
+  try {
+    await approve(app)
+    const page = await chrome.context.newPage()
+    await page.goto(world.page("listing.html"))
+    expect(await chrome.mine(page.url())).toBe(true)
+    await expect(app.chrome.locator(".tab.chrome.active")).toContainText("Mine: Hacker Newz", { timeout: 30_000 })
+    const text = await eventually(
+      () => app.last_lens_text(),
+      (value) => value.includes("Rust 2.0 released"),
+    )
+    expect(text).toContain("Why SQLite is everywhere")
+    await expect(app.chrome.locator(".chat_view")).toHaveText("Changes apply to 127.0.0.1")
+    await app.in_lenses(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("Ask HN"))?.click()`)
+    const urls = await eventually(
+      async () => chrome.urls(),
+      (values) => values.some((url) => url.endsWith("/pages/item?id=903")),
+    )
+    expect(urls).toContain(world.page("listing.html"))
+    await app.chrome.locator(".tab.chrome .close").click()
+    await expect(app.chrome.locator(".tab.chrome")).toHaveCount(0)
+    expect(chrome.urls()).toContain(world.page("listing.html"))
+  } finally {
+    await close_both(app, chrome)
+  }
+})
+
+test("X pages you browse in Chrome yourself fill your Feed without any automation", async () => {
+  const { app, chrome } = await launch_both()
+  try {
+    await approve(app)
+    const before = (await app.brain<Debug>("/debug")).relay.passive_batches
+    const page = await chrome.context.newPage()
+    await page.goto(world.page("x_home_signed_in.html"))
+    const debug = await eventually(
+      () => app.brain<Debug>("/debug"),
+      (value) => value.relay.passive_batches > before,
+      20_000,
+    )
+    expect(debug.relay.passive_batches).toBeGreaterThan(before)
+    expect(debug.store.items.x).toBeGreaterThanOrEqual(5)
+  } finally {
+    await close_both(app, chrome)
+  }
+})

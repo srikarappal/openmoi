@@ -153,12 +153,37 @@ export interface TabInfo {
   mine: boolean
 }
 
-export type ActiveTarget = { kind: "view"; view_id: string } | { kind: "tab"; tab_id: number }
+export type ActiveTarget = { kind: "view"; view_id: string } | { kind: "tab"; tab_id: number } | { kind: "chrome"; page_id: number }
 
 export interface Notice {
   notice_id: number
   text: string
   url?: string
+  action?: { label: string; command: ShellCommand }
+}
+
+// A page in your Chrome shown here as Mine.
+export interface ChromePageInfo {
+  page_id: number
+  title: string
+  url: string
+}
+
+export interface RelayInfo {
+  connected: boolean
+  waiting_for_approval: string | null
+}
+
+export interface MineRequestEvent {
+  event: "mine"
+  handle: string
+  url: string
+  title: string
+}
+
+export interface RelayPoll {
+  status: RelayInfo & { extension_id: string | null; passive_batches: number }
+  events: MineRequestEvent[]
 }
 
 export interface ShellState {
@@ -170,6 +195,8 @@ export interface ShellState {
   chat: ChatEntry[]
   chat_view: string
   thinking: boolean
+  chrome_pages: ChromePageInfo[]
+  relay: RelayInfo
 }
 
 export type ShellCommand =
@@ -185,3 +212,6 @@ export type ShellCommand =
   | { type: "proposal_apply"; proposal_id: string }
   | { type: "proposal_discard"; proposal_id: string }
   | { type: "toggle_mine" }
+  | { type: "select_chrome_page"; page_id: number }
+  | { type: "close_chrome_page"; page_id: number }
+  | { type: "relay_trust"; extension_id: string }

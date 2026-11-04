@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 260px; margin: 0; padding: 14px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1d1d1f; }
+  h1 { font-size: 14px; margin: 0 0 6px; }
+  #status { color: #6e6e73; margin-bottom: 10px; }
+  button { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #3a5bd9; background: #3a5bd9; color: #fff; font: inherit; cursor: pointer; }
+  button:disabled { background: #e4e2dd; border-color: #e4e2dd; color: #6e6e73; cursor: default; }
+  label { display: flex; gap: 6px; align-items: center; margin-top: 10px; color: #6e6e73; }
+  #note { margin-top: 8px; color: #3a5bd9; min-height: 1em; }
+</style>
+</head>
+<body>
+<h1>openMoi</h1>
+<div id="status">Checking</div>
+<button id="mine">Mine this page</button>
+<div id="note"></div>
+<label><input id="passive" type="checkbox"> Read source pages I browse</label>
+<script src="popup.js"></script>
+</body>
+</html>

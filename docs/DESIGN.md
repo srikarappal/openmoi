@@ -50,7 +50,7 @@ Part 2: Later
 
 ## 1. Summary
 
-openMoi is a desktop shell that sits between you and the websites and apps you use. It reads them inside your own logged in sessions on your own machine, turns what it reads into structured items, filters and ranks those items with what it knows about you, then shows them through UIs generated for you. The original site stops being the interface and becomes a data source.
+openMoi is a facade over the web you already use. A small extension lets it read pages in your own Chrome, inside the sessions you are already logged in to; Chrome itself works exactly as before. openMoi turns what it reads into structured items, filters and ranks them with what it knows about you, then shows them in its own window through UIs generated for you. The original site stops being the interface and becomes a data source.
 
 Views are organized by intent instead of by site: one Feed merges X, YouTube and news; later one Shop compares Amazon with any other store.
 
@@ -160,9 +160,9 @@ Items flow up from sources to views. Actions (later) flow down from views throug
 | Settings | .md files plus chat edits | Same |
 | Lens engine | One HTML file per view, sandboxed, smoke tested, numbered versions | Full pipeline (L3) |
 | Brain | Compile .md, tag topics, rules, simple ranking, lens and extractor generation, LLM gateway | Learned ranking, clusters (L2), agents (L6) |
-| Source adapters | Rung 1 (RSS, YouTube RSS), rung 3 (DOM specs), Readability | Rung 2 (L1), rungs 4 and 5 (L8) |
+| Source adapters | Rung 1 (RSS, YouTube RSS) in the brain; rung 3 (DOM specs) and Readability in your Chrome through the relay | Rung 2 (L1), rungs 4 and 5 (L8) |
 | Policy gate | not built: read only | L5 |
-| Websites | X, YouTube, RSS feeds, any site through "Mine" | Facebook and Amazon as Feed sources (L1) |
+| Websites | X, YouTube, RSS feeds; any page in your Chrome or in openMoi through "Mine" | Facebook and Amazon as Feed sources (L1) |
 | Native apps | not built | L8 |
 | System OS | Chromium sessions only | Keychain, accessibility, screen, Spotlight (L8) |
 | Disk / FS | `~/openMoi/` plus SQLite with 2 tables | More tables as stages need them |
@@ -200,24 +200,24 @@ Not a goal for the MVP: being safe to hand to strangers. It is a dogfood build f
 ## 7. MVP architecture
 
 ```
-                                 USER
-                                   |
-  +--------------------------------+---------------------------------+
-  |  SHELL  (Electron, TypeScript)                                   |
-  |   view tabs (one per views/*.md)   web tabs   Mine   chat panel  |
-  |                                                                  |
-  |   lens view                        source views                  |
-  |   (sandboxed HTML)                 (hidden, your sessions)       |
-  |     ^ render items                   | extraction interpreter    |
-  |     | open, more, seen, less         | + skeletonizer (preload)  |
-  +-----+----------------------------+---+---------------------------+
-        |        localhost HTTP      |
-        v                            v
-  +-----+----------------------------+-------------------------------+
-  |  BRAIN  (Python, sync)                                           |
-  |   compile .md -> JSON   ingest   tag   rules + rank   rung 1     |
-  |   lens generator   extractor generator   LLM gateway (2 slots)   |
-  +-----+--------------------+-------------------------+-------------+
+                                      USER
+                                        |
+  +-------------------------------------+   +--------------------------------+
+  |  YOUR CHROME  (unchanged)           |   |  openMoi WINDOW  (Electron)    |
+  |   your tabs, your sessions          |   |   view tabs   Mine pages       |
+  |   openMoi extension:                |   |   chat panel  notices          |
+  |    page operations in your tabs     |   |   lens views (sandboxed HTML)  |
+  |    background reads, grouped        |   |   fallback: its own session    |
+  |    passive reads, Mine button       |   +---------------+----------------+
+  +-----------------+-------------------+                   |
+                    | WebSocket 127.0.0.1:47321              | localhost HTTP
+                    v                                        v
+  +-----------------+----------------------------------------+---------------+
+  |  BRAIN  (Python, sync)                                                   |
+  |   relay hub (approved extension only)    compile .md -> JSON             |
+  |   ingest   tag   rules + rank   rung 1 feeds   LLM gateway (2 slots)     |
+  |   lens generator   extractor generator                                   |
+  +-----+--------------------+-------------------------+---------------------+
         |                    |                         |
         v                    v                         v
    ~/openMoi/            .moi/openmoi.db           models
@@ -226,9 +226,10 @@ Not a goal for the MVP: being safe to hand to strangers. It is a dogfood build f
     .moi/ compiled, lenses, extractors, logs
 ```
 
-* Two processes we write: the shell (TypeScript) and the brain (Python). Models run outside them: a local model server for the fast slot, a hosted API for the smart slot.
-* The shell calls the brain; the brain never calls the shell. Anything that needs a browser (running an extractor, smoke testing a lens) runs in the shell, which sends the result back in its next request.
-* RSS and YouTube feeds are public feeds meant for machines, so the brain fetches them directly. X is read inside your session in a hidden source view.
+* Three things we write: the openMoi window (TypeScript), the Chrome extension (TypeScript, sharing the page operation code) and the brain (Python). Models run outside them: a local model server for the fast slot, a hosted API for the smart slot.
+* The window drives every page read through a page driver: your Chrome through the relay whenever the extension is connected, openMoi's own hidden views only as a fallback.
+* The window calls the brain; the brain never calls the window. Anything that needs a browser (running an extractor, smoke testing a lens) runs on the window's side, which sends the result back in its next request.
+* RSS and YouTube feeds are public feeds meant for machines, so the brain fetches them directly. X is read in your Chrome: a background tab in a collapsed "openMoi" group, closed right after.
 
 ## 8. The bones
 
@@ -245,6 +246,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 | Files you own vs machine state | `~/openMoi/` for .md files; `~/openMoi/.moi/` for everything generated | Sync, export, sharing |
 | Event log | Every open, seen and "less like this" recorded from day one | Learned ranking trains on real history (L2) |
 | Read only boundary | Items carry `available_actions`; no executor exists | The gate adds executors at one point (L5) |
+| Page driver | `open`, `run` a page operation, `url`, `close`; your Chrome through the relay, or openMoi's own session | Native apps as one more driver (L8); actions run through the same driver (L5) |
 
 ## 9. MVP components
 
@@ -368,6 +370,16 @@ Memory rules:
 * The smart slot only ever sees layout text, schemas, synthetic fixtures and skeletons.
 * Every call appends one line to `logs/llm_calls.jsonl`: time, task, slot, model, tokens, estimated cost and whether it contained your content.
 
+### 9.8 Chrome relay
+
+openMoi reads through the Chrome you already use, so there is nothing to sign in to twice.
+
+* **Extension** (`shell/src/extension`, Manifest V3): runs the same page operations as openMoi's preload (extract, scroll, challenge, skeleton, Readability), injected into a tab only when needed. Background reads open a quiet tab in a collapsed "openMoi" tab group and close it right after; openMoi never closes a tab it did not open. A passive watcher reads source pages you browse yourself (X home) and sends new items as they appear. The toolbar popup shows the connection, a "Mine this page" button and a switch for passive reading.
+* **Brain relay hub** (`relay.py`): a WebSocket server on 127.0.0.1 only. A connection must come from a `chrome-extension://` origin; a new extension waits until you press Allow in openMoi, which remembers it. Calls from the window go out to the extension and wait for its reply; events come back the other way (passive records for known source pages, Mine requests).
+* **Window** (`relay_link.ts`, `drivers.ts`): polls the hub once a second for state, approval requests and Mine requests; picks the page driver; opens originals in your Chrome; shows a page you pressed Mine on as a "Mine:" tab.
+* **Keeping the extension awake:** Chrome keeps an extension service worker alive while its WebSocket is active, so the extension pings every 20 s; an alarm reconnects it if Chrome stopped it anyway.
+* **Fallback:** without the extension, openMoi reads in its own Chromium session and says that connecting Chrome would use your Chrome sign in.
+
 ## 10. MVP flows
 
 ### 10.1 Open a view
@@ -426,6 +438,16 @@ saved spec returns 0 items or empty titles -> regenerate once automatically
 ```
 source view hits a login wall, CAPTCHA or checkpoint -> stop that source
   -> show the real page -> resume only when you press refresh
+```
+
+### 10.8 Chrome relay
+
+```
+first run: extension connects -> openMoi shows "wants to read pages" -> Allow -> remembered -> "Chrome connected"
+refresh:   window -> brain hub -> extension opens x.com/home in a quiet background tab -> page operations -> records -> brain -> tab closed
+passive:   you scroll x.com yourself -> watcher sends new items every 3 s -> brain ingests them -> Feed fills, no automation
+mine:      you press Mine in Chrome -> openMoi reads your tab through the relay -> "Mine:" tab in openMoi -> your tab untouched
+originals: click an item in openMoi -> it opens in your Chrome, in front
 ```
 
 ## 11. MVP data and contracts
@@ -501,7 +523,10 @@ Items expire after 30 days unless opened. Everything else the MVP stores is a fi
 | `POST /lens/generate {view_id, kind, last_error?}`, `POST /lens/accept {view_id, kind, html}` | One HTML lens file; keep it as the next version once the shell's smoke test passes |
 | `GET /extractor?url=` | The newest saved spec for this page, if any |
 | `POST /extractor/generate {url, skeleton, last_error?}`, `POST /extractor/accept {spec}` | One listing spec; keep it as the next version once it extracted at least 3 items |
-| `GET /debug` | Source status, tagging status, item counts, tail of the LLM call log |
+| `GET /relay/poll` | Relay state (connected, waiting for approval, passive batches) plus Mine requests from Chrome, each delivered once |
+| `POST /relay/trust {extension_id}` | Allow a Chrome extension; remembered across restarts |
+| `POST /relay/call {op, args}` | One page operation in your Chrome (`open`, `run`, `url`, `close`), waiting for the extension's answer |
+| `GET /debug` | Source status, tagging status, relay status, item counts, tail of the LLM call log |
 
 The brain stays stateless about candidates: the shell tests a generated lens or spec, then accepts it.
 
@@ -654,7 +679,7 @@ interface PilotBudget {
 
 Even a dogfood build keeps these, because they cost little now and a lot to retrofit:
 
-1. Local only: no openMoi server; your sessions never leave Chromium.
+1. Local only: no openMoi server; your sessions stay in your Chrome (or openMoi's own Chromium); the relay listens on 127.0.0.1 only.
 2. Read only: no code path clicks, posts or buys.
 3. Human pace: reads only on your action, a fixed budget, stop on challenge, the standard user agent, no proxies.
 4. Lens sandbox and CSP from the very first lens.
@@ -662,6 +687,7 @@ Even a dogfood build keeps these, because they cost little now and a lot to retr
 6. Model calls that read web content return JSON only and have no tools.
 7. Hosted models see structure, not content, unless you flip the switch.
 8. Electron security baseline on every view.
+9. Chrome relay: only an extension you allowed may connect; openMoi only reads pages and only closes tabs it opened itself.
 
 ## 13. Milestones
 
@@ -679,19 +705,20 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 
 | Check | Result |
 |---|---|
-| Tests | 184 brain (unit and API integration), 113 shell unit, 15 end to end in the real app, all against the shared fake services |
+| Tests | 205 brain (unit and API integration), 135 shell and extension unit, 19 end to end in the real app (4 with a real Chromium running the extension), all against the shared fake services |
+| Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; the background read tab closes after each read |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
 | Real feeds | Live Ars Technica and The Verge RSS plus two YouTube handles: 60 items in 1.6 s |
 | Real local model | llama3 8B on Ollama tags sensibly but needs about 6 s per item, which is why tagging runs in the background |
-| Code size | About 4.9k lines of product code (budget 8k) |
+| Code size | About 6k lines of product code including the extension (budget 8k) |
 
 Not yet measured: Mine on 7 of 10 real sites and a lens in under 60 s with a real smart model. Both need a hosted smart slot; the fake model proves the pipeline, not model quality.
 
 ## 14. Simplicity budget
 
 * **Code:** about 8k lines of our own code at the end of M3 (shell about 3.5k TypeScript, brain about 3.5k Python, lenses and prompts about 1k). Over budget means cutting scope, not quality.
-* **Dependencies:** the shell uses Electron, React, esbuild and Mozilla Readability; the brain uses FastAPI, uvicorn, pydantic, feedparser and httpx. Anything else needs a one line reason in this doc.
+* **Dependencies:** the shell uses Electron, React, esbuild and Mozilla Readability; the brain uses FastAPI, uvicorn, pydantic, feedparser, httpx and websockets (the relay needs a WebSocket server; its sync API keeps the brain free of async code). Anything else needs a one line reason in this doc.
 * **No:** queues or job systems (threads are enough), ORMs (plain SQL), Docker, plugin systems, schema codegen, microservices, packaging, feature flags, settings screens (the files are the settings).
 * **Rule:** every later stage plugs into a bone from section 8. If a later feature needs a bone rewritten, fix the bone first.
 
@@ -991,6 +1018,7 @@ A system frameworks (EventKit, Contacts)
 | Source pages | Untrusted | Run their own scripts | Reach preload globals, the brain or other views |
 | Extraction runtime | Trusted code, untrusted input | Read DOM, emit records | Network, navigation, evaluating page strings |
 | Lens | Untrusted generated code | Render, post messages | Network beyond images, storage, navigation |
+| Chrome extension | Trusted code in your browser, untrusted pages | Open quiet tabs, run the shared page operations, report what you browse on known source pages | Close your tabs, change pages, act on sites, talk to anything but the local hub |
 | Brain | Trusted code, untrusted input | Compile, rank, generate | Touch cookies, execute writes |
 | Model reading web content | Untrusted output | Tags and summaries as checked JSON | Tools, file edits, actions |
 | Planner model (L6) | Trusted request, untrusted output | Plan with tools | Read raw web text, bypass the gate |
@@ -1103,7 +1131,7 @@ Fixtures come from recorded sessions of team test accounts. There is no central 
 
 * **Tauri:** smaller and lighter, but WebKit on macOS has no debugger protocol and behaves differently from the Windows and Linux engines; for a product that is a browser first, Electron wins.
 * **Brain in TypeScript inside the Electron main process:** one language and one process, but a weaker AI ecosystem. The one way HTTP boundary keeps that swap contained if it ever matters more.
-* **Chrome extension:** fastest start inside your real sessions, but no native apps, MV3 service worker limits and store removal risk. A possible companion later.
+* **Chrome extension alone:** it is now the MVP's source layer (9.8), but the facade stays a separate window: a lens host, chat and smoke tests need more than an extension page; the window is also where native apps join later (L8).
 * **Server side service:** the Power Ventures pattern. Rejected.
 
 ## 28. Repo layout
@@ -1113,7 +1141,9 @@ Fixtures come from recorded sessions of team test accounts. There is no central 
 ```
 openMoi/
   shell/                   Electron + TypeScript
-    src/main/              window and layout, tabs, hidden source views, lenses, views, chat, Mine, lens generation, smoke test, brain process
+    src/main/              window and layout, tabs, page drivers, relay link, lenses, views, chat, Mine, lens generation, smoke test, brain process
+    src/extension/         Chrome extension: service worker, relay client, Chrome commands, content script, popup
+    extension/             extension manifest and popup page (built into dist/extension)
     src/preload/           page (extract, scroll, challenge, skeleton, Readability), lens (the moi helper), chrome UI bridge
     src/shared/            types, extraction interpreter, skeletonizer, article reader, challenge detection, lens document rules, synthetic items
     src/ui/                React: view tabs, web tabs, address bar, Mine toggle, notices, chat panel with diffs
@@ -1136,6 +1166,7 @@ openMoi/
       lenses.py            lens versions; lens_gen.py writes new ones
       extractors.py        spec store; extractor_gen.py writes new ones
       llm.py               gateway, two slots, privacy switch, call log
+      relay.py             WebSocket hub for the Chrome extension
     tests/
   lenses/default/          default.html
   extractors/              x_home_timeline.json
@@ -1163,7 +1194,7 @@ openMoi/
 
 1. Which later stage first after dogfood: L1 (more sources), L2 (smarter ranking) or L3 (better lenses)?
 2. Business model: subscription with no ads, or a free local only tier plus paid hosted codegen?
-3. Companion Chrome extension for people who will not switch browsers?
+3. Firefox and Safari: the relay protocol is browser neutral; which extension comes next?
 4. Launch sources beyond X, YouTube and RSS: Facebook, Amazon, Reddit, LinkedIn each carry different policy risk.
 5. Sharing views and lenses: both hold no personal data once people and rules are stripped; who reviews shared ones?
 6. Multi device: sync `~/openMoi/` (files only, never sessions or the database), end to end encrypted?

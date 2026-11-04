@@ -6,13 +6,14 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import Brain, PageSource, ViewPage
+from moi_brain.brain import Brain, MineRequest, PageSource, ViewPage
 from moi_brain.compile import BadInput, ViewInfo
 from moi_brain.edits import Proposal
 from moi_brain.extractors import ExtractorSpec
 from moi_brain.items import Event, Item, ViewItem
 from moi_brain.llm import LlmError, PrivacyBlocked
 from moi_brain.rank import PAGE_SIZE
+from moi_brain.relay import CALL_TIMEOUT_SECONDS, RelayError
 
 router = APIRouter()
 LensKind = Literal["feed", "article", "listing"]
@@ -77,6 +78,21 @@ class ExtractorGenerateRequest(BaseModel):
 
 class SpecResponse(BaseModel):
     spec: ExtractorSpec | None
+
+
+class RelayCallRequest(BaseModel):
+    op: Literal["open", "run", "close", "url"]
+    args: dict[str, Any] = Field(default_factory=dict)
+    timeout_s: float = Field(default=CALL_TIMEOUT_SECONDS, gt=0, le=120)
+
+
+class RelayTrustRequest(BaseModel):
+    extension_id: str = Field(pattern=r"^[a-z]{32}$")
+
+
+class RelayPoll(BaseModel):
+    status: dict[str, Any]
+    events: list[MineRequest]
 
 
 class ViewRequest(BaseModel):
@@ -179,6 +195,22 @@ def accept_extractor(spec: ExtractorSpec, brain: BrainDep) -> SpecResponse:
     return SpecResponse(spec=brain.extractors.save(spec))
 
 
+@router.get("/relay/poll")
+def relay_poll(brain: BrainDep) -> RelayPoll:
+    return RelayPoll(status=brain.relay_status(), events=brain.take_relay_events())
+
+
+@router.post("/relay/trust")
+def relay_trust(body: RelayTrustRequest, brain: BrainDep) -> dict[str, Any]:
+    brain.relay.trust(body.extension_id)
+    return brain.relay_status()
+
+
+@router.post("/relay/call")
+def relay_call(body: RelayCallRequest, brain: BrainDep) -> dict[str, Any]:
+    return {"result": brain.relay.call(body.op, body.args, body.timeout_s)}
+
+
 @router.get("/debug")
 def debug(brain: BrainDep) -> dict[str, Any]:
     return brain.debug()
@@ -190,6 +222,10 @@ def privacy_error(request: Request, error: Exception) -> JSONResponse:
 
 def llm_error(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=502, content={"detail": str(error), "kind": "llm"})
+
+
+def relay_error(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(error), "kind": "relay"})
 
 
 def bad_input(request: Request, error: Exception) -> JSONResponse:
@@ -204,4 +240,5 @@ def create_app(brain: Brain, token: str | None = None) -> FastAPI:
     app.add_exception_handler(PrivacyBlocked, privacy_error)
     app.add_exception_handler(LlmError, llm_error)
     app.add_exception_handler(BadInput, bad_input)
+    app.add_exception_handler(RelayError, relay_error)
     return app

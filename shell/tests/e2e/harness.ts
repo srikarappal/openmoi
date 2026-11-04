@@ -4,7 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writ
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test"
+import { chromium, _electron as electron, type BrowserContext, type ElectronApplication, type Page, type Worker } from "@playwright/test"
 import { sleep, wait_for } from "../../src/shared/timing"
 
 export const SHELL_DIR = path.resolve(__dirname, "..", "..")
@@ -69,6 +69,7 @@ export class Harness {
     readonly chrome: Page,
     readonly brain_url: string,
     readonly root: string,
+    readonly relay_port: number,
   ) {}
 
   get home(): string {
@@ -95,6 +96,7 @@ export class Harness {
     const slot = { base_url: `${world.base_url}/llm/v1`, model: "fake" }
     writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot }))
     const brain_port = await free_port()
+    const relay_port = await free_port()
     const app = await electron.launch({
       args: [path.join(SHELL_DIR, "dist", "main.js")],
       env: {
@@ -105,10 +107,11 @@ export class Harness {
         MOI_HEADLESS: "1",
         MOI_BRAIN_PORT: String(brain_port),
         MOI_TOKEN: TOKEN,
+        MOI_RELAY_PORT: String(relay_port),
       },
     })
     const chrome = await app.firstWindow()
-    return new Harness(app, chrome, `http://127.0.0.1:${brain_port}`, root)
+    return new Harness(app, chrome, `http://127.0.0.1:${brain_port}`, root, relay_port)
   }
 
   async brain<T>(route: string, body?: unknown): Promise<T> {
@@ -186,4 +189,45 @@ export async function eventually<T>(probe: () => Promise<T>, predicate: (value: 
     value = await probe()
   }
   return value
+}
+
+// Your Chrome in the tests: a Chromium with the openMoi extension loaded, signed in to the fake X by cookie.
+export class ChromeWithExtension {
+  private constructor(
+    readonly context: BrowserContext,
+    readonly worker: Worker,
+    private readonly profile: string,
+  ) {}
+
+  static async launch(world: FakeWorld, relay_port: number): Promise<ChromeWithExtension> {
+    const profile = mkdtempSync(path.join(tmpdir(), "moi_chrome_"))
+    const extension = path.join(SHELL_DIR, "dist", "extension")
+    const context = await chromium.launchPersistentContext(profile, {
+      channel: "chromium",
+      headless: true,
+      args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
+    })
+    await context.addCookies([{ name: "moi_session", value: "1", url: world.base_url }])
+    const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"))
+    await worker.evaluate((url) => chrome.storage.local.set({ relay_url: url }), `ws://127.0.0.1:${relay_port}/relay`)
+    return new ChromeWithExtension(context, worker, profile)
+  }
+
+  // Presses Mine for the open tab showing url, the way the popup button does.
+  async mine(url: string): Promise<boolean> {
+    return this.worker.evaluate(async (target) => {
+      const tab = (await chrome.tabs.query({})).find((candidate) => candidate.url === target)
+      const relay = (globalThis as unknown as { moi_relay: { mine_tab(tab: chrome.tabs.Tab): boolean } }).moi_relay
+      return tab ? relay.mine_tab(tab) : false
+    }, url)
+  }
+
+  urls(): string[] {
+    return this.context.pages().map((page) => page.url())
+  }
+
+  async close(): Promise<void> {
+    await this.context.close()
+    rmSync(this.profile, { recursive: true, force: true })
+  }
 }

@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto"
 import { createServer } from "node:net"
 import path from "node:path"
 import { wait_for } from "../shared/timing"
-import type { BrainEvent, ExtractorSpec, IngestResult, LensKind, PageSource, Proposal, RawRecord, ViewInfo, ViewPage } from "../shared/types"
+import type { BrainEvent, ExtractorSpec, IngestResult, LensKind, PageSource, Proposal, RawRecord, RelayPoll, ViewInfo, ViewPage } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
 const RESTART_DELAY_MS = 1_000
@@ -95,6 +95,19 @@ export class BrainClient {
 
   async generate_extractor(url: string, skeleton: string, last_error?: string): Promise<ExtractorSpec> {
     return (await this.request<{ spec: ExtractorSpec }>("POST", "/extractor/generate", { url, skeleton, last_error })).spec
+  }
+
+  relay_poll(): Promise<RelayPoll> {
+    return this.request("GET", "/relay/poll")
+  }
+
+  relay_trust(extension_id: string): Promise<RelayPoll["status"]> {
+    return this.request("POST", "/relay/trust", { extension_id })
+  }
+
+  // One page operation in your Chrome; the brain forwards it to the extension and waits for the answer.
+  async relay_call<T>(op: "open" | "run" | "url" | "close", args: Record<string, unknown>): Promise<T> {
+    return (await this.request<{ result: T }>("POST", "/relay/call", { op, args })).result
   }
 
   async accept_extractor(spec: ExtractorSpec): Promise<ExtractorSpec> {

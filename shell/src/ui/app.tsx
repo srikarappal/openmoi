@@ -39,7 +39,7 @@ function TopBar({ state }: { state: ShellState }) {
             {view.title}
           </button>
         ))}
-        {state.tabs.length > 0 && <span className="divider" />}
+        {state.tabs.length + state.chrome_pages.length > 0 && <span className="divider" />}
         {state.tabs.map((tab) => (
           <span key={tab.tab_id} className={state.active.kind === "tab" && state.active.tab_id === tab.tab_id ? "tab web active" : "tab web"}>
             <button className="tab_title" title={tab.url} onClick={() => send({ type: "select_tab", tab_id: tab.tab_id })}>
@@ -50,7 +50,20 @@ function TopBar({ state }: { state: ShellState }) {
             </button>
           </span>
         ))}
+        {state.chrome_pages.map((page) => (
+          <span key={page.page_id} className={state.active.kind === "chrome" && state.active.page_id === page.page_id ? "tab chrome active" : "tab chrome"}>
+            <button className="tab_title" title={page.url} onClick={() => send({ type: "select_chrome_page", page_id: page.page_id })}>
+              Mine: {page.title}
+            </button>
+            <button className="close" aria-label="Close" onClick={() => send({ type: "close_chrome_page", page_id: page.page_id })}>
+              ×
+            </button>
+          </span>
+        ))}
       </nav>
+      <span className={state.relay.connected ? "relay on" : "relay"} title="openMoi reads pages through your Chrome when the extension is connected">
+        {state.relay.connected ? "Chrome connected" : state.relay.waiting_for_approval ? "Chrome waiting" : "Chrome not connected"}
+      </span>
       <form className="address" onSubmit={submit}>
         <input value={address} placeholder="Type a URL or search" onChange={(event) => set_address(event.target.value)} />
       </form>
@@ -145,6 +158,7 @@ function SidePanel({ state }: { state: ShellState }) {
           <div key={notice.notice_id} className="notice">
             <span>{notice.text}</span>
             <span className="notice_actions">
+              {notice.action && <button onClick={() => notice.action && send(notice.action.command)}>{notice.action.label}</button>}
               {notice.url && <button onClick={() => send({ type: "open_notice", notice_id: notice.notice_id })}>Open</button>}
               <button onClick={() => send({ type: "dismiss_notice", notice_id: notice.notice_id })}>Dismiss</button>
             </span>

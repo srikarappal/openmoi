@@ -20,6 +20,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .tab_title { padding: 5px 4px 5px 10px; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
 .close { padding: 2px 6px; color: var(--muted); }
 .divider { width: 1px; height: 20px; background: var(--line); margin: 0 4px; }
+.tab.chrome { padding: 0 4px 0 0; max-width: 220px; }
+.relay { white-space: nowrap; font-size: 12px; color: var(--muted); padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); }
+.relay.on { color: var(--accent); border-color: var(--accent); }
 .address { flex: 0 1 360px; }
 .address input { width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
 .action { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); }

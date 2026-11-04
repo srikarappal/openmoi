@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import sys
 
 import uvicorn
 
@@ -9,6 +10,7 @@ from moi_brain.api import create_app
 from moi_brain.brain import Brain
 from moi_brain.config import load_paths, load_settings
 from moi_brain.feeds import YOUTUBE_BASE
+from moi_brain.relay import DEFAULT_PORT
 
 
 def main() -> None:
@@ -17,6 +19,10 @@ def main() -> None:
     args = parser.parse_args()
     paths = load_paths()
     brain = Brain(paths, load_settings(paths), youtube_base=os.environ.get("MOI_YOUTUBE_BASE", YOUTUBE_BASE))
+    try:
+        brain.relay.start(int(os.environ.get("MOI_RELAY_PORT", DEFAULT_PORT)))
+    except OSError as error:
+        print(f"Chrome relay not started: {error}", file=sys.stderr)
     uvicorn.run(create_app(brain, os.environ.get("MOI_TOKEN")), host="127.0.0.1", port=args.port, log_level="warning")
 
 

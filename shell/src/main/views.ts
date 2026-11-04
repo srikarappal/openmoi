@@ -2,6 +2,7 @@
 import { sleep } from "../shared/timing"
 import type { Item, LensToHost, PageSource, RawRecord, ViewPage } from "../shared/types"
 import type { BrainClient } from "./brain"
+import type { DriverKind } from "./drivers"
 import type { LensContext, LensManager } from "./lenses"
 import type { SourceReader } from "./sources"
 
@@ -9,7 +10,7 @@ const SETTLE_POLL_MS = 1_000
 const SETTLE_ATTEMPTS = 30
 
 export interface ViewHooks {
-  open_tab(url: string): void
+  open_original(url: string): void
   notify(text: string, url?: string): void
   echo(text: string): void
   less_like_this(view_id: string, item: Item): void
@@ -18,6 +19,12 @@ export interface ViewHooks {
 
 export function view_lens_key(view_id: string): string {
   return `view:${view_id}`
+}
+
+// In Chrome you only need to sign in; without the relay, openMoi's own session is the one missing the sign in.
+function challenge_text(source_id: string, driver: DriverKind): string {
+  if (driver === "chrome") return `${source_id} needs you in Chrome: sign in or finish the check there, then refresh.`
+  return `${source_id} needs you: connect Chrome (the openMoi extension) to use your Chrome sign in, or sign in here, then refresh.`
 }
 
 function cursor_for(page: ViewPage): string | null {
@@ -82,7 +89,7 @@ export class ViewController {
     const { page_sources } = await this.brain.refresh(context.view_id, force)
     for (const source of page_sources) {
       const outcome = await this.sources.read(source, force, (records) => this.ingest_batch(context, source, records))
-      if (outcome.status === "challenge") this.hooks.notify(`${source.source_id} needs you: sign in or finish the check, then refresh.`, outcome.url)
+      if (outcome.status === "challenge") this.hooks.notify(challenge_text(source.source_id, outcome.driver), outcome.url)
       else if (outcome.status === "failed") this.hooks.notify(`${source.source_id} could not be read: ${outcome.error}`)
     }
     for (let attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
@@ -132,7 +139,7 @@ export class ViewController {
     const item = "item_id" in message ? context.rendered.get(message.item_id) : undefined
     if (message.type === "open" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "open" }])
-      this.hooks.open_tab(item.url)
+      this.hooks.open_original(item.url)
     } else if (message.type === "less_like_this" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "less_like_this" }])
       this.hooks.less_like_this(context.view_id, item)

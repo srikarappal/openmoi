@@ -96,6 +96,10 @@ class Paths:
         return self.state / "tagged_topics.json"
 
     @property
+    def relay_trust(self) -> Path:
+        return self.state / "relay_trusted.json"
+
+    @property
     def channel_cache(self) -> Path:
         return self.state / "youtube_channels.json"
 

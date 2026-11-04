@@ -109,6 +109,8 @@ class Handler(BaseHTTPRequestHandler):
         if parts.path == "/__requests":
             task = parse_qs(parts.query).get("task", [None])[0]
             self.reply(200, "application/json", json.dumps([{"path": call["path"], "payload": call["payload"]} for call in services.model_calls(task)]))
+        elif parts.path == "/pages/x_home_signed_in.html":
+            self.signed_in_page()
         elif parts.path == "/rss/etag.xml":
             self.etag_feed(base)
         elif parts.path in ROUTES:
@@ -120,6 +122,16 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, "text/html", f"<html><head><title>{parts.path}</title></head><body><p>Article {parts.path}</p></body></html>")
         else:
             self.reply(404, "text/plain", "not found")
+
+    def signed_in_page(self) -> None:
+        """The X timeline only for a browser holding the session cookie; everyone else gets the login wall."""
+        if "moi_session=1" in (self.headers.get("cookie") or ""):
+            self.reply(200, "text/html", (PAGES_DIR / "x_home.html").read_text())
+            return
+        self.send_response(302)
+        self.send_header("location", "/pages/x_login.html")
+        self.send_header("content-length", "0")
+        self.end_headers()
 
     def etag_feed(self, base: str) -> None:
         if self.headers.get("if-none-match") == '"v1"':

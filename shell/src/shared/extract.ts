@@ -73,6 +73,11 @@ function absolute_url(value: string, page_url: string): string | null {
   }
 }
 
+// One identity per record so repeated extractions of a page never deliver the same item twice.
+export function record_key(record: RawRecord): string {
+  return record.native_id ?? record.url ?? JSON.stringify(record)
+}
+
 // A listing extraction is usable when at least three records carry a title or text and a URL.
 export function is_good_extraction(records: RawRecord[]): boolean {
   return records.filter((record) => record.url && (record.title || record.text)).length >= 3

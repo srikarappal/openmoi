@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "openMoi relay",
+  "version": "0.1.0",
+  "description": "Lets the openMoi app read pages in your own Chrome sessions and show your version of them.",
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["tabs", "tabGroups", "scripting", "storage", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "action": { "default_popup": "popup.html", "default_title": "openMoi" }
+}

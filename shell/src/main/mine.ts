@@ -1,20 +1,26 @@
-// Mine: your own version of any page. Articles go through reader mode; listings through a saved or generated extractor.
-import type { WebContents } from "electron"
+// Mine: your own version of any page, in openMoi or in your Chrome. Articles go through reader mode;
+// listings through a saved or generated extractor. The page itself is only read, never changed or closed.
 import { site_domain } from "../shared/address"
 import { is_good_extraction } from "../shared/extract"
 import type { ExtractorSpec, Item, LensToHost, RawRecord, ViewItem } from "../shared/types"
 import type { BrainClient } from "./brain"
 import { explain } from "./chat"
+import type { PageDriver } from "./drivers"
 import type { LensContext, LensManager } from "./lenses"
-import { call_page } from "./page_rpc"
-import type { Tab } from "./tabs"
 
 const ATTEMPTS = 2
 type PageKind = "article" | "listing"
 
-interface MinePage {
-  tab_id: number
+// The page to read: its lens key, the driver that reaches it and the driver's handle for it.
+export interface MineTarget {
+  key: string
+  driver: PageDriver
+  handle: string
   url: string
+}
+
+interface MinePage {
+  target: MineTarget
   view_id: string
   source_id: string
   kind: PageKind
@@ -24,21 +30,25 @@ interface MinePage {
 
 export interface MineHooks {
   notify(text: string): void
-  open_in_tab(tab_id: number, url: string): void
+  open_original(key: string, url: string): void
   lens_stale(view_id: string, kind: PageKind, layout_hash: string): void
   less_like_this(view_id: string, item: Item): void
 }
 
-export function mine_lens_key(tab_id: number): string {
+export function tab_mine_key(tab_id: number): string {
   return `tab:${tab_id}`
+}
+
+export function chrome_mine_key(page_id: number): string {
+  return `chrome:${page_id}`
 }
 
 function usable(records: RawRecord[]): number {
   return records.filter((record) => record.url && (record.title || record.text)).length
 }
 
-function extract(contents: WebContents, spec: ExtractorSpec): Promise<RawRecord[]> {
-  return call_page<RawRecord[]>(contents, "extract", { spec })
+function extract(target: MineTarget, spec: ExtractorSpec): Promise<RawRecord[]> {
+  return target.driver.run<RawRecord[]>(target.handle, "extract", { spec })
 }
 
 export class MineController {
@@ -54,54 +64,56 @@ export class MineController {
     return this.pages.has(context.key)
   }
 
-  view_for_tab(tab_id: number): string | undefined {
-    return this.pages.get(mine_lens_key(tab_id))?.view_id
+  view_for(key: string): string | undefined {
+    return this.pages.get(key)?.view_id
   }
 
-  // Builds the Mine view of the tab's page; false when the page could not be read.
-  async enable(tab: Tab): Promise<boolean> {
-    const contents = tab.view.webContents
-    const url = contents.getURL()
-    const found = await this.read_page(contents, url)
+  // Builds the Mine view of the target page; false when the page could not be read.
+  async enable(target: MineTarget): Promise<boolean> {
+    const found = await this.read_page(target)
     if (!found) return false
-    const domain = site_domain(url)
-    const page: MinePage = { tab_id: tab.tab_id, url, view_id: `site_${domain}`, source_id: `site:${domain}`, ...found, view_items: [] }
+    const domain = site_domain(target.url)
+    const page: MinePage = { target, view_id: `site_${domain}`, source_id: `site:${domain}`, ...found, view_items: [] }
     await this.rank(page)
-    const key = mine_lens_key(tab.tab_id)
-    this.pages.set(key, page)
+    this.pages.set(target.key, page)
     const html = await this.brain.lens(page.view_id, page.kind)
-    const existing = this.lenses.get(key)
+    const existing = this.lenses.get(target.key)
     if (existing) await this.lenses.load(existing, html)
-    else await this.lenses.open(key, page.view_id, html)
+    else await this.lenses.open(target.key, page.view_id, html)
     return true
   }
 
-  disable(tab_id: number): void {
-    this.pages.delete(mine_lens_key(tab_id))
-    this.lenses.close(mine_lens_key(tab_id))
+  disable(key: string): void {
+    this.pages.delete(key)
+    this.lenses.close(key)
   }
 
-  private async read_page(contents: WebContents, url: string): Promise<{ kind: PageKind; records: RawRecord[] } | null> {
-    const article = await call_page<RawRecord | null>(contents, "readability")
-    if (article) return { kind: "article", records: [article] }
-    const records = await this.listing_records(contents, url)
-    return records ? { kind: "listing", records } : null
+  private async read_page(target: MineTarget): Promise<{ kind: PageKind; records: RawRecord[] } | null> {
+    try {
+      const article = await target.driver.run<RawRecord | null>(target.handle, "readability")
+      if (article) return { kind: "article", records: [article] }
+      const records = await this.listing_records(target)
+      return records ? { kind: "listing", records } : null
+    } catch (error) {
+      this.hooks.notify(`Could not read this page: ${explain(error)}`)
+      return null
+    }
   }
 
   // The saved spec first; a missing or broken one is regenerated from the page skeleton, at most twice.
-  private async listing_records(contents: WebContents, url: string): Promise<RawRecord[] | null> {
-    const saved = await this.brain.find_extractor(url)
+  private async listing_records(target: MineTarget): Promise<RawRecord[] | null> {
+    const saved = await this.brain.find_extractor(target.url)
     let last_error: string | undefined
     if (saved) {
-      const records = await extract(contents, saved)
+      const records = await extract(target, saved)
       if (is_good_extraction(records)) return records
       last_error = `the saved spec v${saved.version} found ${usable(records)} items with a title and url`
     }
-    const skeleton = await call_page<string>(contents, "skeleton")
+    const skeleton = await target.driver.run<string>(target.handle, "skeleton")
     for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
       try {
-        const spec = await this.brain.generate_extractor(url, skeleton, last_error)
-        const records = await extract(contents, spec)
+        const spec = await this.brain.generate_extractor(target.url, skeleton, last_error)
+        const records = await extract(target, spec)
         if (is_good_extraction(records)) {
           await this.brain.accept_extractor(spec)
           return records
@@ -116,7 +128,7 @@ export class MineController {
   }
 
   private async rank(page: MinePage): Promise<void> {
-    const result = await this.brain.ingest(page.source_id, page.records, page.url, page.view_id, page.kind)
+    const result = await this.brain.ingest(page.source_id, page.records, page.target.url, page.view_id, page.kind)
     page.view_items = result.view_items
     if (result.lens_stale) this.hooks.lens_stale(page.view_id, page.kind, result.layout_hash)
   }
@@ -132,7 +144,7 @@ export class MineController {
     if (!page || !item) return
     if (message.type === "open") {
       await this.brain.events([{ view_id: page.view_id, item_id: item.item_id, event_kind: "open" }])
-      this.hooks.open_in_tab(page.tab_id, item.url)
+      this.hooks.open_original(context.key, item.url)
     } else if (message.type === "less_like_this") {
       this.hooks.less_like_this(page.view_id, item)
     }

@@ -1,13 +1,15 @@
 """The Brain composes storage, sources, compilation, ranking and lenses behind one object."""
 
 import threading
+from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 
 from moi_brain.compile import CompiledView, Compiler, check_view_id
 from moi_brain.config import Paths, Settings, ensure_home
@@ -21,6 +23,7 @@ from moi_brain.lenses import LENS_KINDS, LensStore, lens_key
 from moi_brain.llm import Gateway
 from moi_brain.memory import Memory
 from moi_brain.rank import PAGE_SIZE, Order, rank
+from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, rule_topics, watch_list
 
@@ -58,7 +61,32 @@ class ViewPage(BaseModel):
     lens_stale: bool = False
 
 
+class PassiveRecords(BaseModel):
+    """Records the extension read from a page you browsed yourself."""
+
+    event: Literal["passive_records"]
+    source_id: str
+    page_url: str
+    records: list[dict[str, Any]] = Field(max_length=200)
+
+
+class MineRequest(BaseModel):
+    """You pressed Mine on a page in Chrome."""
+
+    event: Literal["mine"]
+    handle: str
+    url: str
+    title: str = ""
+
+
 FeedReader = tuple[str, Callable[[], list[dict[str, Any]]]]
+MAX_RELAY_EVENTS = 50
+
+
+def url_prefix(url: str) -> str:
+    """The part of a page URL a passive source matches on: no query, no fragment."""
+    parts = urlparse(url)
+    return f"{parts.scheme}://{parts.netloc}{parts.path}"
 
 
 class Brain:
@@ -83,6 +111,9 @@ class Brain:
         self.editor = Editor(paths, self.gateway)
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
+        self.relay = RelayHub(paths.relay_trust, self.on_relay_event, self.relay_config)
+        self.relay_events: deque[MineRequest] = deque(maxlen=MAX_RELAY_EVENTS)
+        self.passive_batches = 0
         self.lock = threading.Lock()
         self.refreshing: set[str] = set()
         self.source_status: dict[str, str] = {}
@@ -96,6 +127,7 @@ class Brain:
             self.refreshing.add(view_id)
         if not already_running:
             threading.Thread(target=self.refresh_feeds, args=(view_id, compiled, force), daemon=True).start()
+        self.relay.push_config()
         return self.page_sources(compiled)
 
     def refresh_feeds(self, view_id: str, compiled: CompiledView, force: bool) -> None:
@@ -132,6 +164,37 @@ class Brain:
             if spec and spec.start_url:
                 found.append(PageSource(source_id="x", page_type=spec.page_type, start_url=spec.start_url, spec=spec, budget=PILOT_BUDGET))
         return found
+
+    def passive_sources(self) -> list[PageSource]:
+        """Page sources of every view, which the extension reads whenever you browse them yourself."""
+        found = {source.source_id: source for compiled in self.compiler.all_compiled() for source in self.page_sources(compiled)}
+        return list(found.values())
+
+    def relay_config(self) -> dict[str, Any]:
+        passive = [{"source_id": source.source_id, "url_prefix": url_prefix(source.start_url), "spec": source.spec.model_dump()} for source in self.passive_sources()]
+        return {"passive": passive}
+
+    def on_relay_event(self, message: dict[str, Any]) -> None:
+        """Passive records from a known source page are ingested; Mine requests wait for the app."""
+        try:
+            if message.get("event") == "mine":
+                self.relay_events.append(MineRequest.model_validate(message))
+                return
+            records = PassiveRecords.model_validate(message)
+        except ValidationError:
+            return
+        source = next((source for source in self.passive_sources() if source.source_id == records.source_id), None)
+        if source and records.page_url.startswith(url_prefix(source.start_url)):
+            self.ingest(records.source_id, records.records, records.page_url)
+            self.passive_batches += 1
+
+    def take_relay_events(self) -> list[MineRequest]:
+        events = list(self.relay_events)
+        self.relay_events.clear()
+        return events
+
+    def relay_status(self) -> dict[str, Any]:
+        return {**self.relay.status(), "passive_batches": self.passive_batches}
 
     def store_records(self, source_id: str, records: list[dict[str, Any]], page_url: str | None = None, tag_now: bool = False) -> list[Item]:
         """Normalize and store; new items are tagged by the background worker, or right away when tag_now is set.
@@ -246,6 +309,7 @@ class Brain:
             "store": self.store.stats(),
             "sources": dict(self.source_status),
             "tagging": self.tagger.status,
+            "relay": self.relay_status(),
             "refreshing": refreshing,
             "llm_calls": self.gateway.recent_calls(),
         }
