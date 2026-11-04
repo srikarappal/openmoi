@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
-import { run_lens, synthetic_items, view_item } from "./lens_contract"
+import { synthetic_item as view_item, synthetic_view_items } from "../../src/shared/fixtures"
+import type { LensKind } from "../../src/shared/types"
+import { run_lens } from "./lens_contract"
 
 const DEFAULT_LENS = readFileSync(path.resolve(__dirname, "..", "..", "..", "lenses", "default", "default.html"), "utf-8")
 
@@ -13,7 +15,7 @@ describe("default lens", () => {
   it("announces ready, renders every item and shows the footer state", () => {
     const { dom, moi } = run_lens(DEFAULT_LENS)
     expect(moi.sent).toEqual([{ type: "ready" }])
-    moi.render(synthetic_items(30), "more")
+    moi.render(synthetic_view_items("feed"), "more")
     const document = dom.window.document
     expect(card_ids(document)).toHaveLength(30)
     expect(document.getElementById("footer")?.textContent).toBe("Loading more")
@@ -48,6 +50,12 @@ describe("default lens", () => {
     expect(document.querySelector(".text img")).toBeNull()
   })
 
+  it("shows product details from extra fields", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    moi.render([view_item("p1", { kind: "product", title: "Lamp", extra: { price_text: "$24.99", rating_text: "4.6 out of 5 stars" } })], null)
+    expect(dom.window.document.querySelector(".details")?.textContent).toBe("$24.99 · 4.6 out of 5 stars")
+  })
+
   it("uses a grid for listings and a reader for one article", () => {
     const listing = run_lens(DEFAULT_LENS)
     listing.moi.render([view_item("p1", { kind: "product" }), view_item("p2", { kind: "link" })], null)
@@ -61,6 +69,13 @@ describe("default lens", () => {
     expect(document.querySelector("article.reader h2")?.textContent).toBe("Heading")
     expect(document.querySelector("article.reader blockquote")?.textContent).toBe("Said")
     expect(document.querySelector("article.reader img")?.getAttribute("src")).toBe("https://i/a.jpg")
+  })
+
+  it.each<LensKind>(["feed", "listing", "article"])("renders every smoke test item for %s, as generated lenses must", (kind) => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    const items = synthetic_view_items(kind)
+    moi.render(items, null)
+    expect(card_ids(dom.window.document).sort()).toEqual(items.map((entry) => entry.item.item_id).sort())
   })
 
   it("says nothing new for an empty first render", () => {

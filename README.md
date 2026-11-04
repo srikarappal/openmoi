@@ -8,7 +8,9 @@ Your own version of the sites you use. A Chromium shell reads X, YouTube and new
 cd shell && npm install && npm start
 ```
 
-The shell starts the brain (`uv run --project brain python -m moi_brain`). Your files live in `~/openMoi/`: `views/*.md` define views, `memory/*.md` is what openMoi knows about you. Models are set in `~/openMoi/.moi/config.json` (both slots default to a local Ollama `llama3`).
+The shell starts the brain (`uv run --project brain python -m moi_brain`). Your files live in `~/openMoi/`: `views/*.md` define views, `memory/*.md` is what openMoi knows about you. Models are set in `~/openMoi/.moi/config.json` (both slots default to a local Ollama `llama3`; point `smart` at a hosted model for better lenses and extractors).
+
+Tell the chat panel what you want ("no shorts, hide politics, maya first", "make it a two column magazine") and confirm the diff it proposes, or edit the .md files by hand. On any web tab, press Mine for your own version of that page.
 
 ## Test
 

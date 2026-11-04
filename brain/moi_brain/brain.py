@@ -12,15 +12,17 @@ from pydantic import BaseModel
 from moi_brain.compile import CompiledView, Compiler, check_view_id
 from moi_brain.config import Paths, Settings, ensure_home
 from moi_brain.edits import Editor, Proposal
+from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
 from moi_brain.items import Event, Item, ViewItem, normalize, rss_source_id, youtube_source_id
-from moi_brain.lenses import LensStore, lens_key
+from moi_brain.lens_gen import generate_lens
+from moi_brain.lenses import LENS_KINDS, LensStore, lens_key
 from moi_brain.llm import Gateway
 from moi_brain.memory import Memory
 from moi_brain.rank import PAGE_SIZE, Order, rank
 from moi_brain.store import Store
-from moi_brain.tag import Tagger, watch_list
+from moi_brain.tag import Tagger, rule_topics, watch_list
 
 PILOT_BUDGET = {"page_loads": 1, "scroll_steps": 5, "min_step_interval_ms": 1500}
 FEED_INTERVAL = timedelta(minutes=5)
@@ -52,6 +54,7 @@ class ViewPage(BaseModel):
     summary: str
     warnings: list[str]
     version: str
+    layout_hash: str
     lens_stale: bool = False
 
 
@@ -76,7 +79,7 @@ class Brain:
         self.fetcher = FeedFetcher(self.http, paths.channel_cache, youtube_base)
         self.memory = Memory(paths)
         self.compiler = Compiler(paths, self.gateway, self.memory)
-        self.tagger = Tagger(self.store, self.gateway, paths.tagging_state)
+        self.tagger = Tagger(self.store, self.gateway, paths.tagging_state, self.watch_list)
         self.editor = Editor(paths, self.gateway)
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
@@ -128,16 +131,23 @@ class Brain:
                 found.append(PageSource(source_id="x", page_type=spec.page_type, start_url=spec.start_url, spec=spec, budget=PILOT_BUDGET))
         return found
 
-    def store_records(self, source_id: str, records: list[dict[str, Any]], page_url: str | None = None) -> list[Item]:
-        """Normalize, tag the new ones and store; returns every item with its topics, new or already known."""
+    def store_records(self, source_id: str, records: list[dict[str, Any]], page_url: str | None = None, tag_now: bool = False) -> list[Item]:
+        """Normalize and store; new items are tagged by the background worker, or right away when tag_now is set.
+
+        Returns every item in record order, new or already known.
+        """
         now = self.clock()
         normalized = [normalize(source_id, record, now, page_url) for record in records]
         items = list({item.item_id: item for item in normalized if item}.values())
         known = self.store.get_items([item.item_id for item in items])
         fresh = [item for item in items if item.item_id not in known]
-        tagged = {item.item_id: item for item in self.tagger.tag(fresh, self.watch_list())}
-        self.store.upsert_items(list(tagged.values()))
-        return [known.get(item.item_id) or tagged[item.item_id] for item in items]
+        if tag_now:
+            fresh = self.tagger.tag(fresh, self.watch_list())
+        self.store.upsert_items(fresh)
+        if not tag_now:
+            self.tagger.enqueue(fresh)
+        fresh_by_id = {item.item_id: item for item in fresh}
+        return [known.get(item.item_id) or fresh_by_id[item.item_id] for item in items]
 
     def watch_list(self) -> list[str]:
         return watch_list(self.compiler.all_compiled())
@@ -146,18 +156,46 @@ class Brain:
         self.source_status[source_id] = "ok"
         return self.store_records(source_id, records, page_url)
 
+    def ingest_page(self, view_id: str, source_id: str, records: list[dict[str, Any]], page_url: str | None) -> tuple[list[Item], list[ViewItem]]:
+        """A Mine page: its items in page order, filtered and boosted by the site view's rules.
+
+        Topic rules need tags before the page can be shown, so those pages are tagged right away.
+        """
+        compiled = self.compiler.compiled(check_view_id(view_id))
+        items = self.store_records(source_id, records, page_url, tag_now=bool(rule_topics(compiled.rules)))
+        ranked, _ = rank(items, compiled.rules, self.clock(), limit=len(items), order="page")
+        return items, ranked
+
+    def lens_state(self, view_id: str, kind: str) -> tuple[bool, str]:
+        """Whether the lens for this view and kind is stale, plus the layout hash it should be built for."""
+        compiled = self.compiler.compiled(check_view_id(view_id))
+        return self.lenses.is_stale(lens_key(view_id, kind), compiled.layout, compiled.layout_hash), compiled.layout_hash
+
+    def generate_lens(self, view_id: str, kind: str, last_error: str | None) -> str:
+        compiled = self.compiler.compiled(check_view_id(view_id))
+        return generate_lens(self.gateway, compiled.layout, kind, self.paths.default_lens.read_text(), last_error)
+
+    def accept_lens(self, view_id: str, kind: str, html: str) -> int:
+        compiled = self.compiler.compiled(check_view_id(view_id))
+        return self.lenses.save(lens_key(view_id, kind), html, compiled.layout_hash)
+
+    def generate_extractor(self, url: str, skeleton: str, last_error: str | None) -> ExtractorSpec:
+        return generate_spec(self.gateway, url, skeleton, last_error)
+
     def view_page(
         self, view_id: str, exclude_ids: list[str], limit: int = PAGE_SIZE, order: Order = "recency"
     ) -> ViewPage:
         compiled = self.compiler.compiled(view_id)
         self.tagger.ensure_current(self.watch_list(), self.clock())
         items = self.store.items_for_sources(compiled.source_ids(), self.clock() - VIEW_WINDOW)
+        if rule_topics(compiled.rules) and self.tagger.healthy:
+            items = [item for item in items if item.tagged]
         ranked, has_more = rank(items, compiled.rules, self.clock(), set(exclude_ids), limit, order)
         with self.lock:
-            refreshing = view_id in self.refreshing or self.tagger.retagging
+            refreshing = view_id in self.refreshing or self.tagger.busy
         source_ids = set(compiled.source_ids())
         problems = [f"{source_id}: {status}" for source_id, status in self.source_status.items() if source_id in source_ids and status != "ok"]
-        if self.tagger.status != "ok":
+        if not self.tagger.healthy:
             problems.append(self.tagger.status)
         return ViewPage(
             view_id=view_id,
@@ -168,7 +206,8 @@ class Brain:
             summary=compiled.summary,
             warnings=[*compiled.warnings, *problems],
             version=compiled.file_hash,
-            lens_stale=self.lenses.is_stale(view_id, compiled.layout, compiled.layout_hash),
+            layout_hash=compiled.layout_hash,
+            lens_stale=self.lenses.is_stale(lens_key(view_id, "feed"), compiled.layout, compiled.layout_hash),
         )
 
     def record_events(self, events: list[Event]) -> None:
@@ -188,7 +227,10 @@ class Brain:
         proposal = self.editor.apply(proposal_id)
         compiled = self.compiler.compiled(proposal.view_id)
         if proposal.lens_action == "rollback":
-            self.lenses.rollback(lens_key(proposal.view_id, "feed"), compiled.layout_hash)
+            for kind in LENS_KINDS:
+                key = lens_key(proposal.view_id, kind)
+                if self.lenses.pointer(key).version:
+                    self.lenses.rollback(key, compiled.layout_hash)
         self.tagger.ensure_current(self.watch_list(), self.clock())
         return proposal
 

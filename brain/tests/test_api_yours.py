@@ -131,3 +131,38 @@ def test_rollback_moves_the_lens_pointer(client, brain):
     proposal = client.post("/edit", json={"view_id": "feed", "text": "previous look please"}).json()
     client.post("/edit/apply", json={"proposal_id": proposal["proposal_id"]})
     assert client.get("/lens/feed").text == "<p>one</p>"
+
+
+def test_items_show_at_once_unless_topic_rules_need_their_tags(client, paths, services):
+    services.model_delay = 0.6
+    ingest_x(client)
+    assert len(client.post("/view/feed", json={}).json()["items"]) == 2
+    view = (paths.views / "feed.md").read_text().replace("## Rules\n", "## Rules\n* Hide politics.\n")
+    (paths.views / "feed.md").write_text(view)
+    client.post("/ingest", json={"source_id": "x", "records": [{"native_id": "3", "url": "https://x.com/c/status/3", "text": "Election day"}]})
+    held = client.post("/view/feed", json={}).json()
+    assert held["refreshing"] is True
+    assert "Election day" not in titles(held)
+    deadline = time.monotonic() + 10
+    page = held
+    while page["refreshing"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+        page = client.post("/view/feed", json={}).json()
+    assert "Election day" not in titles(page)
+    assert {"Bob says hi", "Maya at the market"} <= set(titles(page))
+
+
+def test_untagged_items_still_show_when_tagging_is_down(client, paths, services):
+    view = (paths.views / "feed.md").read_text().replace("## Rules\n", "## Rules\n* Hide politics.\n")
+    (paths.views / "feed.md").write_text(view)
+    client.post("/view/feed", json={})
+    for _ in range(3):
+        services.queue_model_reply("tag", None)
+    ingest_x(client)
+    deadline = time.monotonic() + 5
+    page = client.post("/view/feed", json={}).json()
+    while page["refreshing"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+        page = client.post("/view/feed", json={}).json()
+    assert {"Bob says hi", "Maya at the market"} <= set(titles(page))
+    assert any(warning.startswith("Topic tagging paused") for warning in page["warnings"])

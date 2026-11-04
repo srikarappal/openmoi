@@ -4,9 +4,11 @@ Each task handler reads the JSON prompt the brain sent and answers the way a goo
 for the phrases our tests use. Unknown tasks echo the last user message as JSON.
 """
 
+import html
 import json
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 SYNONYMS = {
     "politics": ("politic", "election", "senate", "congress"),
@@ -117,7 +119,48 @@ def edit(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"edits": edits, "lens_action": "rollback" if rollback else None, "reply": reply})
 
 
-HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit}
+BROKEN_LENS = "<!doctype html><html><head></head><body><script>moi.ready()</script></body></html>"
+FIELD = {"take": "text"}
+LISTING_SPEC = {
+    "item_root": "tr.athing",
+    "native_id": {"select": ":scope", "take": "attr:id"},
+    "fields": {
+        "title": {"select": ".titleline > a", **FIELD},
+        "url": {"select": ".titleline > a", "take": "attr:href", "transform": "absolute_url"},
+        "extra.site": {"select": ".sitestr", **FIELD, "optional": True},
+    },
+}
+SHOP_SPEC = {
+    "item_root": "[data-component-type='s-search-result']",
+    "native_id": {"select": ":scope", "take": "attr:data-asin"},
+    "fields": {
+        "title": {"select": "h2 a span", **FIELD},
+        "url": {"select": "h2 a", "take": "attr:href", "transform": "absolute_url"},
+        "image_url": {"select": "img.s-image", "take": "attr:src", "optional": True},
+        "extra.price_text": {"select": ".a-price .a-offscreen", **FIELD, "optional": True},
+        "extra.rating_text": {"select": ".a-icon-alt", **FIELD, "optional": True},
+    },
+}
+NOTHING_SPEC = {"item_root": "div.no_such_thing", "fields": {"title": {"select": "a", **FIELD}, "url": {"select": "a", "take": "attr:href"}}}
+SPECS_BY_PAGE = {"/pages/listing.html": LISTING_SPEC, "/pages/shop.html": SHOP_SPEC}
+
+
+def lens(payload: dict[str, Any], base_url: str) -> str:
+    """The example lens with a visible banner naming the layout; BROKEN layouts never render items, FIXABLE ones only on retry."""
+    request = request_of(payload)
+    layout = request["layout"]
+    if "BROKEN" in layout or ("FIXABLE" in layout and not request["last_error"]):
+        return BROKEN_LENS
+    banner = f'<div id="look" data-kind="{request["kind"]}">Look: {html.escape(layout)}</div>'
+    return "Here is your lens:\n```html\n" + request["example_lens"].replace("<body>", f"<body>{banner}", 1) + "\n```"
+
+
+def extractor(payload: dict[str, Any], base_url: str) -> str:
+    request = request_of(payload)
+    return json.dumps(SPECS_BY_PAGE.get(urlparse(request["url"]).path, NOTHING_SPEC))
+
+
+HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "extractor": extractor}
 
 
 def model_reply(task: str, payload: dict[str, Any], base_url: str) -> str:

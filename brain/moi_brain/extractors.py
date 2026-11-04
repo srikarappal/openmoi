@@ -41,10 +41,21 @@ def page_domain(url: str) -> str:
     return (urlparse(url).hostname or "").removeprefix("www.")
 
 
+def looks_like_id(segment: str) -> bool:
+    return any(character.isdigit() for character in segment) or len(segment) > 24
+
+
 def path_pattern_for(url: str) -> str:
-    """'/' for a home page, otherwise the first path segment as a glob: /s?k=x becomes /s*."""
-    segment = urlparse(url).path.strip("/").split("/")[0]
-    return f"/{segment}*" if segment else "/"
+    """One spec per kind of page: '/' for a home page, else up to two path segments as a glob.
+
+    /s?k=lamp becomes /s*, /r/python/top becomes /r/python* and an id like segment is globbed,
+    so /dp/B0001 becomes /dp*.
+    """
+    segments = [segment for segment in urlparse(url).path.split("/") if segment]
+    if not segments:
+        return "/"
+    kept = segments[:1] + [segment for segment in segments[1:2] if not looks_like_id(segment)]
+    return f"/{'/'.join(kept)}*"
 
 
 def spec_matches(spec: ExtractorSpec, url: str) -> bool:

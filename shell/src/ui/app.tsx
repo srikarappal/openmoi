@@ -20,6 +20,7 @@ function send(command: ShellCommand): void {
 }
 
 function TopBar({ state }: { state: ShellState }) {
+  const active_tab = state.active.kind === "tab" ? state.tabs.find((tab) => state.active.kind === "tab" && tab.tab_id === state.active.tab_id) : undefined
   const [address, set_address] = useState(state.address)
   useEffect(() => set_address(state.address), [state.address])
   const submit = (event: FormEvent) => {
@@ -53,6 +54,11 @@ function TopBar({ state }: { state: ShellState }) {
       <form className="address" onSubmit={submit}>
         <input value={address} placeholder="Type a URL or search" onChange={(event) => set_address(event.target.value)} />
       </form>
+      {active_tab && (
+        <button className={active_tab.mine ? "action mine on" : "action mine"} title="Your version of this page" onClick={() => send({ type: "toggle_mine" })}>
+          Mine
+        </button>
+      )}
       <button className="action" onClick={() => send({ type: "refresh" })}>
         Refresh
       </button>

@@ -1,12 +1,16 @@
 """Topic tagging: the fast model marks which watched topics each item is about.
 
 Tagging uses a closed watch list (a few common topics plus every topic your rules name),
-so tags and rules always speak the same words. When rules start watching a new topic,
-recent items are retagged in the background.
+so tags and rules always speak the same words. New items are stored at once and tagged by a
+background worker, so a slow local model never delays a refresh. When rules start watching a
+new topic, recent items go back through the worker.
 """
 
 import json
+import sys
 import threading
+from collections import deque
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from itertools import batched
 from pathlib import Path
@@ -19,10 +23,10 @@ from moi_brain.llm import Gateway, LlmError
 from moi_brain.store import Store
 
 BASE_TOPICS = ("politics", "crypto", "sports", "celebrity", "technology", "science", "business", "health", "gaming", "climate")
-BATCH_SIZE = 20
+BATCH_SIZE = 10
 RETAG_WINDOW = timedelta(days=3)
 MAX_RETAG = 200
-MAX_TAG_TEXT = 300
+MAX_TAG_TEXT = 200
 SYSTEM_PROMPT = """You tag feed items with topics for openMoi, a personal feed reader.
 Reply with one JSON object: {"tags": [{"item_id": "...", "topics": ["..."]}]}.
 Use only topics from the list you are given. An item can have several topics or none.
@@ -67,24 +71,58 @@ def tag_prompt(items: list[Item], topics: list[str]) -> list[dict[str, str]]:
 
 
 class Tagger:
-    def __init__(self, store: Store, gateway: Gateway, state_file: Path):
+    def __init__(self, store: Store, gateway: Gateway, state_file: Path, topics: Callable[[], list[str]]):
         self.store = store
         self.gateway = gateway
         self.state_file = state_file
+        self.topics = topics
         self.status = "ok"
-        self.lock = threading.Lock()
-        self.retagging = False
+        self.condition = threading.Condition()
+        self.pending: deque[str] = deque()
+        self.working = False
         self.tagged_topics: list[str] = json.loads(state_file.read_text()) if state_file.exists() else list(BASE_TOPICS)
+        threading.Thread(target=self.work, daemon=True).start()
+
+    @property
+    def busy(self) -> bool:
+        with self.condition:
+            return bool(self.pending) or self.working
+
+    @property
+    def healthy(self) -> bool:
+        return self.status == "ok"
+
+    def enqueue(self, items: list[Item]) -> None:
+        with self.condition:
+            self.pending.extend(item.item_id for item in items)
+            self.condition.notify()
+
+    def work(self) -> None:
+        """Tags queued items in batches, forever; one bad batch never stops the worker."""
+        while True:
+            with self.condition:
+                while not self.pending:
+                    self.condition.wait()
+                batch = [self.pending.popleft() for _ in range(min(BATCH_SIZE, len(self.pending)))]
+                self.working = True
+            try:
+                tagged = self.tag(list(self.store.get_items(batch).values()), self.topics())
+                self.store.update_topics({item.item_id: item.topics for item in tagged if item.tagged})
+            except Exception as error:
+                print(f"tagging worker: {error}", file=sys.stderr)
+            finally:
+                with self.condition:
+                    self.working = False
 
     def tag(self, items: list[Item], topics: list[str]) -> list[Item]:
-        """Items with topics set; a batch the model could not tag keeps the topics it had."""
+        """Items with topics set and tagged true; a batch the model could not tag comes back unchanged."""
         tagged: list[Item] = []
         for batch in batched(items, BATCH_SIZE):
             topics_by_id = self.tag_batch(list(batch), topics)
             if topics_by_id is None:
                 tagged += batch
             else:
-                tagged += [item.model_copy(update={"topics": topics_by_id.get(item.item_id, [])}) for item in batch]
+                tagged += [item.model_copy(update={"topics": topics_by_id.get(item.item_id, []), "tagged": True}) for item in batch]
         return tagged
 
     def tag_batch(self, batch: list[Item], topics: list[str]) -> dict[str, list[str]] | None:
@@ -103,21 +141,10 @@ class Tagger:
         }
 
     def ensure_current(self, topics: list[str], now: datetime) -> None:
-        """Start a background retag of recent items when rules watch topics they were not tagged for."""
-        with self.lock:
-            if self.retagging or set(topics) <= set(self.tagged_topics):
+        """When rules watch topics recent items were not tagged for, send those items back through the worker."""
+        with self.condition:
+            if set(topics) <= set(self.tagged_topics):
                 return
-            self.retagging = True
-        threading.Thread(target=self.retag, args=(topics, now), daemon=True).start()
-
-    def retag(self, topics: list[str], now: datetime) -> None:
-        try:
-            items = self.store.recent_items(now - RETAG_WINDOW)[:MAX_RETAG]
-            tagged = self.tag(items, topics)
-            self.store.update_topics({item.item_id: item.topics for item in tagged})
-            if self.status == "ok":
-                self.tagged_topics = topics
-                self.state_file.write_text(json.dumps(topics))
-        finally:
-            with self.lock:
-                self.retagging = False
+            self.tagged_topics = topics
+        self.state_file.write_text(json.dumps(topics))
+        self.enqueue(self.store.recent_items(now - RETAG_WINDOW)[:MAX_RETAG])

@@ -91,11 +91,12 @@ class Store:
         return self.get_items([item_id]).get(item_id)
 
     def update_topics(self, topics_by_id: dict[str, list[str]]) -> None:
+        """Save tagging results; the items count as tagged from now on."""
         with self.lock, self.connection:
             for item_id, topics in topics_by_id.items():
                 row = self.connection.execute("SELECT item_json FROM items WHERE item_id = ?", (item_id,)).fetchone()
                 if row:
-                    item = Item.model_validate_json(row[0]).model_copy(update={"topics": topics})
+                    item = Item.model_validate_json(row[0]).model_copy(update={"topics": topics, "tagged": True})
                     self.connection.execute("UPDATE items SET item_json = ? WHERE item_id = ?", (item.model_dump_json(), item_id))
 
     def add_events(self, events: list[Event], now: datetime) -> None:

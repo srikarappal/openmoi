@@ -54,7 +54,7 @@ def entry_record(entry: Any, kind: str) -> dict[str, Any]:
     record = {
         "native_id": entry.get("yt_videoid") or entry.get("id") or link,
         "url": link,
-        "title": entry.get("title"),
+        "title": html.unescape(entry.get("title") or ""),
         "text": strip_html(summary),
         "author_name": entry.get("author"),
         "image_url": entry_image(entry, summary),

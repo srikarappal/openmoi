@@ -11,14 +11,19 @@ export interface Tab {
   mine: boolean
 }
 
+export interface TabHooks {
+  changed(): void
+  opened(tab: Tab): void
+  navigated(tab: Tab): void
+}
+
 export class TabManager {
   private readonly tabs = new Map<number, Tab>()
   private next_id = 1
 
   constructor(
     private readonly host: ViewHost,
-    private readonly on_change: () => void,
-    private readonly on_new_tab: (tab: Tab) => void,
+    private readonly hooks: TabHooks,
   ) {}
 
   open(address: string): Tab {
@@ -27,18 +32,17 @@ export class TabManager {
     this.tabs.set(tab.tab_id, tab)
     this.host.attach(view)
     view.webContents.setWindowOpenHandler(({ url }) => {
-      this.on_new_tab(this.open(url))
+      this.hooks.opened(this.open(url))
       return { action: "deny" }
     })
-    view.webContents.on("page-title-updated", this.on_change)
-    view.webContents.on("did-navigate", this.on_change)
-    view.webContents.on("did-navigate-in-page", this.on_change)
+    view.webContents.on("page-title-updated", () => this.hooks.changed())
+    view.webContents.on("did-navigate-in-page", () => this.hooks.changed())
+    view.webContents.on("did-navigate", () => this.hooks.navigated(tab))
     this.navigate(tab, address)
     return tab
   }
 
   navigate(tab: Tab, address: string): void {
-    tab.mine = false
     tab.view.webContents.loadURL(normalize_address(address)).catch(ignore_navigation_error)
   }
 

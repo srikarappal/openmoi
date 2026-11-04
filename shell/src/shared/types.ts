@@ -17,6 +17,7 @@ export interface Item {
   published_at: string | null
   fetched_at: string
   topics: string[]
+  tagged: boolean
   available_actions: string[]
   extra: Record<string, string>
 }
@@ -71,7 +72,15 @@ export interface ViewPage {
   summary: string
   warnings: string[]
   version: string
+  layout_hash: string
   lens_stale: boolean
+}
+
+export interface IngestResult {
+  items: Item[]
+  view_items: ViewItem[]
+  lens_stale: boolean
+  layout_hash: string
 }
 
 export interface ViewInfo {
@@ -175,3 +184,4 @@ export type ShellCommand =
   | { type: "chat_send"; text: string }
   | { type: "proposal_apply"; proposal_id: string }
   | { type: "proposal_discard"; proposal_id: string }
+  | { type: "toggle_mine" }

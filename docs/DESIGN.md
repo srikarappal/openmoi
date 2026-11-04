@@ -258,7 +258,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 * Challenge stop: on a login wall, CAPTCHA or checkpoint, stop reading that source, show you the real page and retry only when you press refresh.
 * Standard Chromium user agent; no spoofing of any kind.
 * Security baseline: `contextIsolation`, `sandbox`, no `nodeIntegration` in web content.
-* Starts the brain with `uv run moi_brain` on a random local port with a per launch token; restarts it if it exits.
+* Starts the brain with `uv run --project brain python -m moi_brain` on a free local port with a per launch token; restarts it if it exits.
 
 ### 9.2 Sources
 
@@ -274,7 +274,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 * FastAPI with plain `def` handlers (no async code), bound to 127.0.0.1, every request carrying the launch token.
 * SQLite through the standard `sqlite3` module; two tables (11.2).
 * Ingest: raw records -> Item, canonical URL with tracking params stripped, dedupe by source id plus native id and by canonical URL.
-* Tagging: new items in batches of 20 -> fast model -> which topics from the current watch list apply to each item (the topics named in your rules and memory) plus `media_kind`. Tagging against a closed list keeps tags and rules in sync.
+* Tagging: new items are stored at once and queued; a background worker sends batches of 10 to the fast model, which picks topics from the watch list (a few common topics plus every topic your rules and memory name). Tagging against a closed list keeps tags and rules in sync. A view with topic rules shows only tagged items (unless tagging is paused), so nothing you asked to hide slips through while a slow local model catches up. `media_kind` comes from the source (YouTube shorts, X video), not the model.
 * Compile: `views/<view>.md` + `memory/likes.md` + `memory/dislikes.md` -> compiled JSON (11.4), validated by pydantic, cached by file hash. A failed compile keeps the previous version and shows the error in chat.
 * Ranking: drop hidden and seen items, apply limits, score = recency decay × source weight + boosts, sort, pages of 30. Each item carries plain reasons ("boost: Maya", "recent").
 * Rung 1 refresh runs in a background thread; views serve cached items while it runs.
@@ -299,7 +299,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
   .moi/                machine state, safe to delete and rebuild
     config.json        model slots, privacy switch
     compiled/          feed.json, tech.json
-    lenses/            feed/v1.html, feed/v2.html, feed/current.txt
+    lenses/            feed/v1.html, feed/v2.html, feed/current.json
     extractors/        news.ycombinator.com.json, amazon.com_s.json
     openmoi.db         items, events
     logs/              brain.log, llm_calls.jsonl
@@ -345,17 +345,17 @@ Memory rules:
 
 ### 9.5 Lens
 
-* One self contained HTML file per view version. The host injects a tiny helper (`moi`, 11.6) and a CSP before loading it.
-* Sandbox: iframe with `sandbox="allow-scripts"` (opaque origin, no forms, no popups, no top navigation). CSP: `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data:`. No network except images.
+* One self contained HTML file per view version, loaded as its own document in a dedicated sandboxed view. The host puts a CSP first in its head; a preload exposes the `moi` helper (11.6), the only thing a lens can call.
+* Sandbox: the lens view has its own session that loads nothing but its document and https images, enforced by the session and by the CSP `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data:`. It cannot navigate or open windows; every message it sends is validated before the host acts on it.
 * Generation (smart slot): input is the view's Layout text, the item model, the helper API and the matching default lens as an example; output is one HTML file.
-* Smoke test (shell, hidden window): render 30 synthetic items, expect `ready`, every item id present in the DOM as `data-item-id`, no errors within 3 s. One retry with the error attached; if it still fails, keep the current lens and say so in chat.
-* Versions: numbered files; `current.txt` points at the live one; "go back to the previous look" moves the pointer.
-* Handwritten defaults, always available: `feed.html`, `article.html`, `listing.html`.
+* Smoke test (shell, hidden window): render 30 synthetic items covering every kind, missing fields and long text; expect `ready`, every item id present in the DOM as `data-item-id` and no script errors. One retry with the error attached; if it still fails, keep the current lens and say so in chat. A layout that failed is not retried until its text changes.
+* Versions: numbered files; `current.json` records the live version and the layout hash it was built for; "go back to the previous look" moves the pointer.
+* One handwritten default lens, `lenses/default/default.html`, always available: cards for feeds, a grid for listings, a reader for one article. Generated lenses start from it; it passes the same smoke test.
 
 ### 9.6 "Mine" for any page
 
 * Readability runs first; if the page reads as an article, it renders in the article lens.
-* Otherwise the shell looks for a saved extractor for the domain and path. If there is none, the skeletonizer strips scripts, styles and SVG, replaces every text node with a length placeholder, keeps tags, ids, classes, roles, `aria-*` and `data-*` attributes, collapses repeated siblings to three examples and caps the result around 30k tokens. The smart slot turns that skeleton into a listing spec (11.5), so it never sees your page text.
+* Otherwise the shell looks for a saved extractor for the domain and path. If there is none, the skeletonizer strips scripts, styles and SVG, replaces every text node and every text like attribute (`alt`, `title`, `aria-label`) with a length placeholder, keeps tags, classes, roles and structural data attributes, reduces links and image addresses to their shape (structural path words only, digits as 9, other hosts as `ext`), collapses repeated siblings to three examples and caps the result at 60k characters. The smart slot turns that skeleton into a listing spec (11.5), so it never sees your page text.
 * A spec is accepted when it yields at least 3 items with a title and URL; accepted specs are saved per domain and path pattern.
 * Chatting on a Mine page ("compact table, cheapest first") creates `views/site_<domain>.md`, so a site's look and rules use the same mechanism as any view.
 
@@ -490,15 +490,20 @@ Items expire after 30 days unless opened. Everything else the MVP stores is a fi
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /refresh {view_id}` | Start the rung 1 refresh in a thread; returns the page sources the shell should read |
-| `POST /ingest {source_id, records}` | Raw records to items; returns the normalized items (used directly by Mine) |
-| `GET /view/{view_id}?cursor=` | Ranked page with reasons plus a `refreshing` flag |
-| `POST /events {events}` | `open`, `seen`, `less_like_this` |
+| `GET /health`, `GET /views` | Liveness; the view tabs (every `views/*.md` except site views) |
+| `POST /refresh {view_id, force}` | Start the rung 1 refresh in a thread; returns the page sources the shell should read |
+| `POST /ingest {source_id, records, page_url, view_id?, kind?}` | Raw records to items; with a view id, also the Mine page ranked in page order and whether its lens is stale |
+| `POST /view/{view_id} {exclude_ids}` | Ranked page with reasons, excluding what the lens already shows, plus `refreshing`, `version` and `lens_stale` |
+| `POST /events {events}` | `open`, `seen`, `less_like_this`; opens also go into the journal |
 | `POST /edit {view_id, text, item_id?}` | Proposed section edits to .md files, shown as diffs |
-| `POST /edit/apply {proposal_id}` | Write confirmed edits and recompile |
-| `POST /lens/generate {view_id, last_error?}` | One HTML lens file |
-| `POST /extractor/generate {url, skeleton, last_error?}` | One listing spec |
-| `GET /debug` | Source status, item counts, last errors, tail of the LLM call log |
+| `POST /edit/apply`, `POST /edit/discard {proposal_id}` | Write confirmed edits and recompile, or drop the proposal |
+| `GET /lens/{view_id}?kind=` | The live lens HTML (generated version or the default) |
+| `POST /lens/generate {view_id, kind, last_error?}`, `POST /lens/accept {view_id, kind, html}` | One HTML lens file; keep it as the next version once the shell's smoke test passes |
+| `GET /extractor?url=` | The newest saved spec for this page, if any |
+| `POST /extractor/generate {url, skeleton, last_error?}`, `POST /extractor/accept {spec}` | One listing spec; keep it as the next version once it extracted at least 3 items |
+| `GET /debug` | Source status, tagging status, item counts, tail of the LLM call log |
+
+The brain stays stateless about candidates: the shell tests a generated lens or spec, then accepts it.
 
 ### 11.4 Compiled view
 
@@ -590,7 +595,7 @@ Helper the host injects into every lens:
 ```js
 moi.on_render((items, cursor) => {})   // replace everything
 moi.on_append((items, cursor) => {})   // add below
-moi.ready()                            // call once after first render
+moi.ready()                            // call once both listeners are registered; the host then sends the first render
 moi.open(item_id)                      // open the original in a web tab
 moi.more(cursor)                       // ask for the next page
 moi.seen(item_ids)                     // items that were visible for 1 s
@@ -661,7 +666,7 @@ Even a dogfood build keeps these, because they cost little now and a lot to retr
 ## 13. Milestones
 
 ```
-M1 bones -> M2 yours -> M3 mine -> 2 weeks of dogfood -> pick the first later stage
+M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [next] -> pick the first later stage
 ```
 
 | Milestone | Builds | Exit criteria | Rough size (2 engineers) |
@@ -670,10 +675,23 @@ M1 bones -> M2 yours -> M3 mine -> 2 weeks of dogfood -> pick the first later st
 | M2 Yours | .md views and memory, compile, tagging, rules, ranking with reasons, seen and "caught up", chat edits with diff confirm, "less like this", a second view file | "No shorts, hide politics, Maya first" works by chat and by hand edit; every item shows its reasons; "caught up" appears | 2 weeks |
 | M3 Mine | Lens generation with smoke test and versions; Mine with Readability, generated listing extractors and drift regeneration | A "two column magazine" lens in under 60 s; Mine works on at least 7 of 10 test sites (Hacker News, Amazon search, a blog, a news article, a shop, a forum, a docs site, three more) | 2 to 3 weeks |
 
+### 13.1 As built (Nov 4, 2026)
+
+| Check | Result |
+|---|---|
+| Tests | 183 brain (unit and API integration), 113 shell unit, 15 end to end in the real app, all against the shared fake services |
+| One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
+| Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
+| Real feeds | Live Ars Technica and The Verge RSS plus two YouTube handles: 60 items in 1.6 s |
+| Real local model | llama3 8B on Ollama tags sensibly but needs about 6 s per item, which is why tagging runs in the background |
+| Code size | About 4.9k lines of product code (budget 8k) |
+
+Not yet measured: Mine on 7 of 10 real sites and a lens in under 60 s with a real smart model. Both need a hosted smart slot; the fake model proves the pipeline, not model quality.
+
 ## 14. Simplicity budget
 
 * **Code:** about 8k lines of our own code at the end of M3 (shell about 3.5k TypeScript, brain about 3.5k Python, lenses and prompts about 1k). Over budget means cutting scope, not quality.
-* **Dependencies:** the shell uses Electron, React, Vite and Mozilla Readability; the brain uses FastAPI, uvicorn, pydantic, feedparser and httpx. Anything else needs a one line reason in this doc.
+* **Dependencies:** the shell uses Electron, React, esbuild and Mozilla Readability; the brain uses FastAPI, uvicorn, pydantic, feedparser and httpx. Anything else needs a one line reason in this doc.
 * **No:** queues or job systems (threads are enough), ORMs (plain SQL), Docker, plugin systems, schema codegen, microservices, packaging, feature flags, settings screens (the files are the settings).
 * **Rule:** every later stage plugs into a bone from section 8. If a later feature needs a bone rewritten, fix the bone first.
 
@@ -1072,7 +1090,7 @@ Fixtures come from recorded sessions of team test accounts. There is no central 
 
 | Area | Choice | Why |
 |---|---|---|
-| Shell | Electron + TypeScript, React with Vite for the chrome UI | Full Chromium with one engine on every OS, hidden views, isolated preload worlds |
+| Shell | Electron + TypeScript, React for the chrome UI, bundled with esbuild | Full Chromium with one engine on every OS, hidden views, isolated preload worlds |
 | Articles | Mozilla Readability | Proven reader mode |
 | Brain | Python 3.12, sync, FastAPI with `def` handlers, pydantic, `uv` | AI ecosystem, typed contracts, no async code |
 | Feeds | `feedparser`, `httpx` | Small, reliable |
@@ -1095,26 +1113,34 @@ Fixtures come from recorded sessions of team test accounts. There is no central 
 ```
 openMoi/
   shell/                   Electron + TypeScript
-    src/main/              window, tabs, source views, pilot reads, brain spawn, lens host
-    src/preload/           extraction interpreter, skeletonizer, Readability
-    src/ui/                React: view tabs, URL bar, Mine toggle, chat panel, diff confirm
+    src/main/              window and layout, tabs, hidden source views, lenses, views, chat, Mine, lens generation, smoke test, brain process
+    src/preload/           page (extract, scroll, challenge, skeleton, Readability), lens (the moi helper), chrome UI bridge
+    src/shared/            types, extraction interpreter, skeletonizer, article reader, challenge detection, lens document rules, synthetic items
+    src/ui/                React: view tabs, web tabs, address bar, Mine toggle, notices, chat panel with diffs
+    tests/unit/            vitest with jsdom
+    tests/e2e/             Playwright driving the real app against the fake services
   brain/
     moi_brain/
       api.py               FastAPI app, sync handlers
-      store.py             SQLite
-      items.py             Item model, normalize, dedupe
+      brain.py             composes everything below
+      config.py            paths and settings
+      store.py             SQLite: items and events
+      items.py             Item model, normalize, source ids
       feeds.py             RSS + YouTube RSS
-      compile.py           .md -> compiled JSON
-      rank.py              rules + score + reasons
-      tag.py               batch topic tagging
-      memory.py            read, propose edit, apply, journal append
-      lens_gen.py          lens generation
-      extractor_gen.py     listing spec generation
-      llm.py               gateway, two slots, call log
+      md.py                section parsing and editing for .md files
+      compile.py           .md -> compiled JSON (sources by parser, rules by the fast model)
+      rank.py              rules + recency + reasons
+      tag.py               background topic tagging
+      memory.py            memory files and the journal
+      edits.py             chat edits as proposals you confirm
+      lenses.py            lens versions; lens_gen.py writes new ones
+      extractors.py        spec store; extractor_gen.py writes new ones
+      llm.py               gateway, two slots, privacy switch, call log
     tests/
-  lenses/default/          feed.html, article.html, listing.html
+  lenses/default/          default.html
   extractors/              x_home_timeline.json
-  fixtures/                synthetic items, saved test pages
+  templates/               starter views/feed.md and memory files
+  fixtures/                fake_services.py and fake_model.py (shared by both test suites), pages, views
   docs/DESIGN.md
 ```
 

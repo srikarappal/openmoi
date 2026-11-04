@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto"
 import { createServer } from "node:net"
 import path from "node:path"
 import { wait_for } from "../shared/timing"
-import type { BrainEvent, Item, LensKind, PageSource, Proposal, RawRecord, ViewInfo, ViewPage } from "../shared/types"
+import type { BrainEvent, ExtractorSpec, IngestResult, LensKind, PageSource, Proposal, RawRecord, ViewInfo, ViewPage } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
 const RESTART_DELAY_MS = 1_000
@@ -52,8 +52,9 @@ export class BrainClient {
     return this.request("POST", "/refresh", { view_id, force })
   }
 
-  ingest(source_id: string, records: RawRecord[], page_url?: string): Promise<{ items: Item[] }> {
-    return this.request("POST", "/ingest", { source_id, records, page_url })
+  // With a view id the brain also ranks the items in page order by that view's rules (a Mine page).
+  ingest(source_id: string, records: RawRecord[], page_url?: string, view_id?: string, kind?: LensKind): Promise<IngestResult> {
+    return this.request("POST", "/ingest", { source_id, records, page_url, view_id, kind })
   }
 
   view_page(view_id: string, exclude_ids: string[]): Promise<ViewPage> {
@@ -78,6 +79,26 @@ export class BrainClient {
 
   lens(view_id: string, kind: LensKind): Promise<string> {
     return this.request("GET", `/lens/${encodeURIComponent(view_id)}?kind=${kind}`)
+  }
+
+  async generate_lens(view_id: string, kind: LensKind, last_error?: string): Promise<string> {
+    return (await this.request<{ html: string }>("POST", "/lens/generate", { view_id, kind, last_error })).html
+  }
+
+  async accept_lens(view_id: string, kind: LensKind, html: string): Promise<number> {
+    return (await this.request<{ version: number }>("POST", "/lens/accept", { view_id, kind, html })).version
+  }
+
+  async find_extractor(url: string): Promise<ExtractorSpec | null> {
+    return (await this.request<{ spec: ExtractorSpec | null }>("GET", `/extractor?url=${encodeURIComponent(url)}`)).spec
+  }
+
+  async generate_extractor(url: string, skeleton: string, last_error?: string): Promise<ExtractorSpec> {
+    return (await this.request<{ spec: ExtractorSpec }>("POST", "/extractor/generate", { url, skeleton, last_error })).spec
+  }
+
+  async accept_extractor(spec: ExtractorSpec): Promise<ExtractorSpec> {
+    return (await this.request<{ spec: ExtractorSpec }>("POST", "/extractor/accept", spec)).spec
   }
 }
 

@@ -1,6 +1,6 @@
 // Runs any lens HTML in jsdom against a recording fake of the moi helper.
 import { JSDOM } from "jsdom"
-import type { Item, ViewItem } from "../../src/shared/types"
+import type { ViewItem } from "../../src/shared/types"
 
 type Listener = (items: ViewItem[], cursor: string | null) => void
 
@@ -54,33 +54,4 @@ export function run_lens(html: string): { dom: JSDOM; moi: FakeMoi } {
     },
   })
   return { dom, moi }
-}
-
-export function view_item(item_id: string, fields: Partial<Item> = {}, reasons = ["recent", "from x"]): ViewItem {
-  return {
-    item: {
-      item_id,
-      source_id: "x",
-      native_id: item_id,
-      kind: "post",
-      url: `https://x.com/a/status/${item_id}`,
-      title: null,
-      text: `text of ${item_id}`,
-      author_name: "Maya",
-      author_handle: "maya",
-      image_url: null,
-      media_kind: null,
-      published_at: new Date(Date.now() - 3_600_000).toISOString(),
-      fetched_at: new Date().toISOString(),
-      topics: [],
-      available_actions: [],
-      extra: {},
-      ...fields,
-    },
-    reasons,
-  }
-}
-
-export function synthetic_items(count: number): ViewItem[] {
-  return Array.from({ length: count }, (_, index) => view_item(`item${index}`, { title: `Synthetic title ${index}` }))
 }

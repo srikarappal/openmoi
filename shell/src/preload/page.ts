@@ -1,7 +1,9 @@
 // Preload for web tabs and hidden source views. Runs in an isolated world, so page scripts cannot reach it.
 import { ipcRenderer } from "electron"
+import { read_article } from "../shared/article"
 import { looks_like_challenge } from "../shared/challenge"
 import { extract_records } from "../shared/extract"
+import { skeleton } from "../shared/skeleton"
 import type { ExtractorSpec, PageOp, PageRequest } from "../shared/types"
 
 function run_op(op: PageOp, args: Record<string, unknown>): unknown {
@@ -15,6 +17,10 @@ function run_op(op: PageOp, args: Record<string, unknown>): unknown {
     case "scroll":
       window.scrollBy(0, Number(args.step_px) || 900)
       return true
+    case "skeleton":
+      return skeleton(document.body)
+    case "readability":
+      return read_article(document, location.href)
     default:
       throw new Error(`unknown page op ${op}`)
   }

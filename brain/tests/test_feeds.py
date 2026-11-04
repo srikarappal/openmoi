@@ -96,6 +96,13 @@ def test_entry_image_sources():
     assert entry_image({}, "<p>no image</p>") is None
 
 
+def test_entry_titles_are_unescaped_even_when_double_escaped():
+    parsed = feedparser.parse(
+        '<rss version="2.0"><channel><item><title>AMD&amp;#8217;s &amp;amp; Intel&amp;#8216;s week</title><link>https://a.com/1</link></item></channel></rss>'
+    ).entries[0]
+    assert entry_record(parsed, "article")["title"] == "AMD\u2019s & Intel\u2018s week"
+
+
 def test_entry_record_without_dates_or_links():
     record = entry_record({"title": "T", "summary": "<b>bold</b> &amp; plain"}, "article")
     assert record["text"] == "bold  & plain"

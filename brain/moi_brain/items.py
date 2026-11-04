@@ -38,6 +38,7 @@ class Item(BaseModel):
     published_at: datetime | None = None
     fetched_at: datetime
     topics: list[str] = Field(default_factory=list)
+    tagged: bool = False
     available_actions: list[str] = Field(default_factory=list)
     extra: dict[str, str] = Field(default_factory=dict)
 

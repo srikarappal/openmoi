@@ -89,7 +89,7 @@ test("discarding a proposal changes nothing", async () => {
   }
 })
 
-test("hand edits re-render when you come back to the view, and the end says caught up", async () => {
+test("hand edits re-render when you come back to the view; the end says caught up", async () => {
   const harness = await Harness.launch(world)
   try {
     await loaded(harness, "Senate debates the election budget")

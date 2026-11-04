@@ -17,6 +17,15 @@ export async function wait_for<T>(probe: () => Promise<T>, timeout_ms: number, i
   }
 }
 
+// Resolves like promise, or rejects with "<label> timed out" after timeout_ms.
+export function with_timeout<T>(promise: Promise<T>, timeout_ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeout_ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
 // Allows one automatic run per key per interval; forced runs always pass and reset the clock.
 export class Throttle {
   private readonly last_run = new Map<string, number>()

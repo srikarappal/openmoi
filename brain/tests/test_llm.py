@@ -4,6 +4,8 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
+from helpers import Recorder, ok_reply
+
 from moi_brain.config import Settings, Slot
 from moi_brain.llm import Gateway, LlmError, PrivacyBlocked, json_object_text, strip_fence
 
@@ -12,22 +14,6 @@ HOSTED = Slot(base_url="https://models.example.com/v1", model="big", api_key_env
 
 class Answer(BaseModel):
     answer: int
-
-
-def ok_reply(content: str) -> httpx.Response:
-    return httpx.Response(200, json={"choices": [{"message": {"content": content}}], "usage": {"prompt_tokens": 1000, "completion_tokens": 100}})
-
-
-class Recorder:
-    """A fake transport that replays replies in order and keeps every request."""
-
-    def __init__(self, *replies: httpx.Response):
-        self.replies = list(replies)
-        self.requests: list[httpx.Request] = []
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        return self.replies.pop(0)
 
 
 def hosted_gateway(tmp_path, recorder: Recorder, allow: bool) -> Gateway:

@@ -22,6 +22,7 @@
   .meta { color: var(--muted); font-size: 12.5px; }
   .title { font-weight: 650; font-size: 16.5px; line-height: 1.3; }
   .text { color: var(--text); opacity: 0.88; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+  .details { font-weight: 600; font-size: 14px; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; }
   .chip { background: var(--chip); color: var(--muted); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; }
@@ -114,6 +115,8 @@
     body.append(element("div", "meta", meta.filter(Boolean).join(" · ")))
     if (item.title) body.append(element("div", "title", item.title))
     if (item.text && item.text !== item.title) body.append(element("div", "text", item.text))
+    const details = [item.extra.price_text, item.extra.rating_text, item.extra.site].filter(Boolean).join(" · ")
+    if (details) body.append(element("div", "details", details))
     const row = element("div", "row")
     const chips = element("div", "chips")
     for (const reason of view_item.reasons.filter((reason) => !reason.startsWith("from "))) chips.append(element("span", "chip", reason))

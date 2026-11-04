@@ -1,11 +1,15 @@
 // The window: chrome UI on top and on the right, one content area showing a lens or a web tab.
 import path from "node:path"
 import { BrowserWindow, ipcMain, type WebContentsView } from "electron"
-import type { ActiveTarget, Item, LensToHost, Notice, Proposal, ShellCommand, ShellState, ViewInfo } from "../shared/types"
+import { site_domain } from "../shared/address"
+import type { ActiveTarget, Item, LensKind, LensToHost, Notice, Proposal, ShellCommand, ShellState, ViewInfo } from "../shared/types"
 import type { BrainClient } from "./brain"
 import { ChatController } from "./chat"
 import type { ViewHost } from "./host"
+import { LensGenerator, view_label } from "./lens_gen"
 import { LensManager, type LensContext } from "./lenses"
+import { MineController, mine_lens_key } from "./mine"
+import { SmokeTester } from "./smoke"
 import { SourceReader } from "./sources"
 import { TabManager, type Tab } from "./tabs"
 import { ViewController, view_lens_key } from "./views"
@@ -22,9 +26,12 @@ export class Shell implements ViewHost {
   readonly lenses: LensManager
   readonly sources: SourceReader
   readonly views: ViewController
+  readonly mine: MineController
   readonly chat: ChatController
+  readonly lens_gen: LensGenerator
   private active: ActiveTarget = { kind: "view", view_id: "feed" }
-  private last_view_id = "feed"
+  private activations = 0
+  private chat_view_id = "feed"
   private view_infos: ViewInfo[] = []
   private notices: Notice[] = []
   private next_notice_id = 1
@@ -43,19 +50,34 @@ export class Shell implements ViewHost {
       title: "openMoi",
       webPreferences: { preload: path.join(dist_dir, "preload_chrome.js"), sandbox: true, contextIsolation: true },
     })
-    this.tabs = new TabManager(this, () => this.push_state(), (tab) => this.activate({ kind: "tab", tab_id: tab.tab_id }))
+    this.tabs = new TabManager(this, {
+      changed: () => this.push_state(),
+      opened: (tab) => this.activate({ kind: "tab", tab_id: tab.tab_id }),
+      navigated: (tab) => this.on_navigated(tab),
+    })
     this.sources = new SourceReader(this)
     this.lenses = new LensManager(this, { on_ready: (context) => this.on_lens_ready(context), on_event: (context, message) => this.on_lens_event(context, message) })
+    this.chat = new ChatController(brain, {
+      chat_view: () => this.chat_view_id,
+      on_applied: (proposal) => this.on_applied(proposal),
+      changed: () => this.push_state(),
+    })
+    this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload), {
+      say: (text) => this.chat.say(text),
+      on_new_lens: (view_id, kind) => this.reload_lens(view_id, kind),
+    })
     this.views = new ViewController(brain, this.lenses, this.sources, {
       open_tab: (url) => this.open_tab(url),
       notify: (text, url) => this.notify(text, url),
       echo: (text) => this.chat.say(text),
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
+      lens_stale: (view_id, layout_hash) => this.lens_gen.ensure(view_id, "feed", layout_hash),
     })
-    this.chat = new ChatController(brain, {
-      chat_view: () => this.last_view_id,
-      on_applied: (proposal) => this.on_applied(proposal),
-      changed: () => this.push_state(),
+    this.mine = new MineController(brain, this.lenses, {
+      notify: (text) => this.notify(text),
+      open_in_tab: (tab_id, url) => this.open_in_tab(tab_id, url),
+      lens_stale: (view_id, kind, layout_hash) => this.lens_gen.ensure(view_id, kind, layout_hash),
+      less_like_this: (view_id, item) => this.less_like_this(view_id, item),
     })
     this.window.on("resize", () => this.layout())
     ipcMain.on("moi:command", (event, command: ShellCommand) => {
@@ -99,26 +121,33 @@ export class Shell implements ViewHost {
     return this.active.kind === "tab" ? this.tabs.get(this.active.tab_id) : undefined
   }
 
+  // A tab in Mine shows its Mine lens; otherwise the page itself.
   private active_view(): WebContentsView | undefined {
     if (this.active.kind === "view") return this.lenses.get(view_lens_key(this.active.view_id))?.view
-    return this.active_tab()?.view
+    const tab = this.active_tab()
+    return tab?.mine ? (this.lenses.get(mine_lens_key(tab.tab_id))?.view ?? tab.view) : tab?.view
   }
 
   // Shows the active lens or tab on top; hidden source views stay attached underneath and keep rendering.
   private activate(target: ActiveTarget): void {
+    this.activations += 1
     this.active = target
-    if (target.kind === "view") this.last_view_id = target.view_id
+    const tab = this.active_tab()
+    if (target.kind === "view") this.chat_view_id = target.view_id
+    else if (tab?.mine) this.chat_view_id = this.mine.view_for_tab(tab.tab_id) ?? this.chat_view_id
     const shown = this.active_view()
-    for (const view of [...this.lenses.all().map((context) => context.view), ...this.tabs.all().map((tab) => tab.view)]) {
+    for (const view of [...this.lenses.all().map((context) => context.view), ...this.tabs.all().map((each) => each.view)]) {
       view.setVisible(view === shown)
     }
     if (shown) this.window.contentView.addChildView(shown)
     this.push_state()
   }
 
+  // Loading a view can take a moment; if you opened something else meanwhile, that stays in front.
   async open_view(view_id: string): Promise<void> {
+    const ticket = this.activations
     await this.views.show(view_id)
-    this.activate({ kind: "view", view_id })
+    if (ticket === this.activations) this.activate({ kind: "view", view_id })
   }
 
   open_tab(url: string): void {
@@ -131,25 +160,70 @@ export class Shell implements ViewHost {
     this.push_state()
   }
 
+  private set_mine_off(tab: Tab): void {
+    if (!tab.mine) return
+    tab.mine = false
+    this.mine.disable(tab.tab_id)
+  }
+
+  private async toggle_mine(tab: Tab): Promise<void> {
+    if (tab.mine) {
+      this.set_mine_off(tab)
+    } else {
+      this.chat.say(`Making your version of ${site_domain(tab.view.webContents.getURL())}.`)
+      tab.mine = await this.mine.enable(tab)
+    }
+    this.activate({ kind: "tab", tab_id: tab.tab_id })
+  }
+
+  private open_in_tab(tab_id: number, url: string): void {
+    const tab = this.tabs.get(tab_id)
+    if (!tab) return
+    this.set_mine_off(tab)
+    this.tabs.navigate(tab, url)
+    this.activate({ kind: "tab", tab_id })
+  }
+
+  // A page that changed underneath a Mine view no longer matches it.
+  private on_navigated(tab: Tab): void {
+    if (tab.mine) {
+      this.set_mine_off(tab)
+      if (this.active.kind === "tab" && this.active.tab_id === tab.tab_id) this.activate(this.active)
+    }
+    this.push_state()
+  }
+
   private less_like_this(view_id: string, item: Item): void {
     const label = item.title || item.text?.slice(0, 80) || item.url
     this.chat.send(`Less like this: ${label}`, item.item_id, view_id).catch((error) => this.notify(String(error)))
   }
 
-  // An applied edit can rename views, change rules or roll the lens back; refresh whatever it touched.
+  private async reload_lens(view_id: string, kind: LensKind): Promise<void> {
+    if (kind === "feed") await this.views.reload_lens(view_id)
+    else await this.mine.reload_lens(view_id)
+  }
+
+  // An applied edit can rename views, change rules, change the layout or roll the lens back.
   private async on_applied(proposal: Proposal): Promise<void> {
     this.view_infos = await this.brain.views()
-    if (proposal.lens_action === "rollback") await this.views.reload_lens(proposal.view_id)
-    else await this.views.after_edit(proposal.view_id)
+    if (proposal.lens_action === "rollback") {
+      await this.views.reload_lens(proposal.view_id)
+      await this.mine.reload_lens(proposal.view_id)
+    } else {
+      await this.views.after_edit(proposal.view_id)
+      await this.mine.after_edit(proposal.view_id)
+    }
     this.push_state()
   }
 
   private on_lens_ready(context: LensContext): void {
     if (this.views.owns(context)) this.views.on_ready(context)
+    else if (this.mine.owns(context)) this.mine.on_ready(context)
   }
 
   private on_lens_event(context: LensContext, message: LensToHost): void {
-    if (this.views.owns(context)) this.views.on_event(context, message).catch((error) => this.notify(String(error)))
+    const handled = this.views.owns(context) ? this.views.on_event(context, message) : this.mine.on_event(context, message)
+    handled.catch((error) => this.notify(String(error)))
   }
 
   private async run(command: ShellCommand): Promise<void> {
@@ -163,25 +237,29 @@ export class Shell implements ViewHost {
       case "select_tab":
         this.activate({ kind: "tab", tab_id: command.tab_id })
         return
-      case "close_tab":
+      case "close_tab": {
+        const tab = this.tabs.get(command.tab_id)
+        if (tab) this.set_mine_off(tab)
         this.tabs.close(command.tab_id)
         if (this.active.kind === "tab" && this.active.tab_id === command.tab_id) await this.open_view(this.view_infos[0]?.view_id ?? "feed")
         else this.push_state()
         return
+      }
       case "navigate": {
         const tab = this.active_tab()
-        if (tab) {
-          this.tabs.navigate(tab, command.url)
-          this.activate({ kind: "tab", tab_id: tab.tab_id })
-        } else {
-          this.open_tab(command.url)
-        }
+        if (tab) this.open_in_tab(tab.tab_id, command.url)
+        else this.open_tab(command.url)
         return
       }
       case "refresh": {
         const context = this.active.kind === "view" ? this.lenses.get(view_lens_key(this.active.view_id)) : undefined
         if (context) await this.views.refresh(context, true)
         else this.active_tab()?.view.webContents.reload()
+        return
+      }
+      case "toggle_mine": {
+        const tab = this.active_tab()
+        if (tab) await this.toggle_mine(tab)
         return
       }
       case "open_notice": {
@@ -214,7 +292,7 @@ export class Shell implements ViewHost {
       address: tab ? tab.view.webContents.getURL() : "",
       notices: this.notices,
       chat: this.chat.list(),
-      chat_view: this.view_infos.find((view) => view.view_id === this.last_view_id)?.title ?? this.last_view_id,
+      chat_view: this.view_infos.find((view) => view.view_id === this.chat_view_id)?.title ?? view_label(this.chat_view_id),
       thinking: this.chat.thinking,
     }
   }

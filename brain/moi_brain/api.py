@@ -9,11 +9,15 @@ from pydantic import BaseModel, Field
 from moi_brain.brain import Brain, PageSource, ViewPage
 from moi_brain.compile import BadInput, ViewInfo
 from moi_brain.edits import Proposal
-from moi_brain.items import Event, Item
+from moi_brain.extractors import ExtractorSpec
+from moi_brain.items import Event, Item, ViewItem
 from moi_brain.llm import LlmError, PrivacyBlocked
 from moi_brain.rank import PAGE_SIZE
 
 router = APIRouter()
+LensKind = Literal["feed", "article", "listing"]
+MAX_SKELETON = 250_000
+MAX_LENS_HTML = 400_000
 
 
 def get_brain(request: Request) -> Brain:
@@ -42,10 +46,37 @@ class IngestRequest(BaseModel):
     source_id: str
     records: list[dict[str, Any]]
     page_url: str | None = None
+    view_id: str | None = None
+    kind: LensKind = "listing"
 
 
 class IngestResponse(BaseModel):
     items: list[Item]
+    view_items: list[ViewItem] = Field(default_factory=list)
+    lens_stale: bool = False
+    layout_hash: str = ""
+
+
+class LensGenerateRequest(BaseModel):
+    view_id: str
+    kind: LensKind = "feed"
+    last_error: str | None = Field(default=None, max_length=2000)
+
+
+class LensAcceptRequest(BaseModel):
+    view_id: str
+    kind: LensKind = "feed"
+    html: str = Field(min_length=1, max_length=MAX_LENS_HTML)
+
+
+class ExtractorGenerateRequest(BaseModel):
+    url: str
+    skeleton: str = Field(min_length=1, max_length=MAX_SKELETON)
+    last_error: str | None = Field(default=None, max_length=2000)
+
+
+class SpecResponse(BaseModel):
+    spec: ExtractorSpec | None
 
 
 class ViewRequest(BaseModel):
@@ -84,7 +115,11 @@ def refresh(body: RefreshRequest, brain: BrainDep) -> RefreshResponse:
 
 @router.post("/ingest")
 def ingest(body: IngestRequest, brain: BrainDep) -> IngestResponse:
-    return IngestResponse(items=brain.ingest(body.source_id, body.records, body.page_url))
+    if body.view_id is None:
+        return IngestResponse(items=brain.ingest(body.source_id, body.records, body.page_url))
+    items, view_items = brain.ingest_page(body.view_id, body.source_id, body.records, body.page_url)
+    stale, layout_hash = brain.lens_state(body.view_id, body.kind)
+    return IngestResponse(items=items, view_items=view_items, lens_stale=stale, layout_hash=layout_hash)
 
 
 @router.post("/view/{view_id}")
@@ -115,8 +150,33 @@ def discard_edit(body: ProposalRequest, brain: BrainDep) -> dict[str, str]:
 
 
 @router.get("/lens/{view_id}", response_class=HTMLResponse)
-def lens(view_id: str, brain: BrainDep, kind: Literal["feed", "article", "listing"] = "feed") -> str:
+def lens(view_id: str, brain: BrainDep, kind: LensKind = "feed") -> str:
     return brain.lens_html(view_id, kind)
+
+
+@router.post("/lens/generate")
+def generate_lens(body: LensGenerateRequest, brain: BrainDep) -> dict[str, str]:
+    return {"html": brain.generate_lens(body.view_id, body.kind, body.last_error)}
+
+
+@router.post("/lens/accept")
+def accept_lens(body: LensAcceptRequest, brain: BrainDep) -> dict[str, int]:
+    return {"version": brain.accept_lens(body.view_id, body.kind, body.html)}
+
+
+@router.get("/extractor")
+def find_extractor(url: str, brain: BrainDep) -> SpecResponse:
+    return SpecResponse(spec=brain.extractors.for_url(url))
+
+
+@router.post("/extractor/generate")
+def generate_extractor(body: ExtractorGenerateRequest, brain: BrainDep) -> SpecResponse:
+    return SpecResponse(spec=brain.generate_extractor(body.url, body.skeleton, body.last_error))
+
+
+@router.post("/extractor/accept")
+def accept_extractor(spec: ExtractorSpec, brain: BrainDep) -> SpecResponse:
+    return SpecResponse(spec=brain.extractors.save(spec))
 
 
 @router.get("/debug")

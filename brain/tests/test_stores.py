@@ -17,7 +17,10 @@ def listing_spec(domain="news.example.com", pattern="/", version=1):
         ("https://news.ycombinator.com/", "/"),
         ("https://news.ycombinator.com", "/"),
         ("https://www.amazon.com/s?k=lamp", "/s*"),
-        ("https://shop.example.com/category/lamps/page/2", "/category*"),
+        ("https://shop.example.com/category/lamps/page/2", "/category/lamps*"),
+        ("https://www.amazon.com/dp/B0001XYZ", "/dp*"),
+        ("https://www.reddit.com/r/python/top/", "/r/python*"),
+        ("http://127.0.0.1:8899/pages/listing.html", "/pages/listing.html*"),
     ],
 )
 def test_path_pattern_for(url, pattern):

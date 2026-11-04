@@ -1,6 +1,6 @@
 // Launches the real app against the shared fake services, in a throwaway home and assets folder.
 import { spawn, type ChildProcess } from "node:child_process"
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -41,6 +41,15 @@ export class FakeWorld {
   stop(): void {
     this.child.kill()
   }
+
+  // Model calls the fake services received, newest last.
+  async model_calls(task: string): Promise<Array<{ path: string; payload: { messages: Array<{ content: string }> } }>> {
+    return (await fetch(`${this.base_url}/__requests?task=${task}`)).json()
+  }
+
+  page(name: string): string {
+    return `${this.base_url}/pages/${name}`
+  }
 }
 
 export function fixture_view(name: string, base_url: string): string {
@@ -51,6 +60,7 @@ export interface LaunchOptions {
   x_page?: string
   views?: Record<string, string>
   fast_slot?: { base_url: string; model: string }
+  files?: Record<string, string>
 }
 
 export class Harness {
@@ -78,6 +88,10 @@ export class Harness {
     mkdirSync(path.join(home, ".moi"), { recursive: true })
     const views = options.views ?? { feed: fixture_view("feed", world.base_url) }
     for (const [view_id, text] of Object.entries(views)) writeFileSync(path.join(home, "views", `${view_id}.md`), text)
+    for (const [relative, text] of Object.entries(options.files ?? {})) {
+      mkdirSync(path.dirname(path.join(home, relative)), { recursive: true })
+      writeFileSync(path.join(home, relative), text)
+    }
     const slot = { base_url: `${world.base_url}/llm/v1`, model: "fake" }
     writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot }))
     const brain_port = await free_port()
@@ -139,6 +153,22 @@ export class Harness {
 
   write(relative: string, content: string): void {
     writeFileSync(path.join(this.home, relative), content)
+  }
+
+  files_in(relative: string): string[] {
+    return readdirSync(path.join(this.home, relative)).sort()
+  }
+
+  // Opens a page in a new tab from the address bar and waits until its title shows in the tab.
+  async open_page(url: string, title: string): Promise<void> {
+    await this.chrome.locator(".address input").fill(url)
+    await this.chrome.locator(".address input").press("Enter")
+    await this.chrome.locator(".tab.web.active .tab_title").filter({ hasText: title }).waitFor()
+  }
+
+  // The newest lens view's text: a Mine page opens after the Feed lens.
+  async last_lens_text(): Promise<string> {
+    return (await this.in_lenses<string>("document.body.innerText")).at(-1) ?? ""
   }
 
   async close(): Promise<void> {

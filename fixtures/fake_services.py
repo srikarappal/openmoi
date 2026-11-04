@@ -7,6 +7,7 @@ Used in process by the brain's pytest suite and as a subprocess by the shell's E
 import argparse
 import json
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -102,9 +103,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         services = self.server.services
         parts = urlparse(self.path)
-        services.record("GET", self.path, dict(self.headers), None)
+        if not self.path.startswith("/__requests"):
+            services.record("GET", self.path, dict(self.headers), None)
         base = services.base_url
-        if parts.path == "/rss/etag.xml":
+        if parts.path == "/__requests":
+            task = parse_qs(parts.query).get("task", [None])[0]
+            self.reply(200, "application/json", json.dumps([{"path": call["path"], "payload": call["payload"]} for call in services.model_calls(task)]))
+        elif parts.path == "/rss/etag.xml":
             self.etag_feed(base)
         elif parts.path in ROUTES:
             content_type, render = ROUTES[parts.path]
@@ -138,6 +143,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, "text/plain", "not found")
             return
         task = self.headers.get("x-moi-task", "")
+        time.sleep(services.model_delay)
         content = services.next_model_reply(task, payload)
         if content is None:
             self.reply(500, "text/plain", "model unavailable")
@@ -167,6 +173,7 @@ class FakeServices:
         self.lock = threading.Lock()
         self.requests: list[dict[str, Any]] = []
         self.model_queue: dict[str, list[str | None]] = {}
+        self.model_delay = 0.0
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     @property
@@ -207,6 +214,7 @@ class FakeServices:
         with self.lock:
             self.requests.clear()
             self.model_queue.clear()
+            self.model_delay = 0.0
 
 
 def main() -> None:

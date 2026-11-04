@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from moi_brain.compile import BadInput
 from moi_brain.config import Paths
 from moi_brain.items import Item
+from moi_brain.lenses import SITE_PREFIX
 from moi_brain.llm import Gateway
 from moi_brain.md import replace_body, replace_section
 from moi_brain.memory import TOPIC_FILES
@@ -30,7 +31,7 @@ Files you may edit, all given to you with their current content:
 * memory/about_me.md, memory/likes.md, memory/dislikes.md, memory/people.md: lists of lines starting with "* ".
   For these use "section": null and give the complete new list.
 
-Keep every existing line unless the person asks to change or remove it, and add new lines in the same style.
+Keep every existing line unless the person asks to change or remove it. Add new lines in the same style.
 Rules for this one view go in the view's Rules section. Facts about the person go in about_me.md.
 Things they never want to see in any view go in dislikes.md; things they want more of everywhere go in likes.md.
 How the view looks goes in Layout.
@@ -122,7 +123,7 @@ class Editor:
             section = next((name for name in VIEW_SECTIONS if edit.section and name.lower() == edit.section.strip().lower()), None)
             if section is None:
                 return None
-            new = replace_section(old or f"# {view_id}\n", section, edit.text)
+            new = replace_section(old or f"# {view_id.removeprefix(SITE_PREFIX)}\n", section, edit.text)
         else:
             new = replace_body(old or f"# {file.removeprefix('memory/').removesuffix('.md')}\n", edit.text)
         if new == old:

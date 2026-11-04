@@ -13,6 +13,7 @@ export interface ViewHooks {
   notify(text: string, url?: string): void
   echo(text: string): void
   less_like_this(view_id: string, item: Item): void
+  lens_stale(view_id: string, layout_hash: string): void
 }
 
 export function view_lens_key(view_id: string): string {
@@ -63,6 +64,7 @@ export class ViewController {
     if (previous !== undefined && previous !== page.summary) this.hooks.echo(`I understood: ${page.summary}`)
     this.summaries.set(context.view_id, page.summary)
     this.report(page)
+    if (page.lens_stale) this.hooks.lens_stale(context.view_id, page.layout_hash)
   }
 
   // Each warning shows once per view, so a notice you dismissed stays dismissed.
@@ -90,7 +92,7 @@ export class ViewController {
     }
   }
 
-  // After an edit: re-render now, and once more if the brain was still retagging items for new rules.
+  // After an edit: re-render now, then once more if the brain was still retagging items for new rules.
   async after_edit(view_id: string): Promise<void> {
     const context = this.lenses.get(view_lens_key(view_id))
     if (!context) return
