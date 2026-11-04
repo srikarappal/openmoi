@@ -1,5 +1,6 @@
 """Integration for M2: rules from plain words, chat edits, less like this, tagging and the journal."""
 
+import json
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -90,12 +91,26 @@ def test_a_rule_on_a_new_topic_retags_recent_items(client, paths):
     assert "How solar panels got cheap" not in titles(page)
 
 
-def test_opening_an_item_writes_the_journal(client, paths):
+def test_opening_an_item_writes_the_journal_that_chat_edits_see(client, paths, services):
     page = refreshed_page(client)
     item = page["items"][0]["item"]
     client.post("/events", json={"events": [{"view_id": "feed", "item_id": item["item_id"], "event_kind": "open"}]})
     [journal] = list(paths.journal.glob("*.md"))
-    assert f"opened: {item['title']} ({item['url']})" in journal.read_text()
+    line = f"opened: {item['title']} ({item['url']})"
+    assert line in journal.read_text()
+    client.post("/edit", json={"view_id": "feed", "text": "more like what I opened today"})
+    request = json.loads(services.model_calls("edit")[-1]["payload"]["messages"][1]["content"])
+    assert request["recent_journal"][-1].endswith(line)
+
+
+def test_a_refresh_drops_expired_items_you_never_opened(client, brain):
+    stale = {"native_id": "old", "url": "https://x.com/z/status/9", "text": "Ancient post", "published_at": "2026-11-01T00:00:00Z"}
+    [item] = client.post("/ingest", json={"source_id": "x", "records": [stale]}).json()["items"]
+    forty_days_ago = (brain.clock() - timedelta(days=40)).isoformat()
+    with brain.store.lock, brain.store.connection:
+        brain.store.connection.execute("UPDATE items SET fetched_at = ? WHERE item_id = ?", (forty_days_ago, item["item_id"]))
+    refreshed_page(client)
+    assert brain.store.get_item(item["item_id"]) is None
 
 
 def test_stale_unknown_and_discarded_proposals_are_refused(client, paths):

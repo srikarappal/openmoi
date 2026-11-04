@@ -36,12 +36,6 @@ class Memory:
                 lines += [line for line in path.read_text().splitlines() if line.startswith("* ")]
         return lines[-MAX_JOURNAL_LINES:]
 
-    def context(self, now: datetime) -> str:
-        """Everything openMoi knows about you as one block of prompt text."""
-        parts = [f"## {name}\n{self.topic_text(name) or '(empty)'}" for name in TOPIC_FILES]
-        journal = "\n".join(self.journal_lines(now)) or "(empty)"
-        return "\n\n".join([*parts, f"## journal, recent\n{journal}"])
-
     def append_journal(self, now: datetime, line: str) -> None:
         path = self.paths.journal / journal_name(now)
         if not path.exists():

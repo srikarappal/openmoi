@@ -54,12 +54,13 @@ def test_change_for_refuses_other_files_sections_and_no_op_edits(editor, edit):
 
 
 def test_propose_sends_files_and_item_then_apply_writes(editor, services):
-    proposal = editor.propose("feed", "hide politics and maya first", None)
+    proposal = editor.propose("feed", "hide politics and maya first", None, ["* 09:30 opened: Sourdough tips (https://a.com/1)"])
     assert [change.file for change in proposal.changes] == ["views/feed.md"]
     assert proposal.reply == "Updated 1 file."
     request = json.loads(services.model_calls("edit")[0]["payload"]["messages"][1]["content"])
     assert request["files"]["views/feed.md"] == VIEW
     assert request["item"] is None
+    assert request["recent_journal"] == ["* 09:30 opened: Sourdough tips (https://a.com/1)"]
     assert (editor.paths.views / "feed.md").read_text() == VIEW
     applied = editor.apply(proposal.proposal_id)
     written = (editor.paths.views / "feed.md").read_text()
@@ -70,18 +71,18 @@ def test_propose_sends_files_and_item_then_apply_writes(editor, services):
 def test_apply_refuses_unknown_reused_and_stale_proposals(editor):
     with pytest.raises(BadInput, match="gone"):
         editor.apply("nope")
-    first = editor.propose("feed", "no shorts and hide politics", None)
+    first = editor.propose("feed", "no shorts and hide politics", None, [])
     editor.apply(first.proposal_id)
     with pytest.raises(BadInput, match="gone"):
         editor.apply(first.proposal_id)
-    stale = editor.propose("feed", "maya first", None)
+    stale = editor.propose("feed", "maya first", None, [])
     (editor.paths.views / "feed.md").write_text(VIEW + "\n")
     with pytest.raises(BadInput, match="changed since"):
         editor.apply(stale.proposal_id)
 
 
 def test_discard_and_rollback_without_edits(editor):
-    proposal = editor.propose("feed", "bring back the previous look", None)
+    proposal = editor.propose("feed", "bring back the previous look", None, [])
     assert proposal.changes == []
     assert proposal.lens_action == "rollback"
     editor.discard(proposal.proposal_id)
@@ -91,5 +92,5 @@ def test_discard_and_rollback_without_edits(editor):
 
 def test_proposals_are_bounded(editor, monkeypatch):
     monkeypatch.setattr("moi_brain.edits.MAX_PROPOSALS", 3)
-    ids = [editor.propose("feed", "vegetarian", None).proposal_id for _ in range(5)]
+    ids = [editor.propose("feed", "vegetarian", None, []).proposal_id for _ in range(5)]
     assert list(editor.proposals) == ids[-3:]

@@ -16,17 +16,15 @@ def test_seeded_files_read_as_empty_because_hints_are_comments(tmp_path):
     memory = make_memory(tmp_path)
     assert memory.likes() == ""
     assert memory.dislikes() == ""
-    assert "## about_me.md\n(empty)" in memory.context(NOW)
-    assert memory.context(NOW).endswith("## journal, recent\n(empty)")
+    assert memory.topic_text("about_me.md") == ""
+    assert memory.journal_lines(NOW) == []
 
 
-def test_context_holds_every_topic_file(tmp_path):
+def test_topic_text_reads_the_body_of_any_memory_file(tmp_path):
     memory = make_memory(tmp_path)
-    (memory.paths.memory / "about_me.md").write_text("# about me\n\n* Vegetarian.\n")
     (memory.paths.memory / "people.md").write_text("# people\n\n* Maya: x @maya\n")
-    context = memory.context(NOW)
-    assert "## about_me.md\n* Vegetarian." in context
-    assert "## people.md\n* Maya: x @maya" in context
+    assert memory.topic_text("people.md") == "* Maya: x @maya"
+    assert memory.topic_text("missing.md") == ""
 
 
 def test_journal_appends_one_file_per_day(tmp_path):

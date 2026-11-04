@@ -25,6 +25,7 @@ SYSTEM_PROMPT = """You edit the plain text files that configure openMoi, a perso
 Reply with one JSON object:
 {"edits": [{"file": "<path>", "section": "<heading or null>", "text": "<complete new text>"}], "lens_action": null, "reply": "<one short sentence>"}
 
+recent_journal lists what the person opened lately; use it when the request refers to it.
 Files you may edit, all given to you with their current content:
 * views/<view>.md: sections "Sources", "Rules" and "Layout". For these give "section" and the complete new text of that section.
   Rules are plain words, one per line, each line starting with "* ". Layout describes the look in plain words.
@@ -98,9 +99,10 @@ class Editor:
         paths |= {f"memory/{name}": self.paths.memory / name for name in TOPIC_FILES}
         return {file: path.read_text() if path.exists() else "" for file, path in paths.items()}
 
-    def propose(self, view_id: str, request: str, item: Item | None) -> Proposal:
+    def propose(self, view_id: str, request: str, item: Item | None, journal: list[str]) -> Proposal:
+        """The model sees the request, the item reacted to, recent journal lines and every file it may edit."""
         files = self.files(view_id)
-        payload = {"request": request, "view": view_id, "item": item_context(item), "files": files}
+        payload = {"request": request, "view": view_id, "item": item_context(item), "recent_journal": journal, "files": files}
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": json.dumps(payload)}]
         reply = self.gateway.complete_json("fast", "edit", messages, True, EditReply)
         changes = [change for edit in reply.edits if (change := self.change_for(view_id, edit, files))]

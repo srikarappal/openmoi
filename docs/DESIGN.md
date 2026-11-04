@@ -679,7 +679,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 
 | Check | Result |
 |---|---|
-| Tests | 183 brain (unit and API integration), 113 shell unit, 15 end to end in the real app, all against the shared fake services |
+| Tests | 184 brain (unit and API integration), 113 shell unit, 15 end to end in the real app, all against the shared fake services |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
 | Real feeds | Live Ars Technica and The Verge RSS plus two YouTube handles: 60 items in 1.6 s |

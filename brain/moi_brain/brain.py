@@ -99,7 +99,9 @@ class Brain:
         return self.page_sources(compiled)
 
     def refresh_feeds(self, view_id: str, compiled: CompiledView, force: bool) -> None:
+        """Drops expired items, then reads every feed source not read in the last few minutes."""
         try:
+            self.store.expire(self.clock())
             for source_id, reader in self.feed_readers(compiled):
                 last = self.fetched_at.get(source_id)
                 if not force and last and self.clock() - last < FEED_INTERVAL:
@@ -220,7 +222,7 @@ class Brain:
 
     def propose_edit(self, view_id: str, request: str, item_id: str | None) -> Proposal:
         item = self.store.get_item(item_id) if item_id else None
-        return self.editor.propose(check_view_id(view_id), request, item)
+        return self.editor.propose(check_view_id(view_id), request, item, self.memory.journal_lines(self.clock()))
 
     def apply_edit(self, proposal_id: str) -> Proposal:
         """Write the proposal, recompile its view now so problems show at once, roll the lens back if asked."""
