@@ -9,6 +9,7 @@ new topic, recent items go back through the worker.
 import json
 import sys
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -27,6 +28,7 @@ BATCH_SIZE = 10
 RETAG_WINDOW = timedelta(days=3)
 MAX_RETAG = 200
 MAX_TAG_TEXT = 200
+RETRY_SECONDS = 60.0
 SYSTEM_PROMPT = """You tag feed items with topics for openMoi, a personal feed reader.
 Reply with one JSON object: {"tags": [{"item_id": "...", "topics": ["..."]}]}.
 Use only topics from the list you are given. An item can have several topics or none.
@@ -77,6 +79,7 @@ class Tagger:
         self.state_file = state_file
         self.topics = topics
         self.status = "ok"
+        self.failed_at = 0.0
         self.condition = threading.Condition()
         self.pending: deque[str] = deque()
         self.working = False
@@ -130,6 +133,7 @@ class Tagger:
             reply = self.gateway.complete_json("fast", "tag", tag_prompt(batch, topics), True, TagReply)
         except LlmError as error:
             self.status = f"Topic tagging paused: {error}"
+            self.failed_at = time.monotonic()
             return None
         self.status = "ok"
         allowed = set(topics)
@@ -141,10 +145,21 @@ class Tagger:
         }
 
     def ensure_current(self, topics: list[str], now: datetime) -> None:
-        """When rules watch topics recent items were not tagged for, send those items back through the worker."""
+        """Recent items go back through the worker when rules watch new topics, or when an outage left them untagged."""
         with self.condition:
-            if set(topics) <= set(self.tagged_topics):
-                return
-            self.tagged_topics = topics
-        self.state_file.write_text(json.dumps(topics))
-        self.enqueue(self.store.recent_items(now - RETAG_WINDOW)[:MAX_RETAG])
+            new_topics = not set(topics) <= set(self.tagged_topics)
+            if new_topics:
+                self.tagged_topics = topics
+        if new_topics:
+            self.state_file.write_text(json.dumps(topics))
+            self.enqueue(self.store.recent_items(now - RETAG_WINDOW)[:MAX_RETAG])
+        else:
+            self.catch_up(now)
+
+    def catch_up(self, now: datetime) -> None:
+        """Untagged items are retried at once while tagging works, and once a minute while it is paused."""
+        if self.busy or (not self.healthy and time.monotonic() - self.failed_at < RETRY_SECONDS):
+            return
+        untagged = [item for item in self.store.recent_items(now - RETAG_WINDOW) if not item.tagged]
+        if untagged:
+            self.enqueue(untagged[:MAX_RETAG])

@@ -80,6 +80,9 @@ class Gateway:
             response.raise_for_status()
             body = response.json()
             content = body["choices"][0]["message"]["content"]
+        except httpx.ConnectError as error:
+            self.log(task, slot_name, slot, {}, contains_user_content, str(error))
+            raise LlmError(f"nothing is listening at {slot.base_url} for the {slot_name} slot; is the model server (Ollama) running?") from error
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
             self.log(task, slot_name, slot, {}, contains_user_content, str(error))
             raise LlmError(f"{task} failed on the {slot_name} slot: {error}") from error

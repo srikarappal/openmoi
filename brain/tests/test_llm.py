@@ -103,7 +103,7 @@ def test_model_failures_raise_and_are_logged(tmp_path, reply):
 def test_unreachable_model_raises_llm_error(tmp_path):
     slot = Slot(base_url="http://127.0.0.1:9/v1", model="none")
     gateway = Gateway(Settings(fast=slot, smart=slot), tmp_path / "calls.jsonl", httpx.Client(timeout=1))
-    with pytest.raises(LlmError, match="fast slot"):
+    with pytest.raises(LlmError, match="nothing is listening at http://127.0.0.1:9/v1 for the fast slot"):
         gateway.complete("fast", "tag", [], True)
 
 

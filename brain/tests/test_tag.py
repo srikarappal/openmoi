@@ -124,7 +124,7 @@ def test_new_topics_send_recent_items_back_through_the_worker_once(tagger, tmp_p
     recent, old = make_item("1", "Sourdough starter tips"), make_item("2", "Sourdough history", hours_old=24 * 5)
     tagger.store.upsert_items([recent, old])
     tagger.ensure_current(list(BASE_TOPICS), NOW)
-    assert not tagger.busy
+    wait_idle(tagger)
     tagger.ensure_current(TOPICS, NOW)
     wait_idle(tagger)
     assert tagger.store.get_item(recent.item_id).topics == ["sourdough"]
@@ -144,3 +144,33 @@ def test_hosted_fast_slot_without_the_switch_pauses_tagging(tmp_path):
         tagger = Tagger(Store(tmp_path / "db.sqlite"), gateway, tmp_path / "t.json", TopicList(["politics"]))
         assert tagger.tag([make_item("1", "Election")], ["politics"])[0].topics == []
     assert "allow_content_to_hosted" in tagger.status
+
+
+def test_items_left_untagged_by_an_outage_are_retried_once_the_model_is_back(tagger, services, monkeypatch):
+    tagger.tagged_topics = list(TOPICS)
+    item = make_item("1", "Election night")
+    tagger.store.upsert_items([item])
+    services.queue_model_reply("tag", None)
+    tagger.enqueue([item])
+    wait_idle(tagger)
+    assert not tagger.healthy
+    tagger.ensure_current(TOPICS, NOW)
+    wait_idle(tagger)
+    assert tagger.store.get_item(item.item_id).tagged is False
+    monkeypatch.setattr("moi_brain.tag.RETRY_SECONDS", 0.0)
+    tagger.ensure_current(TOPICS, NOW)
+    wait_idle(tagger)
+    assert tagger.store.get_item(item.item_id).topics == ["politics"]
+    assert tagger.healthy
+
+
+def test_catch_up_leaves_tagged_items_alone(tagger, services):
+    tagger.tagged_topics = list(TOPICS)
+    item = make_item("1", "Election night")
+    tagger.store.upsert_items([item])
+    tagger.enqueue([item])
+    wait_idle(tagger)
+    calls = len(services.model_calls("tag"))
+    tagger.ensure_current(TOPICS, NOW)
+    wait_idle(tagger)
+    assert len(services.model_calls("tag")) == calls
