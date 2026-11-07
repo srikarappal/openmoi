@@ -1,0 +1,202 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>openMoi HLD</title>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Patrick+Hand&display=block" rel="stylesheet">
+<style>
+  body { margin: 0; background: #fbfaf4; }
+  svg { display: block; }
+  .title { font: 700 44px Caveat, cursive; fill: #23356e; }
+  .subtitle { font: 22px "Patrick Hand", cursive; fill: #4a4a4a; }
+  .head { font: 700 32px Caveat, cursive; fill: #23356e; }
+  .head_later { font: 700 30px Caveat, cursive; fill: #6e79a8; }
+  .chip_head { font: 700 26px Caveat, cursive; fill: #23356e; }
+  .body { font: 21px "Patrick Hand", cursive; fill: #2f3b5c; }
+  .body_later { font: 21px "Patrick Hand", cursive; fill: #6e79a8; }
+  .was { font: 22px "Patrick Hand", cursive; fill: #b0413e; }
+  .note { font: 19px "Patrick Hand", cursive; fill: #b0413e; }
+  .label { font: 19px "Patrick Hand", cursive; fill: #23356e; }
+  .big { font: 700 36px Caveat, cursive; fill: #23356e; }
+  .box { fill: rgba(255, 255, 255, 0.55); stroke: #23356e; stroke-width: 2.6; }
+  .chip { fill: rgba(255, 255, 255, 0.8); stroke: #23356e; stroke-width: 1.8; }
+  .later { fill: rgba(255, 255, 255, 0.4); stroke: #7c87b5; stroke-width: 2.2; stroke-dasharray: 11 8; }
+  .wire { stroke: #23356e; stroke-width: 2.4; fill: none; }
+  .wire_later { stroke: #7c87b5; stroke-width: 2.2; fill: none; stroke-dasharray: 9 7; }
+</style>
+</head>
+<body>
+<svg id="hld" xmlns="http://www.w3.org/2000/svg" width="1400" height="1960" viewBox="0 0 1400 1960">
+  <defs>
+    <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#23356e"/>
+    </marker>
+    <marker id="tip_later" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7c87b5"/>
+    </marker>
+    <pattern id="ruled" width="1400" height="42" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="41" x2="1400" y2="41" stroke="#d3e2f0" stroke-width="1.4"/>
+    </pattern>
+  </defs>
+
+  <!-- notebook paper, like the original sketch -->
+  <rect width="1400" height="1960" fill="#fbfaf4"/>
+  <rect width="1400" height="1960" fill="url(#ruled)"/>
+  <line x1="112" y1="0" x2="112" y2="1960" stroke="#e8a6a6" stroke-width="2"/>
+
+  <text class="title" x="140" y="62">openMoi: your reality, redrawn from your sketch</text>
+  <text class="subtitle" x="142" y="98">solid: built in the MVP · dashed: later · red: what it was in your sketch · arrows: items flow up, your words flow in</text>
+
+  <!-- USER -->
+  <circle cx="760" cy="128" r="13" class="wire"/>
+  <path class="wire" d="M760 141 L760 170 M740 152 L780 152 M760 170 L746 192 M760 170 L774 192"/>
+  <text class="big" x="796" y="168">USER</text>
+  <line class="wire" x1="760" y1="200" x2="760" y2="246" marker-start="url(#tip)" marker-end="url(#tip)"/>
+
+  <!-- YOUR REALITY -->
+  <rect class="box" x="230" y="250" width="1050" height="176" rx="14"/>
+  <text class="head" x="252" y="288">YOUR REALITY</text>
+  <text class="was" x="440" y="288">was: YOUR APPS + YOUR WEBSITES</text>
+  <rect class="chip" x="252" y="304" width="320" height="104" rx="10"/>
+  <text class="chip_head" x="270" y="338">Feed</text>
+  <text class="body" x="270" y="366">X + YouTube + news</text>
+  <text class="body" x="270" y="392">one ranked stream, finite</text>
+  <rect class="chip" x="592" y="304" width="320" height="104" rx="10"/>
+  <text class="chip_head" x="610" y="338">Your views</text>
+  <text class="body" x="610" y="366">one views/*.md file each</text>
+  <text class="body" x="610" y="392">write a file, get a tab</text>
+  <rect class="chip" x="932" y="304" width="328" height="104" rx="10"/>
+  <text class="chip_head" x="950" y="338">Mine</text>
+  <text class="body" x="950" y="366">your version of any page</text>
+  <text class="body" x="950" y="392">in openMoi or from Chrome</text>
+
+  <!-- LENS ENGINE -->
+  <line class="wire" x1="760" y1="474" x2="760" y2="430" marker-end="url(#tip)"/>
+  <text class="label" x="772" y="458">render</text>
+  <rect class="box" x="380" y="476" width="900" height="84" rx="14"/>
+  <text class="head" x="402" y="512">LENS ENGINE</text>
+  <text class="was" x="612" y="512">new</text>
+  <text class="body" x="402" y="544">UI written by AI from your Layout words · sandboxed · smoke tested · versioned · rollback</text>
+
+  <!-- SETTINGS cloud -->
+  <path class="wire" fill="rgba(255,255,255,0.7)" d="M150 690 C112 690 112 640 150 636 C146 598 206 592 222 618 C238 590 300 596 300 630 C340 626 352 676 318 690 C330 726 268 742 246 718 C224 746 160 742 170 712 C132 720 120 696 150 690 Z"/>
+  <text class="head" x="166" y="652">SETTINGS</text>
+  <text class="body" x="152" y="680">your .md files, or</text>
+  <text class="body" x="152" y="704">tell the chat</text>
+  <text class="was" x="124" y="770">was: SETTINGS</text>
+  <text class="note" x="124" y="796">now plain text you own;</text>
+  <text class="note" x="124" y="818">chat proposes a diff,</text>
+  <text class="note" x="124" y="840">you confirm it</text>
+  <path class="wire" d="M300 622 C330 600 350 560 380 540" marker-end="url(#tip)"/>
+  <path class="wire" d="M332 690 C350 690 362 690 378 690" marker-end="url(#tip)"/>
+
+  <!-- BRAIN -->
+  <line class="wire" x1="760" y1="608" x2="760" y2="564" marker-end="url(#tip)"/>
+  <text class="label" x="772" y="592">ranked items + reasons</text>
+  <rect class="box" x="380" y="610" width="900" height="262" rx="14"/>
+  <text class="head" x="402" y="648">AI OS (the brain)</text>
+  <text class="was" x="640" y="648">was: AI OS + MEMORY + OTHER AGENTS</text>
+  <rect class="chip" x="402" y="666" width="270" height="78" rx="10"/>
+  <text class="chip_head" x="418" y="698">rules</text>
+  <text class="body" x="418" y="726">plain words to JSON</text>
+  <rect class="chip" x="692" y="666" width="270" height="78" rx="10"/>
+  <text class="chip_head" x="708" y="698">topic tagging</text>
+  <text class="body" x="708" y="726">background worker</text>
+  <rect class="chip" x="982" y="666" width="276" height="78" rx="10"/>
+  <text class="chip_head" x="998" y="698">ranking</text>
+  <text class="body" x="998" y="726">reasons, seen, caught up</text>
+  <rect class="chip" x="402" y="760" width="270" height="94" rx="10"/>
+  <text class="chip_head" x="418" y="792">MEMORY</text>
+  <text class="body" x="418" y="818">memory/*.md files</text>
+  <text class="body" x="418" y="842">+ daily journal</text>
+  <rect class="chip" x="692" y="760" width="270" height="94" rx="10"/>
+  <text class="chip_head" x="708" y="792">LLM gateway</text>
+  <text class="body" x="708" y="818">local + hosted models</text>
+  <text class="body" x="708" y="842">writes lenses, extractors</text>
+  <rect class="later" x="982" y="760" width="276" height="94" rx="10"/>
+  <text class="head_later" x="998" y="792">OTHER AGENTS</text>
+  <text class="body_later" x="998" y="818">later: digest, shop,</text>
+  <text class="body_later" x="998" y="842">research, watchers</text>
+
+  <!-- left loop: AI OS straight to disk, like the sketch -->
+  <path class="wire" d="M380 862 L196 862 L196 1560 L226 1560" marker-end="url(#tip)"/>
+  <text class="label" transform="translate(184 1250) rotate(-90)">your files + SQLite</text>
+
+  <!-- RELAY row -->
+  <line class="wire" x1="530" y1="930" x2="530" y2="876" marker-start="url(#tip)" marker-end="url(#tip)"/>
+  <text class="label" x="544" y="910">WebSocket on 127.0.0.1 · only the extension you allowed</text>
+  <rect class="box" x="230" y="934" width="600" height="176" rx="14"/>
+  <text class="head" x="252" y="970">YOUR CHROME (unchanged)</text>
+  <text class="was" x="612" y="970">new: the relay</text>
+  <text class="body" x="252" y="1002">your tabs, your sign ins; openMoi extension:</text>
+  <text class="body" x="272" y="1030">· reads pages in quiet background tabs</text>
+  <text class="body" x="272" y="1056">· reads X while you scroll it yourself</text>
+  <text class="body" x="272" y="1082">· "Mine this page" button</text>
+  <rect class="later" x="852" y="934" width="200" height="176" rx="14"/>
+  <text class="head_later" x="870" y="970">fallback</text>
+  <text class="body_later" x="870" y="1002">openMoi's own</text>
+  <text class="body_later" x="870" y="1028">session, only when</text>
+  <text class="body_later" x="870" y="1054">Chrome is not</text>
+  <text class="body_later" x="870" y="1080">connected</text>
+  <line class="wire_later" x1="1166" y1="876" x2="1166" y2="930" marker-end="url(#tip_later)"/>
+  <rect class="later" x="1072" y="934" width="208" height="176" rx="14"/>
+  <text class="head_later" x="1088" y="970">POLICY GATE</text>
+  <text class="body_later" x="1088" y="1002">later: likes,</text>
+  <text class="body_later" x="1088" y="1028">replies, carts;</text>
+  <text class="body_later" x="1088" y="1054">money ends on</text>
+  <text class="body_later" x="1088" y="1080">the real site</text>
+
+  <!-- WEBSITES + APPS -->
+  <line class="wire" x1="530" y1="1164" x2="530" y2="1114" marker-start="url(#tip)" marker-end="url(#tip)"/>
+  <text class="label" x="544" y="1146">reads, in your sessions</text>
+  <line class="wire_later" x1="1166" y1="1114" x2="1166" y2="1164" marker-end="url(#tip_later)"/>
+  <rect class="box" x="230" y="1168" width="600" height="148" rx="14"/>
+  <text class="head" x="252" y="1204">WEBSITES</text>
+  <text class="was" x="400" y="1204">was: WEBSITES</text>
+  <text class="body" x="252" y="1236">X · YouTube · news RSS · any site through Mine</text>
+  <text class="body" x="252" y="1262">RSS + YouTube feeds: read by the brain directly</text>
+  <text class="body_later" x="252" y="1288">later in the Feed: Facebook, Amazon</text>
+  <rect class="later" x="852" y="1168" width="428" height="148" rx="14"/>
+  <text class="head_later" x="870" y="1204">NATIVE APPS</text>
+  <text class="was" x="1062" y="1204">was: APPS → ?</text>
+  <text class="body_later" x="870" y="1236">later: Mail · Calendar · Notes · any app</text>
+  <text class="body_later" x="870" y="1262">system APIs, Apple Events,</text>
+  <text class="body_later" x="870" y="1288">accessibility tree, screen</text>
+
+  <!-- SYSTEM OS -->
+  <line class="wire" x1="530" y1="1368" x2="530" y2="1320" marker-start="url(#tip)" marker-end="url(#tip)"/>
+  <line class="wire_later" x1="1066" y1="1368" x2="1066" y2="1320" marker-start="url(#tip_later)" marker-end="url(#tip_later)"/>
+  <rect class="box" x="230" y="1372" width="1050" height="86" rx="14"/>
+  <text class="head" x="252" y="1408">SYSTEM OS (macOS)</text>
+  <text class="was" x="530" y="1408">was: SYSTEM OS</text>
+  <text class="body" x="252" y="1440">Chrome sessions · keychain</text>
+  <text class="body_later" x="520" y="1440">later: accessibility · screen capture · Spotlight</text>
+
+  <!-- DISK / FS -->
+  <line class="wire" x1="760" y1="1506" x2="760" y2="1462" marker-start="url(#tip)" marker-end="url(#tip)"/>
+  <rect class="box" x="230" y="1510" width="1050" height="118" rx="14"/>
+  <line class="wire" x1="720" y1="1510" x2="720" y2="1628"/>
+  <text class="head" x="252" y="1546">DISK</text>
+  <text class="was" x="330" y="1546">was: DISK</text>
+  <text class="body" x="252" y="1578">~/openMoi: memory/*.md · views/*.md</text>
+  <text class="body" x="252" y="1604">yours, plain text, editable</text>
+  <text class="head" x="742" y="1546">FS (.moi)</text>
+  <text class="was" x="866" y="1546">was: FS</text>
+  <text class="body" x="742" y="1578">SQLite: items + events</text>
+  <text class="body" x="742" y="1604">lenses · extractors · logs</text>
+
+  <!-- the bottom of the sketch, answered -->
+  <text class="body" x="150" y="1700">• Facebook (later)</text>
+  <text class="body" x="150" y="1738">• News</text>
+  <text class="body" x="150" y="1776">• Amazon (via Mine)</text>
+  <text class="body" x="150" y="1814">• YouTube</text>
+  <text class="body" x="150" y="1852">• X.com</text>
+  <path class="wire" d="M378 1678 C402 1678 396 1722 404 1762 C410 1776 420 1776 428 1776 C420 1776 410 1778 404 1792 C396 1830 402 1870 378 1870"/>
+  <text class="big" x="452" y="1742">Your own versions of any website using AI OS (realtime)</text>
+  <text class="body" x="456" y="1782">= the Feed + Mine, read through your own Chrome</text>
+  <text class="body" x="456" y="1812">realtime: fresh items on every open; the lens is cached, so it shows at once</text>
+  <text class="body" x="150" y="1912">• Apps  →  ?</text>
+  <text class="body_later" x="330" y="1912">answered: native apps through the app ladder (later, L8)</text>
+</svg>
+</body>
+</html>

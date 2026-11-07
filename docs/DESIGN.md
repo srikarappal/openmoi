@@ -93,6 +93,10 @@ The MVP (Part 1) proves this with a Feed across X, YouTube and news, views and m
 
 ## 4. Target design (full HLD)
 
+![openMoi HLD, redrawn from the original sketch](hld.png)
+
+The picture above is the original sketch redrawn: red notes say what each box was, solid boxes are built and dashed ones come later. Its source is `docs/hld.html`.
+
 This is where the design ends up. The table below the diagram says what the MVP builds.
 
 Items flow up from sources to views. Actions (later) flow down from views through the gate to sources.
