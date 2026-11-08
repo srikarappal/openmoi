@@ -27,6 +27,15 @@ class LensStore:
     def __init__(self, default_path: Path, lenses_dir: Path):
         self.default_path = default_path
         self.lenses_dir = lenses_dir
+        self.move_old_folders()
+
+    def move_old_folders(self) -> None:
+        """Mine lenses used to live in site_<domain>_<kind>; they move to the folder lens_key names now."""
+        for kind in LENS_KINDS[1:]:
+            for folder in self.lenses_dir.glob(f"{SITE_PREFIX}*_{kind}"):
+                target = self.lenses_dir / lens_key(folder.name.removesuffix(f"_{kind}"), kind)
+                if folder.is_dir() and not target.exists():
+                    folder.rename(target)
 
     def pointer(self, key: str) -> LensPointer:
         try:

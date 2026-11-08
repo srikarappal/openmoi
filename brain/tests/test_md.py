@@ -64,3 +64,10 @@ def test_replace_body_keeps_the_title():
 def test_body_text_skips_title_and_comments():
     assert body_text("# likes\n<!-- hint -->\n* sourdough\n") == "* sourdough"
     assert body_text("") == ""
+
+
+def test_headings_that_differ_only_in_case_read_and_edit_the_same_copy():
+    text = "# Feed\n\n## Rules\n* first\n\n## rules\n* second\n"
+    edited = replace_section(text, "Rules", "* fresh")
+    assert section_text(parse_sections(edited)[1], "rules") == "* fresh"
+

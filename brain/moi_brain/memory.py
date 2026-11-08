@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 
 from moi_brain.config import Paths
+from moi_brain.files import read_text
 from moi_brain.md import body_text
 
 TOPIC_FILES = ("about_me.md", "likes.md", "dislikes.md", "people.md")
@@ -20,7 +21,7 @@ class Memory:
 
     def topic_text(self, name: str) -> str:
         path = self.paths.memory / name
-        return body_text(path.read_text()) if path.exists() else ""
+        return body_text(read_text(path))
 
     def likes(self) -> str:
         return self.topic_text("likes.md")
@@ -34,7 +35,7 @@ class Memory:
         for days_back in range(JOURNAL_DAYS - 1, -1, -1):
             path = self.paths.journal / journal_name(now - timedelta(days=days_back))
             if path.exists():
-                lines += [line for line in path.read_text().splitlines() if line.startswith("* ")]
+                lines += [line for line in read_text(path).splitlines() if line.startswith("* ")]
         return lines[-MAX_JOURNAL_LINES:]
 
     def append_journal(self, now: datetime, line: str) -> None:

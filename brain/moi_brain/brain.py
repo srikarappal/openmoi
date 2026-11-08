@@ -109,19 +109,9 @@ def url_prefix(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
 
 
-def one_per_url(entries: list[tuple[Item, datetime | None]], seen_before: datetime) -> tuple[list[Item], set[str]]:
-    """One item per URL for a view (the first source that brought it), plus the ids you saw before seen_before.
-
-    Those still count toward daily limits but are not shown again."""
-    by_url: dict[str, tuple[Item, datetime | None]] = {}
-    for item, seen_at in sorted(entries, key=fetched_first):
-        by_url.setdefault(item.url, (item, seen_at))
-    kept = list(by_url.values())
-    return [item for item, _ in kept], {item.item_id for item, seen_at in kept if seen_at and seen_at < seen_before}
-
-
-def fetched_first(entry: tuple[Item, datetime | None]) -> tuple[datetime, str]:
-    return entry[0].fetched_at, entry[0].item_id
+def seen_long_ago(entries: list[tuple[Item, datetime | None]], seen_before: datetime) -> set[str]:
+    """Ids of items you saw before seen_before: they still count toward daily limits but are not shown again."""
+    return {item.item_id for item, seen_at in entries if seen_at and seen_at < seen_before}
 
 
 class Brain:
@@ -211,7 +201,7 @@ class Brain:
 
     def passive_sources(self) -> list[PageSource]:
         """Page sources of every view, which the extension reads whenever you browse them yourself."""
-        found = {source.source_id: source for compiled in self.compiler.all_compiled() for source in self.page_sources(compiled)}
+        found = {source.source_id: source for compiled in self.compiler.all_compiled(use_model=False) for source in self.page_sources(compiled)}
         return list(found.values())
 
     def relay_config(self) -> dict[str, Any]:
@@ -219,7 +209,11 @@ class Brain:
         return {"passive": passive}
 
     def queue_relay_event(self, message: dict[str, Any]) -> None:
-        """A flood of passive batches drops the newest rather than growing without end."""
+        """A flood of passive batches drops the newest rather than growing without end; a Mine press, which is cheap
+        and which you are waiting for, goes straight through."""
+        if message.get("event") == "mine":
+            self.on_relay_event(message)
+            return
         try:
             self.relay_inbox.put_nowait(message)
         except queue.Full:
@@ -269,7 +263,7 @@ class Brain:
         fresh = [item for item in items if item.item_id not in known]
         if tag_now:
             fresh = self.tagger.tag(fresh, self.watch_list())
-        stored = {item.item_id: item for item in self.store.upsert_items([*known.values(), *fresh])}
+        stored = {item.item_id: item for item in self.store.upsert_items([*known.values(), *fresh], listed_at=now)}
         if not tag_now:
             self.tagger.enqueue(list(stored.values()))
         same_url = self.store.items_by_url(source_id, [item.url for item in fresh if item.item_id not in stored])
@@ -315,14 +309,16 @@ class Brain:
         compiled = self.compiler.compiled(view_id)
         self.tagger.ensure_current(self.watch_list(), self.clock())
         now = self.clock()
-        items, long_seen = one_per_url(self.store.items_with_seen(compiled.source_ids(), now - VIEW_WINDOW), now - SEEN_KEEP)
+        entries = self.store.items_with_seen(compiled.source_ids(), now - VIEW_WINDOW)
+        items, long_seen = [item for item, _ in entries], seen_long_ago(entries, now - SEEN_KEEP)
         if rule_topics(compiled.rules) and self.tagger.healthy:
             items = [item for item in items if item.tagged]
         ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order)
         with self.lock:
             refreshing = view_id in self.refreshing or self.tagger.busy
         source_ids = set(compiled.source_ids())
-        problems = [f"{source_id}: {status}" for source_id, status in self.status_by_source().items() if source_id in source_ids and status != "ok"]
+        current = {(source_id, location) for source_id, location, _ in self.feed_readers(compiled)} | {(source_id, source_id) for source_id in source_ids}
+        problems = [f"{source_id}: {status}" for source_id, status in self.status_by_source(current).items() if status != "ok"]
         if not self.tagger.healthy:
             problems.append(self.tagger.status)
         return ViewPage(
@@ -399,12 +395,15 @@ class Brain:
     def lens_html(self, view_id: str, kind: str) -> str:
         return self.lenses.html(lens_key(check_view_id(view_id), kind))
 
-    def status_by_source(self) -> dict[str, str]:
-        """One status per source id; when several feeds share it, a problem with any of them wins over ok."""
+    def status_by_source(self, current: set[tuple[str, str]] | None = None) -> dict[str, str]:
+        """One status per source id; when several feeds share it, a problem with any of them wins over ok.
+        With current, only feeds a view still lists count, so a feed you fixed or removed stops warning."""
         merged: dict[str, str] = {}
-        for (source_id, _), status in list(self.source_status.items()):
-            if status != "ok" or source_id not in merged:
-                merged[source_id] = status
+        for key, status in list(self.source_status.items()):
+            if current is not None and key not in current:
+                continue
+            if status != "ok" or key[0] not in merged:
+                merged[key[0]] = status
         return merged
 
     def debug(self) -> dict[str, Any]:

@@ -11,7 +11,7 @@ ITEM_TTL = timedelta(days=30)
 ITEM_COLUMNS = "item_id, source_id, url, published_at, fetched_at, seen_at, item_json"
 # An item is one URL per source, so the same article in two sources is stored for both (a view shows it once).
 # listed_at is the last time a source still listed it; items expire a month after that, not after first being seen.
-SCHEMA = """
+ITEMS_TABLE = """
 CREATE TABLE IF NOT EXISTS items (
     item_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL,
@@ -22,18 +22,22 @@ CREATE TABLE IF NOT EXISTS items (
     seen_at TEXT,
     item_json TEXT NOT NULL,
     UNIQUE (source_id, url)
-);
-CREATE INDEX IF NOT EXISTS items_by_url ON items (url);
-CREATE INDEX IF NOT EXISTS items_by_source ON items (source_id, published_at);
+)
+"""
+EVENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS events (
     event_id INTEGER PRIMARY KEY,
     ts TEXT NOT NULL,
     view_id TEXT NOT NULL,
     item_id TEXT,
     event_kind TEXT NOT NULL CHECK (event_kind IN ('open', 'seen', 'less_like_this'))
-);
-CREATE INDEX IF NOT EXISTS events_by_item ON events (item_id);
+)
 """
+INDEXES = (
+    "CREATE INDEX IF NOT EXISTS items_by_url ON items (url)",
+    "CREATE INDEX IF NOT EXISTS items_by_source ON items (source_id, published_at)",
+    "CREATE INDEX IF NOT EXISTS events_by_item ON events (item_id)",
+)
 
 
 def iso(moment: datetime | None) -> str | None:
@@ -49,41 +53,62 @@ class Store:
     def __init__(self, db_path: Path):
         self.connection = sqlite3.connect(db_path, check_same_thread=False)
         self.lock = threading.Lock()
-        with self.lock, self.connection:
+        with self.lock:
             self.connection.execute("PRAGMA journal_mode=WAL")
-            self.connection.executescript(SCHEMA)
             self.migrate()
+            with self.connection:
+                self.connection.execute(EVENTS_TABLE)
+                for index in INDEXES:
+                    self.connection.execute(index)
 
     def migrate(self) -> None:
-        """Databases from before listed_at kept one row per URL across all sources; rebuild them in the new shape."""
-        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(items)")}
-        if "listed_at" in columns:
-            return
-        self.connection.execute("ALTER TABLE items RENAME TO items_before_listed_at")
-        self.connection.executescript(SCHEMA)
-        self.connection.execute(
-            f"INSERT INTO items ({ITEM_COLUMNS}, listed_at) SELECT {ITEM_COLUMNS}, fetched_at FROM items_before_listed_at"
-        )
-        self.connection.execute("DROP TABLE items_before_listed_at")
-        self.connection.executescript(SCHEMA)
+        """Databases from before listed_at kept one row per URL across all sources; rebuild them in the new shape.
 
-    def upsert_items(self, items: list[Item]) -> list[Item]:
-        """Insert items new to their source; returns only those. Items a source lists again count as listed now."""
+        All in one transaction and a copy a crash left half done is finished on the next start."""
+        tables = {row[0] for row in self.connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(items)")}
+        if "items" in tables and "listed_at" not in columns:
+            moves = ["ALTER TABLE items RENAME TO items_before_listed_at"]
+        elif "items_before_listed_at" in tables:
+            moves = []
+        else:
+            self.connection.execute(ITEMS_TABLE)
+            return
+        moves += [
+            "DROP INDEX IF EXISTS items_by_url",
+            "DROP INDEX IF EXISTS items_by_source",
+            ITEMS_TABLE,
+            f"INSERT OR IGNORE INTO items ({ITEM_COLUMNS}, listed_at) SELECT {ITEM_COLUMNS}, fetched_at FROM items_before_listed_at",
+            "DROP TABLE items_before_listed_at",
+        ]
+        self.connection.execute("BEGIN")
+        try:
+            for statement in moves:
+                self.connection.execute(statement)
+            self.connection.commit()
+        except sqlite3.Error:
+            self.connection.rollback()
+            raise
+
+    def upsert_items(self, items: list[Item], listed_at: datetime | None = None) -> list[Item]:
+        """Insert items new to their source; returns only those. Every item given counts as listed at listed_at
+        (by default its own fetch time), new or not, so one a feed keeps listing never expires.
+        A new copy of a URL you already saw is seen too."""
         new_items = []
         with self.lock, self.connection:
             for item in items:
-                fetched = iso(item.fetched_at)
+                listed = iso(listed_at or item.fetched_at)
                 cursor = self.connection.execute(
-                    "INSERT OR IGNORE INTO items (item_id, source_id, url, published_at, fetched_at, listed_at, item_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (item.item_id, item.source_id, item.url, iso(item.published_at), fetched, fetched, item.model_dump_json()),
+                    "INSERT OR IGNORE INTO items (item_id, source_id, url, published_at, fetched_at, listed_at, seen_at, item_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, (SELECT MIN(seen_at) FROM items WHERE url = ?), ?)",
+                    (item.item_id, item.source_id, item.url, iso(item.published_at), iso(item.fetched_at), listed, item.url, item.model_dump_json()),
                 )
                 if cursor.rowcount:
                     new_items.append(item)
                 else:
                     self.connection.execute(
                         "UPDATE items SET listed_at = ? WHERE item_id = ? OR (source_id = ? AND url = ?)",
-                        (fetched, item.item_id, item.source_id, item.url),
+                        (listed, item.item_id, item.source_id, item.url),
                     )
         return new_items
 

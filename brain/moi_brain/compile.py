@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from moi_brain.config import Paths
 from moi_brain.feeds import CHANNEL_ID, read_takeout
-from moi_brain.files import write_atomic
+from moi_brain.files import read_text, write_atomic
 from moi_brain.items import rss_source_id, youtube_source_id
 from moi_brain.lenses import SITE_PREFIX
 from moi_brain.llm import Gateway, LlmError
@@ -24,6 +24,8 @@ from moi_brain.md import bullets, parse_sections, section_text
 from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
+# Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
+COMPILER_VERSION = "2"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
@@ -205,9 +207,10 @@ class Compiler:
                 infos.append(ViewInfo(view_id=view_id, title=title or view_id))
         return [info for info in infos if info.view_id == "feed"] + [info for info in infos if info.view_id != "feed"]
 
-    def all_compiled(self) -> list[CompiledView]:
-        """Every view; one that another thread is compiling right now comes as last compiled instead of waiting."""
-        return [self.compiled(view_id, wait=False) for view_id in self.view_ids()]
+    def all_compiled(self, use_model: bool = True) -> list[CompiledView]:
+        """Every view; one that another thread is compiling right now comes as last compiled instead of waiting.
+        Without use_model a stale view comes with its rules as last compiled: enough for its sources."""
+        return [self.compiled(view_id, wait=False, use_model=use_model) for view_id in self.view_ids()]
 
     def view_lock(self, view_id: str) -> threading.Lock:
         with self.locks_lock:
@@ -215,14 +218,15 @@ class Compiler:
 
     def view_text(self, view_id: str) -> str:
         path = self.paths.views / f"{check_view_id(view_id)}.md"
-        return path.read_text() if path.exists() else ""
+        return read_text(path)
 
     def input_hash(self, view_text: str) -> str:
-        takeout = self.paths.takeout.read_text() if self.paths.takeout.exists() else ""
-        parts = [view_text, takeout, self.memory.likes(), self.memory.dislikes()]
+        """Everything a compiled view depends on, plus the compiler's version, so a cached view made by an older
+        openMoi (say with source ids named differently) is compiled again."""
+        parts = [COMPILER_VERSION, view_text, read_text(self.paths.takeout), self.memory.likes(), self.memory.dislikes()]
         return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
-    def compiled(self, view_id: str, wait: bool = True) -> CompiledView:
+    def compiled(self, view_id: str, wait: bool = True, use_model: bool = True) -> CompiledView:
         """The compiled view, recompiling only when one of its input files changed.
 
         A cache file that is damaged (a crash mid write, an older format) counts as missing and is rebuilt.
@@ -230,6 +234,9 @@ class Compiler:
         view_text = self.view_text(view_id)
         file_hash = self.input_hash(view_text)
         cache = self.paths.compiled / f"{view_id}.json"
+        if not use_model:
+            cached = cached_view(cache)
+            return cached if cached and cached.file_hash == file_hash else self.compile(view_id, view_text, file_hash, cached, use_model=False)[0]
         lock = self.view_lock(view_id)
         if not lock.acquire(blocking=wait):
             return cached_view(cache) or self.compile(view_id, view_text, file_hash, None, use_model=False)[0]

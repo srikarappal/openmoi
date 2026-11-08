@@ -226,3 +226,22 @@ def test_a_damaged_compiled_cache_is_rebuilt(compiler):
     assert compiler.compiled("feed").source_ids() == ["x"]
     assert json.loads((compiler.paths.compiled / "feed.json").read_text())["view_id"] == "feed"
 
+
+def test_a_view_compiled_by_an_older_openmoi_is_compiled_again(compiler, services):
+    (compiler.paths.views / "feed.md").write_text("# Feed\n\n## Sources\n* X home timeline\n\n## Rules\n* No shorts.\n")
+    first = compiler.compiled("feed")
+    older = first.model_copy(update={"file_hash": "made by an older version", "rules": []})
+    (compiler.paths.compiled / "feed.json").write_text(older.model_dump_json())
+    calls = len(services.model_calls("compile_rules"))
+    assert compiler.compiled("feed").rules
+    assert len(services.model_calls("compile_rules")) == calls + 1
+
+
+def test_sources_for_chrome_never_wait_on_the_model(compiler, services):
+    (compiler.paths.views / "feed.md").write_text("# Feed\n\n## Sources\n* X home timeline\n\n## Rules\n* No shorts.\n")
+    [view] = compiler.all_compiled(use_model=False)
+    assert view.source_ids() == ["x"]
+    assert not services.model_calls("compile_rules")
+    compiled = compiler.compiled("feed")
+    assert compiler.all_compiled(use_model=False) == [compiled]
+

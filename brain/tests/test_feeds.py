@@ -26,10 +26,11 @@ def test_fetch_rss_reads_entries(fetcher, services):
     assert first["published_at"].endswith("+00:00")
 
 
-def test_conditional_get_returns_nothing_when_unchanged(fetcher, services):
+def test_an_unchanged_feed_answers_304_and_still_lists_its_entries(fetcher, services):
     url = f"{services.base_url}/rss/etag.xml"
-    assert len(fetcher.fetch_rss(url)) == 1
-    assert fetcher.fetch_rss(url) == []
+    first = fetcher.fetch_rss(url)
+    assert len(first) == 1
+    assert fetcher.fetch_rss(url) == first
     etag_requests = [request for request in services.requests if request["path"] == "/rss/etag.xml"]
     assert etag_requests[-1]["headers"]["if-none-match"] == '"v1"'
     assert etag_requests[0]["headers"]["user-agent"].startswith("openMoi")

@@ -109,3 +109,17 @@ def test_a_damaged_generated_spec_is_skipped(tmp_path):
     store = ExtractorStore(REPO_DIR / "extractors", tmp_path)
     assert store.for_page_type("x.com", "home_timeline").start_url == "https://x.com/home"
 
+
+def test_mine_lenses_from_before_move_to_their_new_folder(tmp_path):
+    old = tmp_path / "site_news.example.com_listing"
+    old.mkdir()
+    (old / "v1.html").write_text("<p>old look</p>")
+    (old / "current.json").write_text('{"version": 1, "layout_hash": "h"}')
+    (tmp_path / "x_listing").mkdir()
+    (tmp_path / "site_both.example_article").mkdir()
+    (tmp_path / "site_both.example@article").mkdir()
+    store = LensStore(REPO_DIR / "lenses" / "default" / "default.html", tmp_path)
+    assert store.html(lens_key("site_news.example.com", "listing")) == "<p>old look</p>"
+    assert (tmp_path / "x_listing").exists()
+    assert (tmp_path / "site_both.example_article").exists()
+

@@ -11,7 +11,6 @@ program posing as the extension nor one posing as openMoi (while openMoi is clos
 import hashlib
 import hmac
 import json
-import os
 import re
 import secrets
 import sys
@@ -139,6 +138,12 @@ class RelayHub:
         if secret and isinstance(offered, str) and hmac.compare_digest(offered, proof(secret, EXTENSION_PROOF, challenge)):
             self.activate(connection, extension_id, nonce, secret, issued=False)
             return
+        with self.lock:
+            paired_and_here = self.connection is not None and self.extension_id == extension_id
+        if paired_and_here:
+            # The paired extension is connected with its secret right now, so one without it is not that extension.
+            connection.close(code=1008, reason="that extension is already connected")
+            return
         allowed_at = self.allowed_at.pop(extension_id, None)
         if secret and allowed_at is not None and time.monotonic() - allowed_at < APPROVAL_WINDOW_SECONDS:
             self.activate(connection, extension_id, nonce, secret, issued=True)
@@ -244,10 +249,11 @@ class RelayHub:
         """You allowed an extension: it gets a new secret and if it is waiting right now it becomes the connected one."""
         secret = secrets.token_hex(32)
         self.trusted[extension_id] = secret
-        write_atomic(self.trust_file, json.dumps(self.trusted, indent=2, sort_keys=True))
-        os.chmod(self.trust_file, 0o600)
+        write_atomic(self.trust_file, json.dumps(self.trusted, indent=2, sort_keys=True), private=True)
         with self.lock:
             candidate = self.candidate if self.candidate and self.candidate[1] == extension_id else None
+            if candidate:
+                self.candidate = None
         if candidate:
             self.activate(candidate[0], extension_id, candidate[2], secret, issued=True)
         else:
@@ -258,4 +264,4 @@ class RelayHub:
         with self.lock:
             connection = self.connection
         if connection is not None:
-            self.send(connection, {"type": "config", **self.config()})
+            self.send(connection, {"type": "config", **self.safe_config()})

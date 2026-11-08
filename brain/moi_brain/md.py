@@ -25,7 +25,9 @@ def parse_sections(text: str) -> tuple[str, dict[str, str]]:
 
 
 def section_text(sections: dict[str, str], name: str) -> str:
-    return next((body for heading, body in sections.items() if heading.lower() == name.lower()), "")
+    """The body of the last heading with this name in any case: the copy replace_section edits."""
+    found = [body for heading, body in sections.items() if heading.lower() == name.lower()]
+    return found[-1] if found else ""
 
 
 def body_text(text: str) -> str:

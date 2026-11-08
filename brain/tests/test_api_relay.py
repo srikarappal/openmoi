@@ -136,3 +136,10 @@ def test_a_flood_of_relay_events_is_dropped_not_queued_forever(brain, monkeypatc
     brain.queue_relay_event({"event": "one too many"})
     assert "relay inbox full" in capsys.readouterr().err
 
+
+def test_a_mine_press_gets_through_even_when_passive_batches_fill_the_inbox(brain, monkeypatch):
+    monkeypatch.setattr(brain, "relay_inbox", queue.Queue(maxsize=1))
+    brain.relay_inbox.put({"event": "waiting"})
+    brain.queue_relay_event({"event": "mine", "handle": "7", "url": "https://shop.example.com/", "title": "Shop"})
+    assert [request.url for request in brain.take_relay_events()] == ["https://shop.example.com/"]
+

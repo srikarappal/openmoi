@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from moi_brain.brain import one_per_url
+from moi_brain.brain import seen_long_ago
 from moi_brain.compile import Condition, Rule
 from moi_brain.items import normalize
 from moi_brain.rank import age_hours, describe, matches, rank
@@ -144,20 +144,28 @@ def test_describe():
     assert describe(Condition(field="topic", op="in", value=["a", "b"])) == "topic a, b"
 
 
-def test_one_per_url_keeps_the_first_source_and_marks_items_seen_long_ago():
-    early = make_item("rss:a", "1", url="https://same.example/x").model_copy(update={"fetched_at": NOW - timedelta(hours=5)})
-    late_copy = make_item("rss:b", "2", url="https://same.example/x")
-    long_seen, recently_seen = make_item("x", "3"), make_item("x", "4")
-    entries = [(late_copy, None), (early, None), (long_seen, NOW - timedelta(hours=13)), (recently_seen, NOW - timedelta(hours=1))]
-    items, hidden = one_per_url(entries, NOW - timedelta(hours=12))
-    assert {item.native_id for item in items} == {"1", "3", "4"}
-    assert hidden == {long_seen.item_id}
+def test_seen_long_ago_marks_only_items_seen_before_the_cutoff():
+    long_seen, recently_seen, unseen = make_item("x", "3"), make_item("x", "4"), make_item("x", "5")
+    entries = [(long_seen, NOW - timedelta(hours=13)), (recently_seen, NOW - timedelta(hours=1)), (unseen, None)]
+    assert seen_long_ago(entries, NOW - timedelta(hours=12)) == {long_seen.item_id}
+
+
+def test_one_copy_per_url_and_it_is_one_the_rules_let_through():
+    politics = {"topics": ["politics"]}
+    from_tech = make_item("rss:tech", "1", url="https://same.example/x", **politics)
+    from_news = make_item("rss:news", "2", url="https://same.example/x", hours_old=3, **politics)
+    hide_unless_news = Rule(when=Condition(field="topic", op="eq", value="politics"), unless=Condition(field="source_id", op="eq", value="rss:news"), do="hide")
+    page, _ = rank([from_tech, from_news], [hide_unless_news], NOW)
+    assert [entry.item.source_id for entry in page] == ["rss:news"]
+    page, _ = rank([from_news, from_tech], [], NOW)
+    assert [entry.item.native_id for entry in page] == ["1"]
 
 
 def test_items_seen_long_ago_still_use_up_the_daily_limit():
     seen_this_morning = [make_item("x", "a", 9), make_item("x", "b", 8)]
     later = [make_item("x", "c", 1)]
-    items, hidden = one_per_url([(item, NOW - timedelta(hours=13)) for item in seen_this_morning] + [(item, None) for item in later], NOW - timedelta(hours=12))
-    page, _ = rank(items, [rule("limit", "source_id", "eq", "x", count_per_day=2)], NOW, hidden)
+    entries = [(item, NOW - timedelta(hours=13)) for item in seen_this_morning] + [(item, None) for item in later]
+    hidden = seen_long_ago(entries, NOW - timedelta(hours=12))
+    page, _ = rank([item for item, _ in entries], [rule("limit", "source_id", "eq", "x", count_per_day=2)], NOW, hidden)
     assert ids(page) == []
 

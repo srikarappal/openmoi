@@ -170,6 +170,8 @@ class FeedFetcher:
         self.channel_cache = channel_cache
         self.youtube_base = youtube_base.rstrip("/")
         self.validators: dict[str, dict[str, str]] = {}
+        # The entries of each feed's last good read: a 304 means the feed still lists exactly those.
+        self.entries: dict[str, list[dict[str, Any]]] = {}
         self.channels: dict[str, str] = read_json(channel_cache, {})
 
     def fetch_rss(self, feed_url: str) -> list[dict[str, Any]]:
@@ -220,13 +222,14 @@ class FeedFetcher:
         headers = {"if-none-match": known.get("etag"), "if-modified-since": known.get("last_modified")}
         response = self.fetch(feed_url, {key: value for key, value in headers.items() if value})
         if response.status_code == 304:
-            return []
+            return self.entries.get(feed_url, [])
         parsed = feedparser.parse(response.content)
         if not parsed.entries and (parsed.bozo or not parsed.version):
             raise FeedError(f"{feed_url} is not a readable feed")
         validators = {"etag": response.headers.get("etag"), "last_modified": response.headers.get("last-modified")}
         self.validators[feed_url] = {key: value for key, value in validators.items() if value}
-        return [entry_record(entry, kind) for entry in parsed.entries]
+        self.entries[feed_url] = [entry_record(entry, kind) for entry in parsed.entries]
+        return self.entries[feed_url]
 
     def get(self, url: str, headers: dict[str, str]) -> bytes | None:
         """Body of a 200 response, None for 304 Not Modified, FeedError otherwise."""

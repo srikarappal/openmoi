@@ -1,6 +1,8 @@
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from moi_brain.items import Event, normalize
 from moi_brain.store import Store
 
@@ -151,4 +153,43 @@ def test_a_database_from_before_keeps_its_items_and_seen_state(tmp_path):
     indexes = {row[1] for row in store.connection.execute("PRAGMA index_list(items)")}
     assert {"items_by_source", "items_by_url"} <= indexes
     assert Store(path).get_item(item.item_id) == item
+
+
+def test_a_migration_a_crash_left_half_done_is_finished_on_the_next_start(tmp_path):
+    path = tmp_path / "db.sqlite"
+    item = make_item("rss:a", "1")
+    with sqlite3.connect(path) as connection:
+        connection.executescript(OLD_SCHEMA.replace("CREATE TABLE items", "CREATE TABLE items_before_listed_at").replace("ON items", "ON items_before_listed_at"))
+        connection.execute(
+            "INSERT INTO items_before_listed_at VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (item.item_id, item.source_id, item.url, item.published_at.isoformat(), NOW.isoformat(), None, item.model_dump_json()),
+        )
+        connection.execute("CREATE TABLE items (item_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT NOT NULL, published_at TEXT, fetched_at TEXT NOT NULL, listed_at TEXT, seen_at TEXT, item_json TEXT NOT NULL, UNIQUE (source_id, url))")
+    store = Store(path)
+    assert store.get_item(item.item_id) == item
+    tables = {row[0] for row in store.connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "items_before_listed_at" not in tables
+
+
+def test_a_copy_that_arrives_after_you_saw_the_story_is_seen_too(tmp_path):
+    store = Store(tmp_path / "db.sqlite")
+    first = make_item("rss:a", "1", url="https://same.example/story")
+    store.upsert_items([first])
+    store.add_events([Event(view_id="feed", item_id=first.item_id, event_kind="seen")], NOW)
+    late = make_item("rss:b", "2", url="https://same.example/story")
+    store.upsert_items([late], listed_at=NOW)
+    assert [seen for _, seen in store.items_with_seen(["rss:b"], NOW - timedelta(days=7))] == [NOW]
+
+
+def test_a_migration_that_fails_part_way_leaves_the_old_table_as_it_was(tmp_path):
+    path = tmp_path / "db.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE items (item_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, url TEXT NOT NULL UNIQUE, fetched_at TEXT NOT NULL)")
+        connection.execute("INSERT INTO items VALUES ('a', 'rss:a', 'https://a.example', '2026-11-01T00:00:00+00:00')")
+    with pytest.raises(sqlite3.OperationalError):
+        Store(path)
+    with sqlite3.connect(path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        assert "items_before_listed_at" not in tables
+        assert connection.execute("SELECT item_id FROM items").fetchall() == [("a",)]
 

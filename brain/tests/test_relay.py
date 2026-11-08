@@ -118,15 +118,15 @@ def test_an_approved_extension_is_welcomed_at_once_next_time(hub, tmp_path, even
         again.stop()
 
 
-def test_a_program_posing_as_the_paired_extension_gets_no_calls(hub):
+def test_a_program_posing_as_the_connected_paired_extension_is_turned_away(hub):
     paired = trusted_extension(hub)
     paired.answer_calls(second_answer)
-    impostor = FakeExtension(hub.port)
-    assert impostor.recv()["type"] == "approval_needed"
-    guesser = FakeExtension(hub.port, secret="00" * 32)
-    assert guesser.recv()["type"] == "approval_needed"
+    for impostor in (FakeExtension(hub.port), FakeExtension(hub.port, secret="00" * 32)):
+        with pytest.raises(ConnectionClosed):
+            impostor.recv()
     assert hub.call("url", {}) == "second"
     assert hub.status()["extension_id"] == EXTENSION_ID
+    assert hub.status()["waiting_for_approval"] is None
 
 
 def test_the_welcome_proves_the_hub_knows_the_secret(hub):
@@ -334,4 +334,12 @@ def test_the_allow_window_closes(hub, monkeypatch):
 
 def nobody_waiting(hub: RelayHub) -> bool:
     return hub.status()["waiting_for_approval"] is None
+
+
+def test_with_the_paired_extension_gone_a_reset_extension_can_ask_again(hub):
+    paired = trusted_extension(hub)
+    paired.close()
+    wait_for(is_disconnected, hub)
+    reset = FakeExtension(hub.port)
+    assert reset.recv()["type"] == "approval_needed"
 

@@ -9,6 +9,7 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from conftest import TOKEN, fixture_view, wait_until_refreshed
 from fastapi.testclient import TestClient
@@ -371,3 +372,59 @@ def test_each_chat_command_changes_only_its_own_part(client, paths, scope):
     view_changed = (paths.views / "feed.md").read_text() != before_view
     memory_changed = (paths.memory / "about_me.md").read_text() != before_memory
     assert (view_changed, memory_changed) == {"memory": (False, True), "rules": (True, False), "sources": (False, False), "layout": (True, False)}[scope]
+
+
+def test_an_undated_post_a_feed_keeps_listing_never_expires_or_comes_back_as_new(client, brain):
+    clock = FixedClock(MORNING)
+    brain.clock = clock
+    undated = [{"native_id": "evergreen", "url": "https://blog.example/about", "title": "About this blog"}]
+    [stored] = client.post("/ingest", json={"source_id": "rss:blog", "records": undated}).json()["items"]
+    mark_seen(client, [stored["item_id"]])
+    for day in (10, 20, 29, 38):
+        clock.moment = MORNING + timedelta(days=day)
+        client.post("/ingest", json={"source_id": "rss:blog", "records": undated})
+        brain.store.expire(clock.moment)
+    assert brain.store.get_item(stored["item_id"]) is not None
+    [(_, seen_at)] = brain.store.items_with_seen(["rss:blog"], MORNING - timedelta(days=1))
+    assert seen_at is not None
+
+
+def test_a_feed_you_fixed_stops_warning_even_when_its_site_has_another_feed(paths, settings):
+    feeds = {"/rss/index.xml": "news", "/rss/reviews.xml": "reviews"}
+    view = "# Feed\n\n## Sources\n* RSS: https://www.example.com/rss/index.xml, https://www.example.com/rss/reviews.xm\n"
+    write_view(paths, view)
+    brain = Brain(paths, settings, http=httpx.Client(transport=httpx.MockTransport(site_feeds_for(feeds))))
+    try:
+        brain.refresh_feeds("feed", brain.compiler.compiled("feed"), True)
+        assert any("reviews.xm returned 404" in warning for warning in brain.view_page("feed", []).warnings)
+        write_view(paths, view.replace("reviews.xm", "reviews.xml"))
+        brain.refresh_feeds("feed", brain.compiler.compiled("feed"), True)
+        assert not any("reviews.xm returned 404" in warning for warning in brain.view_page("feed", []).warnings)
+    finally:
+        brain.http.close()
+
+
+class SiteFeeds:
+    """A site serving one small feed per known path and 404 for anything else."""
+
+    def __init__(self, feeds: dict[str, str]):
+        self.feeds = feeds
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        name = self.feeds.get(request.url.path)
+        if name is None:
+            return httpx.Response(404, text="not found")
+        body = f'<rss version="2.0"><channel><title>{name}</title><item><guid>{name}1</guid><title>{name} story</title><link>https://www.example.com/{name}/1</link></item></channel></rss>'
+        return httpx.Response(200, text=body)
+
+
+def site_feeds_for(feeds: dict[str, str]) -> SiteFeeds:
+    return SiteFeeds(feeds)
+
+
+def test_a_view_file_that_is_not_utf8_does_not_break_the_other_views(client, paths):
+    (paths.views / "notes.md").write_bytes("# Notes caf\xe9\n\n## Sources\n* X home timeline\n".encode("latin-1"))
+    assert [view["view_id"] for view in client.get("/views").json()] == ["feed", "notes"]
+    assert client.post("/view/feed", json={}).status_code == 200
+    assert client.post("/view/notes", json={}).status_code == 200
+

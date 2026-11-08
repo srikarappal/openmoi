@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from moi_brain.compile import BadInput
 from moi_brain.config import Paths
-from moi_brain.files import write_atomic
+from moi_brain.files import read_text, write_atomic
 from moi_brain.items import Item
 from moi_brain.lenses import SITE_PREFIX
 from moi_brain.llm import Gateway
@@ -118,7 +118,7 @@ class Editor:
         paths = {} if scope == "memory" else {f"views/{view_id}.md": self.paths.views / f"{view_id}.md"}
         if scope in ("any", "memory"):
             paths |= {f"memory/{name}": self.paths.memory / name for name in TOPIC_FILES}
-        return {file: path.read_text() if path.exists() else "" for file, path in paths.items()}
+        return {file: read_text(path) for file, path in paths.items()}
 
     def propose(self, view_id: str, request: str, item: Item | None, journal: list[str], scope: EditScope = "any") -> Proposal:
         """The model sees the request, the item reacted to, recent journal lines and every file it may edit."""
@@ -176,14 +176,14 @@ class Editor:
         """Write a proposal's changes, refusing if any file changed since it was proposed."""
         with self.lock:
             proposal = self.proposals.pop(proposal_id, None)
-        if proposal is None:
-            raise BadInput("That proposal is gone; ask again.")
-        targets = [(self.paths.home / change.file, change) for change in proposal.changes]
-        for path, change in targets:
-            if (path.read_text() if path.exists() else "") != change.old_text:
-                raise StaleProposal(f"{change.file} changed since this was proposed; ask again.")
-        for path, change in targets:
-            write_atomic(path, change.new_text)
+            if proposal is None:
+                raise BadInput("That proposal is gone; ask again.")
+            targets = [(self.paths.home / change.file, change) for change in proposal.changes]
+            for path, change in targets:
+                if read_text(path) != change.old_text:
+                    raise StaleProposal(f"{change.file} changed since this was proposed; ask again.")
+            for path, change in targets:
+                write_atomic(path, change.new_text)
         return proposal
 
     def discard(self, proposal_id: str) -> None:
