@@ -1,5 +1,6 @@
 """The Brain composes storage, sources, compilation, ranking and lenses behind one object."""
 
+import queue
 import sys
 import threading
 from collections import deque
@@ -98,6 +99,7 @@ class Overview(BaseModel):
 # (source id, the feed or channel it reads, the reader): two feeds on one site share a source id but not a reader.
 FeedReader = tuple[str, str, Callable[[], list[dict[str, Any]]]]
 MAX_RELAY_EVENTS = 50
+MAX_RELAY_INBOX = 200
 NEW_VIEW = "# {title}\n\n## Sources\n\n## Rules\n\n## Layout\n"
 
 
@@ -146,8 +148,11 @@ class Brain:
         self.editor = Editor(paths, self.gateway)
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
-        self.relay = RelayHub(paths.relay_trust, self.on_relay_event, self.relay_config)
+        self.relay = RelayHub(paths.relay_trust, self.queue_relay_event, self.relay_config)
         self.relay_events: deque[MineRequest] = deque(maxlen=MAX_RELAY_EVENTS)
+        # Events from Chrome are handled off the relay's socket thread, which also carries the replies calls wait for.
+        self.relay_inbox: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=MAX_RELAY_INBOX)
+        threading.Thread(target=self.relay_worker, daemon=True).start()
         self.passive_batches = 0
         self.lock = threading.Lock()
         self.refreshing: set[str] = set()
@@ -212,6 +217,21 @@ class Brain:
     def relay_config(self) -> dict[str, Any]:
         passive = [{"source_id": source.source_id, "url_prefix": url_prefix(source.start_url), "spec": source.spec.model_dump()} for source in self.passive_sources()]
         return {"passive": passive}
+
+    def queue_relay_event(self, message: dict[str, Any]) -> None:
+        """A flood of passive batches drops the newest rather than growing without end."""
+        try:
+            self.relay_inbox.put_nowait(message)
+        except queue.Full:
+            print("relay inbox full, dropping an event", file=sys.stderr)
+
+    def relay_worker(self) -> None:
+        while True:
+            message = self.relay_inbox.get()
+            try:
+                self.on_relay_event(message)
+            except Exception as error:
+                print(f"relay event failed: {error!r}", file=sys.stderr)
 
     def on_relay_event(self, message: dict[str, Any]) -> None:
         """Passive records from a known source page are ingested; Mine requests wait for the app."""

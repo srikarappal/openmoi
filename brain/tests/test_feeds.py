@@ -233,3 +233,8 @@ def test_a_page_that_is_not_a_feed_stays_an_error_and_an_empty_feed_is_fine(tmp_
                 fetcher.fetch_rss("https://moved.example/feed.xml")
         assert fetcher.fetch_rss("https://moved.example/empty.xml") == []
 
+
+def test_a_lockup_with_parts_of_another_shape_is_skipped():
+    data = {"contents": [{"lockupViewModel": {"contentType": "LOCKUP_CONTENT_TYPE_VIDEO", "contentId": "VIDEO00007G", "metadata": ["not", "a", "dict"]}}]}
+    assert channel_page_videos(f"<script>var ytInitialData = {json.dumps(data)};</script>", datetime.now(UTC)) == []
+

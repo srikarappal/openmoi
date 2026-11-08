@@ -43,6 +43,10 @@ def json_object_text(content: str) -> str:
     return text[start : end + 1] if start != -1 and end > start else text
 
 
+# The call log keeps one older file beside it, so it never grows past about twice this.
+MAX_LOG_BYTES = 5_000_000
+
+
 def readable_line(line: str) -> dict[str, Any] | None:
     """One log line, or None for a line cut short by a crash."""
     try:
@@ -149,8 +153,11 @@ class Gateway:
             "contained_user_content": contains_user_content,
             "error": error,
         }
-        with self.log_lock, self.log_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"{json.dumps(line)}\n")
+        with self.log_lock:
+            if self.log_path.exists() and self.log_path.stat().st_size > MAX_LOG_BYTES:
+                os.replace(self.log_path, self.log_path.with_name(f"{self.log_path.name}.1"))
+            with self.log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"{json.dumps(line)}\n")
 
     def recent_calls(self, limit: int = 20) -> list[dict[str, Any]]:
         if not self.log_path.exists():

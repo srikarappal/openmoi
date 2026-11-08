@@ -146,3 +146,9 @@ def test_item_ids_are_stable_and_source_scoped():
     assert make_item_id("x", "1") == make_item_id("x", "1")
     assert make_item_id("x", "1") != make_item_id("rss:a", "1")
     assert len(make_item_id("x", "1")) == 32
+
+
+def test_an_epoch_beyond_the_calendar_is_no_time():
+    record = {"url": "https://a.com/1", "title": "t", "published_at": 1e20}
+    assert normalize("rss:a", record, datetime.now(UTC)).published_at is None
+

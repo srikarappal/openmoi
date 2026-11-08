@@ -198,3 +198,31 @@ def test_hyphenated_site_views_and_handles_ending_a_sentence():
     sources, _ = parse_sources("* YouTube: @veritasium, @3blue1brown.\n* RSS: https://example.com/feed.xml.", [])
     assert source_ids(sources) == ["youtube:veritasium", "youtube:3blue1brown", "rss:example"]
 
+
+def test_a_view_compiling_elsewhere_comes_back_without_waiting(compiler, services):
+    (compiler.paths.views / "feed.md").write_text("# Feed\n\n## Sources\n* X home timeline\n\n## Rules\n* No shorts.\n")
+    lock = compiler.view_lock("feed")
+    lock.acquire()
+    try:
+        [busy] = compiler.all_compiled()
+    finally:
+        lock.release()
+    assert busy.source_ids() == ["x"]
+    assert busy.rules == []
+    assert "Rules not updated: still compiling" in busy.warnings
+    assert not services.model_calls("compile_rules")
+    compiled = compiler.compiled("feed")
+    assert compiled.rules
+    lock.acquire()
+    try:
+        assert compiler.all_compiled() == [compiled]
+    finally:
+        lock.release()
+
+
+def test_a_damaged_compiled_cache_is_rebuilt(compiler):
+    (compiler.paths.views / "feed.md").write_text("# Feed\n\n## Sources\n* X home timeline\n")
+    (compiler.paths.compiled / "feed.json").write_text("")
+    assert compiler.compiled("feed").source_ids() == ["x"]
+    assert json.loads((compiler.paths.compiled / "feed.json").read_text())["view_id"] == "feed"
+

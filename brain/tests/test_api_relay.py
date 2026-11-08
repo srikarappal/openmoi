@@ -1,5 +1,6 @@
 """Integration for the Chrome relay through the brain's HTTP API."""
 
+import queue
 import time
 
 import pytest
@@ -109,3 +110,29 @@ def test_mine_requests_wait_for_the_app_and_are_delivered_once(client, extension
 
 def test_debug_reports_the_relay(client, extension):
     assert client.get("/debug").json()["relay"]["connected"] is True
+
+
+def raise_once(message: dict) -> None:
+    raise RuntimeError("bad event")
+
+
+def test_relay_events_are_handled_off_the_socket_thread_and_survive_errors(brain, monkeypatch, capsys):
+    handled: list[dict] = []
+    monkeypatch.setattr(brain, "on_relay_event", raise_once)
+    brain.queue_relay_event({"event": "first"})
+    deadline = time.monotonic() + 3
+    while "bad event" not in capsys.readouterr().err and time.monotonic() < deadline:
+        time.sleep(0.02)
+    monkeypatch.setattr(brain, "on_relay_event", handled.append)
+    brain.queue_relay_event({"event": "second"})
+    while not handled and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert handled == [{"event": "second"}]
+
+
+def test_a_flood_of_relay_events_is_dropped_not_queued_forever(brain, monkeypatch, capsys):
+    monkeypatch.setattr(brain, "relay_inbox", queue.Queue(maxsize=1))
+    brain.relay_inbox.put({"event": "waiting"})
+    brain.queue_relay_event({"event": "one too many"})
+    assert "relay inbox full" in capsys.readouterr().err
+

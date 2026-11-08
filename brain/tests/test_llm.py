@@ -109,3 +109,16 @@ def test_unreachable_model_raises_llm_error(tmp_path):
 
 def test_recent_calls_on_a_fresh_log(tmp_path):
     assert hosted_gateway(tmp_path, Recorder(), allow=True).recent_calls() == []
+
+
+def test_the_call_log_rotates_and_skips_a_line_cut_short(tmp_path, monkeypatch):
+    monkeypatch.setattr("moi_brain.llm.MAX_LOG_BYTES", 300)
+    gateway = Gateway(Settings(), tmp_path / "calls.jsonl", httpx.Client())
+    for index in range(10):
+        gateway.log("tag", "fast", gateway.settings.fast, {"prompt_tokens": 1, "completion_tokens": 1}, False, None)
+    assert (tmp_path / "calls.jsonl.1").exists()
+    assert (tmp_path / "calls.jsonl").stat().st_size <= 600
+    with (tmp_path / "calls.jsonl").open("a") as handle:
+        handle.write('{"cut short')
+    assert all(call["task"] == "tag" for call in gateway.recent_calls())
+

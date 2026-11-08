@@ -102,3 +102,10 @@ def test_default_lens_follows_the_contract():
     for call in ("moi.on_render", "moi.on_append", "moi.ready()", "moi.open(", "moi.more(", "moi.seen(", "moi.less_like_this(", "dataset.itemId"):
         assert call in html
     assert "innerHTML" not in html
+
+
+def test_a_damaged_generated_spec_is_skipped(tmp_path):
+    (tmp_path / "broken.json").write_text("{half a spec")
+    store = ExtractorStore(REPO_DIR / "extractors", tmp_path)
+    assert store.for_page_type("x.com", "home_timeline").start_url == "https://x.com/home"
+

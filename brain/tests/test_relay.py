@@ -288,3 +288,28 @@ def test_sending_to_a_closed_connection_is_quiet(hub):
 def test_stop_without_start_is_fine(tmp_path, events):
     RelayHub(tmp_path / "trusted.json", events, passive_config).stop()
 
+
+def broken_config() -> dict:
+    raise ValueError("a view file that does not parse")
+
+
+def test_a_config_that_fails_still_welcomes_with_no_passive_sources(tmp_path, events, capsys):
+    hub = RelayHub(tmp_path / "trusted.json", events, broken_config)
+    hub.port = hub.start(0)
+    try:
+        extension = FakeExtension(hub.port)
+        extension.recv()
+        hub.trust(EXTENSION_ID)
+        welcome = extension.recv()
+        assert (welcome["type"], welcome["passive"]) == ("welcome", [])
+        assert hub.connected
+        assert "relay config failed" in capsys.readouterr().err
+    finally:
+        hub.stop()
+
+
+def test_allowing_an_extension_that_is_not_connected_just_remembers_it(hub, tmp_path):
+    hub.trust(EXTENSION_ID)
+    assert not hub.connected
+    assert EXTENSION_ID in json.loads((tmp_path / "trusted.json").read_text())
+
