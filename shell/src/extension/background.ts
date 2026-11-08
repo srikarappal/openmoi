@@ -114,4 +114,4 @@ chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 }).catch(ignore)
 ensure_connected().catch(ignore)
 
 // A handle for debugging from the service worker console (and for the end to end tests).
-Object.assign(globalThis, { moi_relay: { relay, commands, mine_tab } })
+Object.assign(globalThis, { moi_relay: { relay, commands, mine_tab, pair_again } })

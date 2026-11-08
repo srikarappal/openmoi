@@ -71,6 +71,15 @@ describe("RelayLink", () => {
     expect(hooks.approval_needed.mock.calls).toEqual([["abcdefgh"], ["ijklmnop"]])
   })
 
+  it("asks again for the same extension once its earlier request cleared", async () => {
+    const waiting = poll_result({ waiting_for_approval: "abcdefghijklmnopabcdefghijklmnop" })
+    const { link, hooks } = make_link([waiting, poll_result({ connected: true }), waiting])
+    await link.poll()
+    await link.poll()
+    await link.poll()
+    expect(hooks.approval_needed).toHaveBeenCalledTimes(2)
+  })
+
   it("hands Mine requests from Chrome to the shell", async () => {
     const request = { event: "mine" as const, handle: "512", url: "https://news.example.com/", title: "News" }
     const { link, hooks } = make_link([poll_result({ connected: true }, [request])])

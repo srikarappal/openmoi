@@ -69,6 +69,8 @@ export interface LaunchOptions {
   views?: Record<string, string>
   fast_slot?: { base_url: string; model: string }
   files?: Record<string, string>
+  // The folder of an earlier run, to start openMoi again on the same home, as after a restart.
+  root?: string
 }
 
 export class Harness {
@@ -85,24 +87,10 @@ export class Harness {
   }
 
   static async launch(world: FakeWorld, options: LaunchOptions = {}): Promise<Harness> {
-    const root = mkdtempSync(path.join(tmpdir(), "moi_e2e_"))
+    const root = options.root ?? mkdtempSync(path.join(tmpdir(), "moi_e2e_"))
     const assets = path.join(root, "assets")
     const home = path.join(root, "home")
-    for (const folder of ["templates", "lenses"]) cpSync(path.join(REPO_DIR, folder), path.join(assets, folder), { recursive: true })
-    mkdirSync(path.join(assets, "extractors"), { recursive: true })
-    const x_spec = JSON.parse(readFileSync(path.join(REPO_DIR, "extractors", "x_home_timeline.json"), "utf-8"))
-    x_spec.start_url = `${world.base_url}/pages/${options.x_page ?? "x_home.html"}`
-    writeFileSync(path.join(assets, "extractors", "x_home_timeline.json"), JSON.stringify(x_spec))
-    mkdirSync(path.join(home, "views"), { recursive: true })
-    mkdirSync(path.join(home, ".moi"), { recursive: true })
-    const views = options.views ?? { feed: fixture_view("feed", world.base_url) }
-    for (const [view_id, text] of Object.entries(views)) writeFileSync(path.join(home, "views", `${view_id}.md`), text)
-    for (const [relative, text] of Object.entries(options.files ?? {})) {
-      mkdirSync(path.dirname(path.join(home, relative)), { recursive: true })
-      writeFileSync(path.join(home, relative), text)
-    }
-    const slot = { base_url: `${world.base_url}/llm/v1`, model: "fake" }
-    writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot }))
+    if (!options.root) Harness.prepare(world, options, assets, home)
     const brain_port = await free_port()
     const relay_port = await free_port()
     const app = await electron.launch({
@@ -120,6 +108,25 @@ export class Harness {
     })
     const chrome = await app.firstWindow()
     return new Harness(app, chrome, `http://127.0.0.1:${brain_port}`, root, relay_port)
+  }
+
+  // A fresh home and assets folder with the fixture views, the X extractor pointed at the fake world and the fake model.
+  private static prepare(world: FakeWorld, options: LaunchOptions, assets: string, home: string): void {
+    for (const folder of ["templates", "lenses"]) cpSync(path.join(REPO_DIR, folder), path.join(assets, folder), { recursive: true })
+    mkdirSync(path.join(assets, "extractors"), { recursive: true })
+    const x_spec = JSON.parse(readFileSync(path.join(REPO_DIR, "extractors", "x_home_timeline.json"), "utf-8"))
+    x_spec.start_url = `${world.base_url}/pages/${options.x_page ?? "x_home.html"}`
+    writeFileSync(path.join(assets, "extractors", "x_home_timeline.json"), JSON.stringify(x_spec))
+    mkdirSync(path.join(home, "views"), { recursive: true })
+    mkdirSync(path.join(home, ".moi"), { recursive: true })
+    const views = options.views ?? { feed: fixture_view("feed", world.base_url) }
+    for (const [view_id, text] of Object.entries(views)) writeFileSync(path.join(home, "views", `${view_id}.md`), text)
+    for (const [relative, text] of Object.entries(options.files ?? {})) {
+      mkdirSync(path.dirname(path.join(home, relative)), { recursive: true })
+      writeFileSync(path.join(home, relative), text)
+    }
+    const slot = { base_url: `${world.base_url}/llm/v1`, model: "fake" }
+    writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot }))
   }
 
   async brain<T>(route: string, body?: unknown): Promise<T> {
@@ -182,9 +189,10 @@ export class Harness {
     return (await this.in_lenses<string>("document.body.innerText")).at(-1) ?? ""
   }
 
-  async close(): Promise<void> {
+  // keep leaves the home in place for a relaunch with { root }.
+  async close(keep = false): Promise<void> {
     await this.app.close()
-    rmSync(this.root, { recursive: true, force: true })
+    if (!keep) rmSync(this.root, { recursive: true, force: true })
   }
 }
 

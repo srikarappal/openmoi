@@ -70,7 +70,9 @@ export class RelayLink {
       if (previous.connected !== this.status.connected || previous.waiting_for_approval !== this.status.waiting_for_approval) {
         this.hooks.changed(this.status, previous)
       }
+      // Asked once per request: when it clears (allowed, or the extension left), the next one asks again.
       const waiting = this.status.waiting_for_approval
+      if (!waiting) this.asked = null
       if (waiting && waiting !== this.asked) {
         this.asked = waiting
         this.hooks.approval_needed(waiting)

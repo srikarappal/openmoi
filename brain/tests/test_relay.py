@@ -313,3 +313,25 @@ def test_allowing_an_extension_that_is_not_connected_just_remembers_it(hub, tmp_
     assert not hub.connected
     assert EXTENSION_ID in json.loads((tmp_path / "trusted.json").read_text())
 
+
+def test_allowing_while_the_extension_is_between_connections_pairs_its_next_one(hub):
+    first = FakeExtension(hub.port)
+    assert first.recv()["type"] == "approval_needed"
+    first.close()
+    wait_for(nobody_waiting, hub)
+    hub.trust(EXTENSION_ID)
+    second = FakeExtension(hub.port)
+    welcome = second.recv()
+    assert welcome["type"] == "welcome" and second.hub_is_genuine(welcome)
+    assert welcome["secret"] == hub.trusted[EXTENSION_ID]
+
+
+def test_the_allow_window_closes(hub, monkeypatch):
+    hub.trust(EXTENSION_ID)
+    monkeypatch.setattr("moi_brain.relay.APPROVAL_WINDOW_SECONDS", 0.0)
+    assert FakeExtension(hub.port).recv()["type"] == "approval_needed"
+
+
+def nobody_waiting(hub: RelayHub) -> bool:
+    return hub.status()["waiting_for_approval"] is None
+

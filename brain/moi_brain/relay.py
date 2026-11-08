@@ -16,6 +16,7 @@ import re
 import secrets
 import sys
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -32,6 +33,8 @@ EXTENSION_ORIGIN = "chrome-extension://"
 EXTENSION_PROOF = "extension:"
 HUB_PROOF = "openmoi:"
 NONCE = re.compile(r"[0-9a-f]{32}")
+# You clicked Allow while the extension was between connections: its next connection within this long is the one you allowed.
+APPROVAL_WINDOW_SECONDS = 120.0
 
 EventHandler = Callable[[dict[str, Any]], None]
 ConfigSource = Callable[[], dict[str, Any]]
@@ -80,6 +83,7 @@ class RelayHub:
         self.extension_id: str | None = None
         # The connection waiting for you to allow it: (connection, extension id, its nonce for the hub's proof).
         self.candidate: tuple[ServerConnection, str, str] | None = None
+        self.allowed_at: dict[str, float] = {}
         self.pending: dict[str, tuple[ServerConnection, PendingCall]] = {}
         self.server: Server | None = None
 
@@ -134,6 +138,10 @@ class RelayHub:
         offered = message.get("proof")
         if secret and isinstance(offered, str) and hmac.compare_digest(offered, proof(secret, EXTENSION_PROOF, challenge)):
             self.activate(connection, extension_id, nonce, secret, issued=False)
+            return
+        allowed_at = self.allowed_at.pop(extension_id, None)
+        if secret and allowed_at is not None and time.monotonic() - allowed_at < APPROVAL_WINDOW_SECONDS:
+            self.activate(connection, extension_id, nonce, secret, issued=True)
             return
         with self.lock:
             self.candidate = (connection, extension_id, nonce)
@@ -242,6 +250,8 @@ class RelayHub:
             candidate = self.candidate if self.candidate and self.candidate[1] == extension_id else None
         if candidate:
             self.activate(candidate[0], extension_id, candidate[2], secret, issued=True)
+        else:
+            self.allowed_at[extension_id] = time.monotonic()
 
     def push_config(self) -> None:
         """Send the current passive sources to a connected extension."""
