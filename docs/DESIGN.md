@@ -279,7 +279,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 
 ### 9.3 Brain (Python 3.12, sync)
 
-* FastAPI with plain `def` handlers (no async code), bound to 127.0.0.1, every request carrying the launch token.
+* FastAPI with plain `def` handlers (no async code), bound to 127.0.0.1, every request carrying the launch token (compared in constant time) and naming 127.0.0.1 as its host, so a web page rebinding a domain to your machine is turned away. State and cache files are written atomically and a damaged one is rebuilt.
 * SQLite through the standard `sqlite3` module; two tables (11.2).
 * Ingest: raw records -> Item, canonical URL with tracking params stripped, dedupe by source id plus native id and by canonical URL.
 * Tagging: new items are stored at once and queued; a background worker sends batches of 10 to the fast model, which picks topics from the watch list (a few common topics plus every topic your rules and memory name). Tagging against a closed list keeps tags and rules in sync. A view with topic rules shows only tagged items (unless tagging is paused), so nothing you asked to hide slips through while a slow local model catches up. `media_kind` comes from the source (YouTube shorts, X video), not the model.
@@ -354,7 +354,7 @@ Memory rules:
 ### 9.5 Lens
 
 * One self contained HTML file per view version, loaded as its own document in a dedicated sandboxed view. The host puts a CSP first in its head; a preload exposes the `moi` helper (11.6), the only thing a lens can call.
-* Sandbox: the lens view has its own session that loads nothing but its document and https images, enforced by the session and by the CSP `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data:`. It cannot navigate or open windows; every message it sends is validated before the host acts on it.
+* Sandbox: the lens view has its own session that loads nothing but its document and the https images of items it was sent (an "image" whose address carries your items elsewhere is refused), enforced by the session and by the CSP `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data:`, which comes first in every lens document. It cannot navigate or open windows; every message it sends is validated before the host acts on it, opens and "less like this" at most at the pace of clicks. The smoke test fails a lens that tries to load anything else.
 * Generation (smart slot): input is the view's Layout text, the item model, the helper API and the matching default lens as an example; output is one HTML file.
 * Smoke test (shell, hidden window): render 30 synthetic items covering every kind, missing fields and long text; expect `ready`, every item id present in the DOM as `data-item-id` and no script errors. One retry with the error attached; if it still fails, keep the current lens and say so in chat. A layout that failed is not retried until its text changes.
 * Versions: numbered files; `current.json` records the live version and the layout hash it was built for; "go back to the previous look" moves the pointer.
@@ -363,7 +363,7 @@ Memory rules:
 ### 9.6 "Mine" for any page
 
 * Readability runs first; if the page reads as an article, it renders in the article lens.
-* Otherwise the shell looks for a saved extractor for the domain and path. If there is none, the skeletonizer strips scripts, styles and SVG, replaces every text node and every text like attribute (`alt`, `title`, `aria-label`) with a length placeholder, keeps tags, classes, roles and structural data attributes, reduces links and image addresses to their shape (structural path words only, digits as 9, other hosts as `ext`), collapses repeated siblings to three examples and caps the result at 60k characters. The smart slot turns that skeleton into a listing spec (11.5), so it never sees your page text.
+* Otherwise the shell looks for a saved extractor for the domain and path. If there is none, the skeletonizer strips scripts, styles and SVG, replaces every text node and every text like attribute (`alt`, `title`, `aria-label`) with a length placeholder, keeps tags, classes, roles and structural data attributes, reduces links and image addresses to their shape (structural path words only, digits as 9, other hosts as `ext`), collapses repeated siblings to three examples and caps the result at 60k characters. Attribute values keep markup words (`user`, `avatar`, `title`, `price`) and mask the rest: in ids and data values every other word, in class names and test ids any word that also shows in the page's text (a handle, a name, a topic) or carries a long number. The smart slot turns that skeleton plus the site's domain (never the page's path or query) into a listing spec (11.5), so it never sees your page text or what you searched for.
 * A spec is accepted when it yields at least 3 items with a title and URL; accepted specs are saved per domain and path pattern.
 * Chatting on a Mine page ("compact table, cheapest first") creates `views/site_<domain>.md`, so a site's look and rules use the same mechanism as any view.
 
@@ -384,7 +384,15 @@ Memory rules:
 openMoi reads through the Chrome you already use, so there is nothing to sign in to twice.
 
 * **Extension** (`shell/src/extension`, Manifest V3): runs the same page operations as openMoi's preload (extract, scroll, challenge, skeleton, Readability), injected into a tab only when needed. Background reads open a quiet tab in a collapsed "openMoi" tab group and close it right after; openMoi never closes a tab it did not open. A passive watcher reads source pages you browse yourself (X home) and sends new items as they appear. The toolbar popup shows the connection, a "Mine this page" button and a switch for passive reading.
-* **Brain relay hub** (`relay.py`): a WebSocket server on 127.0.0.1 only. A connection must come from a `chrome-extension://` origin; a new extension waits until you press Allow in openMoi, which remembers it. Calls from the window go out to the extension and wait for its reply; events come back the other way (passive records for known source pages, Mine requests).
+* **Brain relay hub** (`relay.py`): a WebSocket server on 127.0.0.1 only. A connection must come from a `chrome-extension://` origin; a new extension waits until you press Allow in openMoi. Calls from the window go out to the extension and wait for its reply; events come back the other way (passive records for known source pages, Mine requests) and are handled on their own worker, so a slow compile never delays a reply.
+* **Pairing:** an origin header is easy to forge for another program on your Mac, so Allow also gives the extension a secret (kept in the extension's storage and in `.moi/relay_trusted.json`, readable only by you). On every connection each side proves it holds the secret for a fresh nonce from the other:
+
+      connect -> hub: challenge -> extension: hello + proof (if paired)
+        proof fits -> welcome + the hub's proof -> extension checks it -> connected
+        otherwise -> Allow in openMoi -> welcome + new secret -> extension keeps it
+      a paired extension meeting a hub without its secret -> "unrecognized" -> takes no calls -> Pair again in the popup
+
+  A program posing as the extension gets no calls; one posing as openMoi while openMoi is closed gets nothing from Chrome. The extension reads only tabs openMoi opened for reading or tabs you pressed Mine on; passive reading only covers pages under a source's address.
 * **Window** (`relay_link.ts`, `drivers.ts`): polls the hub once a second for state, approval requests and Mine requests; picks the page driver; opens originals in your Chrome; shows a page you pressed Mine on as a "Mine:" tab.
 * **Keeping the extension awake:** Chrome keeps an extension service worker alive while its WebSocket is active, so the extension pings every 20 s; an alarm reconnects it if Chrome stopped it anyway.
 * **Fallback:** without the extension, openMoi reads in its own Chromium session and says that connecting Chrome would use your Chrome sign in.
@@ -521,8 +529,10 @@ CREATE TABLE items (
     url TEXT NOT NULL,
     published_at TEXT,
     fetched_at TEXT NOT NULL,
+    listed_at TEXT,          -- the last time a source still listed it; items expire a month after that
     seen_at TEXT,
-    item_json TEXT NOT NULL
+    item_json TEXT NOT NULL,
+    UNIQUE (source_id, url)  -- one copy per source; a view shows each URL once; seeing one copy marks them all
 );
 
 CREATE INDEX items_by_published ON items (published_at);
@@ -734,18 +744,18 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 | M2 Yours | .md views and memory, compile, tagging, rules, ranking with reasons, seen and "caught up", chat edits with diff confirm, "less like this", a second view file | "No shorts, hide politics, Maya first" works by chat and by hand edit; every item shows its reasons; "caught up" appears | 2 weeks |
 | M3 Mine | Lens generation with smoke test and versions; Mine with Readability, generated listing extractors and drift regeneration | A "two column magazine" lens in under 60 s; Mine works on at least 7 of 10 test sites (Hacker News, Amazon search, a blog, a news article, a shop, a forum, a docs site, three more) | 2 to 3 weeks |
 
-### 13.1 As built (Nov 4, 2026)
+### 13.1 As built (Nov 8, 2026)
 
 | Check | Result |
 |---|---|
-| Tests | 235 brain (unit and API integration), 187 shell and extension unit, 21 end to end in the real app (5 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 375 brain (unit, property, API integration and 22 user journeys; 100% line and branch coverage), 305 shell and extension unit (97% of lines), 25 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; the background read tab closes after each read |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
 | Real feeds | Live Ars Technica and The Verge RSS plus two YouTube handles: 60 items in 1.6 s |
 | Real local model | llama3 8B on Ollama tags sensibly but needs about 6 s per item, which is why tagging runs in the background |
 | Real hosted model | Nemotron 3.5 on OpenRouter (free): a tagging call in 0.7 s with reasoning off; a "two column magazine" lens written in 45 s that rendered 30 of 30 synthetic items with no errors |
-| Code size | About 6k lines of product code including the extension (budget 8k) |
+| Code size | About 7.2k lines of product code including the extension (budget 8k) |
 
 Not yet measured: Mine on 7 of 10 real sites with a real smart model.
 
