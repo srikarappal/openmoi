@@ -1,5 +1,6 @@
 """The Brain composes storage, sources, compilation, ranking and lenses behind one object."""
 
+import sys
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -113,10 +114,12 @@ class Brain:
         http: httpx.Client | None = None,
         youtube_base: str = YOUTUBE_BASE,
         clock: Callable[[], datetime] = utc_now,
+        settings_problems: list[str] | None = None,
     ):
         ensure_home(paths)
         self.paths = paths
         self.clock = clock
+        self.settings_problems = list(settings_problems or [])
         self.http = http or httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True)
         self.store = Store(paths.db)
         self.gateway = Gateway(settings, paths.llm_log, self.http)
@@ -159,6 +162,9 @@ class Brain:
                     self.source_status[source_id] = "ok"
                 except FeedError as error:
                     self.source_status[source_id] = str(error)
+                except Exception as error:
+                    print(f"refresh of {source_id} failed: {error!r}", file=sys.stderr)
+                    self.source_status[source_id] = f"could not be stored: {error}"
                 self.fetched_at[source_id] = self.clock()
         finally:
             with self.lock:
@@ -286,7 +292,7 @@ class Brain:
             refreshing=refreshing,
             caught_up=not has_more and not refreshing,
             summary=compiled.summary,
-            warnings=[*compiled.warnings, *problems],
+            warnings=[*compiled.warnings, *problems, *self.settings_problems],
             version=compiled.file_hash,
             layout_hash=compiled.layout_hash,
             lens_stale=self.lenses.is_stale(lens_key(view_id, "feed"), compiled.layout, compiled.layout_hash),
@@ -322,6 +328,7 @@ class Brain:
         settings = apply_model_change(self.gateway.settings, change)
         save_settings(self.paths, settings)
         self.gateway.settings = settings
+        self.settings_problems = []
         self.tagger.retry_now()
         return model_info(settings)
 

@@ -43,8 +43,8 @@ def entry_image(entry: Any, summary: str) -> str | None:
         if thumbnail.get("url"):
             return thumbnail["url"]
     for media in entry.get("media_content", []):
-        if media.get("medium") == "image" or str(media.get("type", "")).startswith("image/"):
-            return media.get("url")
+        if media.get("url") and (media.get("medium") == "image" or str(media.get("type", "")).startswith("image/")):
+            return media["url"]
     for link in entry.get("links", []):
         if link.get("rel") == "enclosure" and str(link.get("type", "")).startswith("image/"):
             return link.get("href")

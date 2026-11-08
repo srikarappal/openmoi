@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 
 import feedparser
@@ -105,7 +106,15 @@ def test_youtube_fails_only_when_the_page_fails_too(tmp_path, services):
             FeedFetcher(http, tmp_path / "channels.json", services.base_url).fetch_youtube("@ghost")
 
 
-@pytest.mark.parametrize("page", ["<html>no data</html>", "<script>var ytInitialData = {broken;</script>", '<script>var ytInitialData = {"a": 1};</script>'])
+@pytest.mark.parametrize(
+    "page",
+    [
+        "<html>no data</html>",
+        "<script>var ytInitialData = {broken;</script>",
+        "<script>var ytInitialData = {not: json};</script>",
+        '<script>var ytInitialData = {"a": 1};</script>',
+    ],
+)
 def test_channel_pages_without_videos_give_nothing(page):
     assert channel_page_videos(page, datetime.now(UTC)) == []
 
@@ -158,3 +167,51 @@ def test_entry_record_without_dates_or_links():
 def test_strip_html():
     assert strip_html("<p>a</p><br>b &lt;c&gt;") == "a  b <c>"
     assert strip_html(None) == ""
+
+
+def test_entry_image_skips_candidates_without_an_address():
+    entry = {
+        "media_thumbnail": [{"width": "120"}],
+        "media_content": [{"medium": "image"}, {"url": "https://i/clip.mp4", "type": "video/mp4"}],
+        "links": [{"rel": "enclosure", "type": "image/jpeg", "href": "https://i/e.jpg"}],
+    }
+    assert entry_image(entry, "") == "https://i/e.jpg"
+
+
+def youtube_down(request: httpx.Request) -> httpx.Response:
+    """YouTube with the feed server down; the channel page has no uploads and the handle page no channel id."""
+    if request.url.path == "/feeds/videos.xml":
+        return httpx.Response(404, text="not found")
+    if request.url.path.endswith("/videos"):
+        return httpx.Response(200, text="<html><script>var ytInitialData = {\"contents\": {}};</script></html>")
+    return httpx.Response(200, text="<html>a channel page without ids</html>")
+
+
+@pytest.fixture
+def offline_fetcher(tmp_path):
+    with httpx.Client(transport=httpx.MockTransport(youtube_down)) as http:
+        yield FeedFetcher(http, tmp_path / "channels.json", "https://yt.example")
+
+
+def test_a_channel_page_without_uploads_is_an_error(offline_fetcher):
+    with pytest.raises(FeedError, match="returned 404; the channel page listed no videos"):
+        offline_fetcher.fetch_youtube(CHANNEL_ID)
+
+
+def test_a_handle_page_without_a_channel_id_is_an_error(offline_fetcher):
+    with pytest.raises(FeedError, match="@ghost has no channel id on its page"):
+        offline_fetcher.fetch_youtube("@ghost")
+
+
+def test_page_entries_without_ids_are_skipped():
+    data = {
+        "contents": [
+            {"lockupViewModel": {"contentType": "LOCKUP_CONTENT_TYPE_VIDEO"}},
+            {"videoRenderer": {"title": {"runs": [{"text": "no id"}]}}},
+            {"videoRenderer": {"videoId": "VIDEO00009Z", "title": {"runs": [{"text": "Bare "}, {"text": "video"}]}}},
+        ]
+    }
+    page = f"<script>var ytInitialData = {json.dumps(data)};</script>"
+    [video] = channel_page_videos(page, datetime.now(UTC))
+    assert (video["native_id"], video["title"], video["image_url"], video["published_at"], video["author_name"]) == ("VIDEO00009Z", "Bare video", None, None, None)
+

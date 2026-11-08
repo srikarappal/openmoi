@@ -53,7 +53,7 @@ class RelayHub:
         self.connection: ServerConnection | None = None
         self.extension_id: str | None = None
         self.candidate: tuple[ServerConnection, str] | None = None
-        self.pending: dict[str, PendingCall] = {}
+        self.pending: dict[str, tuple[ServerConnection, PendingCall]] = {}
         self.server: Server | None = None
 
     def start(self, port: int = DEFAULT_PORT) -> int:
@@ -100,12 +100,14 @@ class RelayHub:
             self.forget(connection)
 
     def activate(self, connection: ServerConnection, extension_id: str) -> None:
+        """A new connection replaces the old one; calls sent on the old one will never be answered, so they fail now."""
         with self.lock:
             previous = self.connection
             self.connection = connection
             self.extension_id = extension_id
             self.candidate = None
         if previous is not None and previous is not connection:
+            self.fail_calls(previous, "Chrome reconnected before answering")
             previous.close()
         self.send(connection, {"type": "welcome", **self.config()})
 
@@ -114,13 +116,16 @@ class RelayHub:
         with self.lock:
             if self.candidate and self.candidate[0] is connection:
                 self.candidate = None
-            if self.connection is not connection:
-                return
-            self.connection = None
-            waiting = list(self.pending.values())
-            self.pending.clear()
-        for call in waiting:
-            call.error = "Chrome disconnected"
+            if self.connection is connection:
+                self.connection = None
+        self.fail_calls(connection, "Chrome disconnected")
+
+    def fail_calls(self, connection: ServerConnection, reason: str) -> None:
+        with self.lock:
+            failed = [call_id for call_id, (sent_on, _) in self.pending.items() if sent_on is connection]
+            calls = [self.pending.pop(call_id)[1] for call_id in failed]
+        for call in calls:
+            call.error = reason
             call.done.set()
 
     def receive(self, connection: ServerConnection, message: dict[str, Any]) -> None:
@@ -134,8 +139,9 @@ class RelayHub:
             return
         if kind == "reply":
             with self.lock:
-                call = self.pending.pop(str(message.get("call_id")), None)
-            if call:
+                entry = self.pending.pop(str(message.get("call_id")), None)
+            if entry:
+                call = entry[1]
                 call.result = message.get("result")
                 call.error = message.get("error")
                 call.done.set()
@@ -160,7 +166,7 @@ class RelayHub:
             connection = self.connection
             if connection is None:
                 raise RelayError("Chrome is not connected")
-            self.pending[call_id] = call
+            self.pending[call_id] = (connection, call)
         self.send(connection, {"type": "call", "call_id": call_id, "op": op, "args": args})
         if not call.done.wait(timeout):
             with self.lock:

@@ -1,5 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+from conftest import set_time_zone
+
 from moi_brain.compile import Condition, Rule
 from moi_brain.items import normalize
 from moi_brain.rank import age_hours, describe, matches, rank
@@ -59,6 +62,38 @@ def test_limit_counts_per_published_day():
     items = [make_item("x", "today", 1), make_item("x", "today2", 2), make_item("x", "yesterday", 30)]
     page, _ = rank(items, [rule("limit", "source_id", "eq", "x", count_per_day=1)], NOW)
     assert ids(page) == ["today", "yesterday"]
+
+
+@pytest.fixture
+def pacific_clock(utc_clock):
+    set_time_zone("America/Los_Angeles")
+    yield
+    set_time_zone("UTC")
+
+
+def test_an_item_one_limit_drops_does_not_use_up_another_limit():
+    items = [
+        make_item("x", "maya1", 1, author_handle="maya"),
+        make_item("x", "maya2", 2, author_handle="maya"),
+        make_item("x", "bob", 3, author_handle="bob"),
+    ]
+    limits = [rule("limit", "source_id", "eq", "x", count_per_day=2), rule("limit", "author_handle", "eq", "maya", count_per_day=1)]
+    page, _ = rank(items, limits, NOW)
+    assert ids(page) == ["maya1", "bob"]
+
+
+def test_limits_count_days_on_your_clock(pacific_clock):
+    items = [make_item("x", "morning", 1), make_item("x", "last_evening", 9)]
+    page, _ = rank(items, [rule("limit", "source_id", "eq", "x", count_per_day=1)], NOW)
+    assert ids(page) == ["morning", "last_evening"]
+
+
+def test_age_rules_compare_hours(pacific_clock):
+    item = make_item("x", "a", 5)
+    assert matches(Condition(field="age_hours", op="gt", value="4"), item, NOW)
+    assert matches(Condition(field="age_hours", op="lt", value="6"), item, NOW)
+    assert matches(Condition(field="age_hours", op="eq", value="5"), item, NOW)
+    assert not matches(Condition(field="age_hours", op="eq", value="soon"), item, NOW)
 
 
 def test_excluded_items_still_count_toward_limits():

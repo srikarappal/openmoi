@@ -82,19 +82,19 @@ def reasons(item: Item, boosts: list[Rule], now: datetime) -> list[str]:
 
 
 def apply_limits(scored: list[Scored], rules: list[Rule], now: datetime) -> list[Scored]:
-    """Keep at most count_per_day matching items per published day, best scored first."""
+    """Keep at most count_per_day matching items per published day on your clock, best scored first.
+
+    An item that one limit drops does not use up another limit's allowance."""
     limits = [(index, rule) for index, rule in enumerate(rules) if rule.do == "limit" and rule.count_per_day is not None]
     counts: dict[tuple[int, str], int] = {}
     kept = []
     for entry in scored:
         item = entry[1]
-        day = (item.published_at or item.fetched_at).date().isoformat()
-        over = False
-        for index, rule in limits:
-            if applies(rule, item, now):
-                counts[(index, day)] = counts.get((index, day), 0) + 1
-                over = over or counts[(index, day)] > rule.count_per_day
-        if not over:
+        day = (item.published_at or item.fetched_at).astimezone().date().isoformat()
+        allowances = [((index, day), rule.count_per_day) for index, rule in limits if applies(rule, item, now)]
+        if all(counts.get(key, 0) < allowed for key, allowed in allowances):
+            for key, _ in allowances:
+                counts[key] = counts.get(key, 0) + 1
             kept.append(entry)
     return kept
 

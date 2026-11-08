@@ -218,9 +218,19 @@ def ensure_home(paths: Paths) -> None:
     copy_missing(paths.templates / "memory", paths.memory)
 
 
+class SettingsFileError(ValueError):
+    """config.json exists but does not hold valid settings."""
+
+
 def load_settings(paths: Paths) -> Settings:
     if paths.settings_file.exists():
-        return Settings.model_validate_json(paths.settings_file.read_text())
+        try:
+            return Settings.model_validate_json(paths.settings_file.read_text())
+        except ValueError as error:
+            detail = " ".join(str(error).split())[:200]
+            raise SettingsFileError(
+                f".moi/config.json could not be read ({detail}); openMoi uses its default models until you fix the file or run /model"
+            ) from error
     settings = Settings()
     save_settings(paths, settings)
     return settings

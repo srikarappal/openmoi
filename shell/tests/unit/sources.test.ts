@@ -12,14 +12,24 @@ const SOURCE = {
 
 // A timeline that shows one more post after every scroll, like X.
 class FakeTimeline implements PageDriver {
-  readonly kind = "chrome" as const
+  readonly kind: "chrome" | "openmoi" = "chrome"
   scrolls = 0
+  failures = 0
+
+  constructor(kind: "chrome" | "openmoi" = "chrome", failures = 0) {
+    this.kind = kind
+    this.failures = failures
+  }
 
   async open(): Promise<string> {
     return "tab1"
   }
 
   async run<T>(handle: string, op: string): Promise<T> {
+    if (op === "scroll" && this.failures > 0 && this.scrolls === 2) {
+      this.failures -= 1
+      throw new Error("Chrome reconnected before answering")
+    }
     if (op === "scroll") this.scrolls += 1
     if (op === "challenge") return false as T
     const records: RawRecord[] = Array.from({ length: this.scrolls + 1 }, (_, index) => ({ native_id: `post${index}` }))
@@ -48,3 +58,29 @@ describe("SourceReader depth", () => {
     expect(new Set(delivered).size).toBe(delivered.length)
   })
 })
+
+describe("SourceReader retry", () => {
+  it("tries once more after Chrome fails mid read, without delivering a record twice", async () => {
+    const timeline = new FakeTimeline("chrome", 1)
+    const delivered: string[] = []
+    const outcome = await new SourceReader(() => timeline).read(SOURCE, true, async (records) => {
+      delivered.push(...records.map((record) => String(record.native_id)))
+    })
+    expect(outcome.status).toBe("read")
+    expect(new Set(delivered).size).toBe(delivered.length)
+  }, 10_000)
+
+  it("does not retry openMoi's own session and reports the failure", async () => {
+    const timeline = new FakeTimeline("openmoi", 1)
+    const outcome = await new SourceReader(() => timeline).read(SOURCE, true, async () => {})
+    expect(outcome).toEqual({ status: "failed", error: "Chrome reconnected before answering", driver: "openmoi" })
+  })
+
+  it("skips a source read in the last ten minutes unless forced", async () => {
+    const reader = new SourceReader(() => new FakeTimeline())
+    expect((await reader.read(SOURCE, false, async () => {})).status).toBe("read")
+    expect(await reader.read(SOURCE, false, async () => {})).toEqual({ status: "skipped" })
+    expect((await reader.read(SOURCE, true, async () => {})).status).toBe("read")
+  })
+})
+

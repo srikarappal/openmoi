@@ -171,7 +171,75 @@ def test_a_new_connection_replaces_the_old_one(hub):
     assert hub.call("url", {}) == "second"
 
 
+def test_calls_on_a_replaced_connection_fail_at_once_instead_of_timing_out(hub):
+    first = trusted_extension(hub)
+    failures: list[str] = []
+    caller = threading.Thread(target=record_failure, args=(hub, failures))
+    started = time.monotonic()
+    caller.start()
+    wait_for(has_pending_calls, hub)
+    second = trusted_extension(hub)
+    caller.join(timeout=5)
+    assert failures == ["Chrome reconnected before answering"]
+    assert time.monotonic() - started < 2
+    assert hub.pending == {}
+    second.answer_calls(second_answer)
+    assert hub.call("url", {}) == "second"
+    first.close()
+
+
 def test_push_config_sends_sources_to_a_connected_extension(hub):
     extension = trusted_extension(hub)
     hub.push_config()
     assert extension.recv() == {"type": "config", **passive_config()}
+
+
+def explode(message: dict) -> None:
+    raise RuntimeError("brain hiccup")
+
+
+def test_garbage_from_the_extension_drops_its_connection(hub):
+    extension = trusted_extension(hub)
+    extension.connection.send("this is not json")
+    wait_for(is_disconnected, hub)
+    assert not hub.connected
+
+
+def test_a_failing_event_handler_is_logged_and_the_connection_stays(tmp_path, capsys):
+    hub = RelayHub(tmp_path / "trusted.json", explode, passive_config)
+    hub.port = hub.start(0)
+    try:
+        extension = trusted_extension(hub)
+        extension.send({"type": "event", "event": "mine"})
+        extension.send({"type": "ping"})
+        assert extension.recv() == {"type": "pong"}
+        assert "relay event failed: brain hiccup" in capsys.readouterr().err
+        assert hub.connected
+    finally:
+        hub.stop()
+
+
+def test_replies_from_a_waiting_extension_and_unknown_messages_are_ignored(hub):
+    extension = trusted_extension(hub)
+    stranger = FakeExtension(hub.port, OTHER_ID)
+    assert stranger.recv()["type"] == "approval_needed"
+    stranger.send({"type": "reply", "call_id": "x", "result": 1})
+    extension.send({"type": "surprise"})
+    extension.send({"type": "reply", "call_id": "unknown", "result": 1})
+    extension.send({"type": "ping"})
+    assert extension.recv() == {"type": "pong"}
+    assert hub.connected
+
+
+def test_sending_to_a_closed_connection_is_quiet(hub):
+    extension = trusted_extension(hub)
+    connection = hub.connection
+    extension.close()
+    wait_for(is_disconnected, hub)
+    hub.send(connection, {"type": "config"})
+    hub.push_config()
+
+
+def test_stop_without_start_is_fine(tmp_path, events):
+    RelayHub(tmp_path / "trusted.json", events, passive_config).stop()
+

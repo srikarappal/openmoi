@@ -13,7 +13,11 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = [
+    "hypothesis>=6.170.15",
+    "pytest>=8.0",
+    "pytest-cov>=7.1.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -25,4 +29,11 @@ packages = ["moi_brain"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["../fixtures"]
-filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient`",
+    "error::pytest.PytestUnhandledThreadExceptionWarning",
+]
+
+[tool.coverage.report]
+exclude_also = ["if __name__ == .__main__.:"]
+

@@ -1,5 +1,6 @@
 """Shared fixtures: a running fake world, a fresh openMoi home and a brain wired to both."""
 
+import os
 import time
 from collections.abc import Iterator
 
@@ -27,6 +28,24 @@ def wait_until_refreshed(client: TestClient, view_id: str = "feed", timeout: flo
         if not page["refreshing"] or time.monotonic() > deadline:
             return page
         time.sleep(0.05)
+
+
+def set_time_zone(zone: str | None) -> None:
+    """The process's local time zone; None goes back to the system's."""
+    if zone is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = zone
+    time.tzset()
+
+
+@pytest.fixture(autouse=True)
+def utc_clock() -> Iterator[None]:
+    """Every test runs on a UTC clock, so "per day" means the same thing on every machine."""
+    previous = os.environ.get("TZ")
+    set_time_zone("UTC")
+    yield
+    set_time_zone(previous)
 
 
 @pytest.fixture(scope="session")

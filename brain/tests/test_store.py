@@ -80,3 +80,8 @@ def test_store_survives_reopen(tmp_path):
     item = make_item("x", "1")
     Store(tmp_path / "db.sqlite").upsert_items([item])
     assert Store(tmp_path / "db.sqlite").get_item(item.item_id) == item
+
+
+def test_get_items_with_no_ids_skips_the_database(tmp_path):
+    assert Store(tmp_path / "db.sqlite").get_items([]) == {}
+

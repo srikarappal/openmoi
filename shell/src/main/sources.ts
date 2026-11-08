@@ -7,6 +7,7 @@ import type { DriverKind, PageDriver } from "./drivers"
 const AUTO_INTERVAL_MS = 10 * 60 * 1000
 const FIRST_ITEMS_TIMEOUT_MS = 10_000
 const POLL_MS = 400
+const RETRY_PAUSE_MS = 2_000
 
 export type SourceOutcome =
   | { status: "read"; count: number; driver: DriverKind }
@@ -34,13 +35,21 @@ export class SourceReader {
   // One page load plus the budgeted scrolls, times depth when you scroll past the end; automatic reads at most every 10 minutes per source.
   async read(source: PageSource, force: boolean, on_batch: BatchHandler, depth = 1): Promise<SourceOutcome> {
     if (!this.throttle.allow(source.source_id, force)) return { status: "skipped" }
-    const driver = await this.driver_for()
+    const collected = new Map<string, RawRecord>()
+    const outcome = await this.attempt(await this.driver_for(), source, collected, on_batch, depth)
+    if (outcome.status !== "failed" || outcome.driver !== "chrome") return outcome
+    // Chrome may have restarted the extension mid read: try once more through the connection it has now.
+    await sleep(RETRY_PAUSE_MS)
+    return this.attempt(await this.driver_for(), source, collected, on_batch, depth)
+  }
+
+  // Records already delivered stay in collected, so a retry never hands the same record over twice.
+  private async attempt(driver: PageDriver, source: PageSource, collected: Map<string, RawRecord>, on_batch: BatchHandler, depth: number): Promise<SourceOutcome> {
     let handle: string | null = null
     try {
       handle = await driver.open(source.start_url, true)
       const first = await this.first_records(driver, handle, source)
       if (first === null) return { status: "challenge", url: await driver.url(handle), driver: driver.kind }
-      const collected = new Map<string, RawRecord>()
       await deliver(first, collected, on_batch)
       const steps = source.spec.pagination.kind === "scroll" && first.length ? source.budget.scroll_steps * depth : 0
       for (let step = 0; step < steps; step++) {

@@ -19,6 +19,16 @@ def page_ids(page: dict) -> list[str]:
     return [view_item["item"]["native_id"] for view_item in page["items"]]
 
 
+class ExtractorStub:
+    """Answers every extractor lookup with one spec."""
+
+    def __init__(self, spec):
+        self.spec = spec
+
+    def __call__(self, domain: str, page_type: str):
+        return self.spec
+
+
 def half_a_day_later() -> datetime:
     return utc_now() + SEEN_KEEP + timedelta(minutes=1)
 
@@ -133,3 +143,30 @@ def test_debug_reports_sources(client):
     assert debug["sources"]["rss:tech"] == "ok"
     assert debug["store"]["items"]["youtube:veritasium"] == 3
     assert debug["refreshing"] == []
+
+
+def test_a_refresh_already_running_is_not_started_twice(client, brain, services):
+    brain.refreshing.add("feed")
+    client.post("/refresh", json={"view_id": "feed"})
+    assert not [request for request in services.requests if request["path"].startswith("/rss/")]
+    brain.refreshing.discard("feed")
+
+
+def test_an_extractor_without_a_start_page_is_not_read(client, brain, monkeypatch):
+    spec = brain.extractors.for_page_type("x.com", "home_timeline")
+    monkeypatch.setattr(brain.extractors, "for_page_type", ExtractorStub(spec.model_copy(update={"start_url": ""})))
+    assert client.post("/refresh", json={"view_id": "feed"}).json()["page_sources"] == []
+    wait_until_refreshed(client)
+
+
+def broken_records(source_id: str, records: list[dict]) -> None:
+    raise ValueError(f"bad record from {source_id}")
+
+
+def test_one_source_that_breaks_while_storing_does_not_stop_the_others(client, brain, monkeypatch):
+    monkeypatch.setattr(brain, "store_records", broken_records)
+    client.post("/refresh", json={"view_id": "feed"})
+    page = wait_until_refreshed(client)
+    assert page["refreshing"] is False
+    assert len([warning for warning in page["warnings"] if "could not be stored: bad record" in warning]) >= 3
+
