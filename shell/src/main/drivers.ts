@@ -17,6 +17,10 @@ export interface PageDriver {
   close(handle: string): Promise<void>
 }
 
+function is_aborted(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === "ERR_ABORTED"
+}
+
 // Your Chrome, with your sessions, through the openMoi extension.
 export class RelayDriver implements PageDriver {
   readonly kind = "chrome" as const
@@ -60,7 +64,15 @@ export class ElectronDriver implements PageDriver {
     this.host.attach_behind(view)
     const handle = `view:${this.next_id++}`
     this.pages.set(handle, { contents: view.webContents, view })
-    await view.webContents.loadURL(url)
+    try {
+      await view.webContents.loadURL(url)
+    } catch (error) {
+      // A load cut short by a redirect (a sign in wall, say) still leaves a page to look at; anything else closes the view.
+      if (!is_aborted(error)) {
+        await this.close(handle)
+        throw error
+      }
+    }
     return handle
   }
 
@@ -71,7 +83,7 @@ export class ElectronDriver implements PageDriver {
     return handle
   }
 
-  run<T>(handle: string, op: PageOp, args: Record<string, unknown> = {}): Promise<T> {
+  async run<T>(handle: string, op: PageOp, args: Record<string, unknown> = {}): Promise<T> {
     return call_page<T>(this.page(handle).contents, op, args)
   }
 

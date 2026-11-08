@@ -120,3 +120,48 @@ describe("ViewController reading further down", () => {
   })
 })
 
+describe("ViewController one read at a time", () => {
+  it("a refresh during a read further down waits for it, so two reads never overlap", async () => {
+    let running = 0
+    let most = 0
+    const { views, context, sources } = make_views([])
+    sources.read.mockImplementation(async () => {
+      running += 1
+      most = Math.max(most, running)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      running -= 1
+      return { status: "read", count: 10 * sources.read.mock.calls.length, driver: "chrome" } as SourceOutcome
+    })
+    await views.refresh(context, false)
+    await Promise.all([views.on_event(context, { type: "more", cursor: "deeper" }), views.refresh(context, true), views.on_event(context, { type: "more", cursor: "deeper" })])
+    expect(most).toBe(1)
+    expect(sources.read.mock.calls.map((call) => (call as unknown[])[3])).toEqual([1, 1, 2])
+  })
+
+  it("reading further down waits for the first read and skips going deeper when it brought new items", async () => {
+    let finish: (outcome: SourceOutcome) => void = () => {}
+    const more_page = { ...PAGE, has_more: true } as ViewPage
+    const { views, context, sources } = make_views([], [PAGE, PAGE, more_page])
+    sources.read.mockImplementationOnce(() => new Promise<SourceOutcome>((resolve) => (finish = resolve)))
+    const refreshing = views.refresh(context, false)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const deeper = views.on_event(context, { type: "more", cursor: "deeper" })
+    finish({ status: "read", count: 20, driver: "chrome" })
+    await Promise.all([refreshing, deeper])
+    expect(sources.read).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("ViewController warnings that come back", () => {
+  it("shows a warning again after it cleared and returned", async () => {
+    const WARNING = "Topic tagging paused: the model is not running"
+    const warned = { ...PAGE, warnings: [WARNING] } as ViewPage
+    const { views, context, hooks } = make_views([], [warned, warned, PAGE, PAGE, warned, warned])
+    await views.refresh(context, false)
+    await views.refresh(context, false)
+    await views.refresh(context, false)
+    expect(hooks.notify.mock.calls.filter((call) => call[0] === WARNING)).toHaveLength(2)
+    expect(hooks.retract).toHaveBeenCalledWith(`warning:${WARNING}`)
+  })
+})
+

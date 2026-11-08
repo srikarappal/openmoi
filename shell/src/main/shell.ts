@@ -274,15 +274,25 @@ export class Shell implements ViewHost {
     this.mine.disable(tab_mine_key(tab.tab_id))
   }
 
+  // Making a Mine view can take minutes; a tab closed meanwhile drops it, and one you left stays in the background.
   private async toggle_mine(tab: Tab): Promise<void> {
     if (tab.mine) {
       this.set_mine_off(tab)
-    } else {
-      const url = tab.view.webContents.getURL()
-      this.chat.say(`Making your version of ${site_domain(url)}.`)
-      tab.mine = await this.mine.enable({ key: tab_mine_key(tab.tab_id), driver: this.electron, handle: this.electron.adopt(tab.view.webContents), url })
+      this.activate({ kind: "tab", tab_id: tab.tab_id })
+      return
     }
-    this.activate({ kind: "tab", tab_id: tab.tab_id })
+    const ticket = this.activations
+    const url = tab.view.webContents.getURL()
+    const key = tab_mine_key(tab.tab_id)
+    this.chat.say(`Making your version of ${site_domain(url)}.`)
+    const enabled = await this.mine.enable({ key, driver: this.electron, handle: this.electron.adopt(tab.view.webContents), url })
+    if (!this.tabs.get(tab.tab_id)) {
+      this.mine.disable(key)
+      return
+    }
+    tab.mine = enabled
+    if (ticket === this.activations) this.activate({ kind: "tab", tab_id: tab.tab_id })
+    else this.push_state()
   }
 
   private open_in_tab(tab_id: number, url: string): void {
@@ -354,7 +364,7 @@ export class Shell implements ViewHost {
         this.open_tab(command.url)
         return
       case "select_tab":
-        this.activate({ kind: "tab", tab_id: command.tab_id })
+        if (this.tabs.get(command.tab_id)) this.activate({ kind: "tab", tab_id: command.tab_id })
         return
       case "close_tab": {
         const tab = this.tabs.get(command.tab_id)

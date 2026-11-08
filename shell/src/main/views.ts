@@ -34,6 +34,8 @@ function challenge_text(source_id: string, driver: DriverKind): string {
   return `${source_id} needs your Chrome sign in: open Chrome with the openMoi extension and it loads by itself, or sign in here, then refresh.`
 }
 
+function ignore(): void {}
+
 function source_tag(source_id: string): string {
   return `source:${source_id}`
 }
@@ -52,6 +54,7 @@ export class ViewController {
   private readonly depths = new Map<string, number>()
   private readonly reached = new Map<string, number>()
   private readonly deepening = new Set<string>()
+  private readonly reading = new Map<string, Promise<void>>()
 
   constructor(
     private readonly brain: BrainClient,
@@ -98,10 +101,13 @@ export class ViewController {
     return deeper ? DEEPER_CURSOR : null
   }
 
-  // Each warning shows once per view and version, so a notice you dismissed stays dismissed; one that no longer holds goes away.
+  // Each warning shows once per view and version, so a notice you dismissed stays dismissed; one that no longer holds goes away
+  // and shows again if it comes back.
   private report(page: ViewPage): void {
     for (const warning of this.warned.get(page.view_id) ?? []) {
-      if (!page.warnings.includes(warning)) this.hooks.retract(warning_tag(warning))
+      if (page.warnings.includes(warning)) continue
+      this.hooks.retract(warning_tag(warning))
+      for (const key of this.reported) if (key.startsWith(`${page.view_id}\0`) && key.endsWith(`\0${warning}`)) this.reported.delete(key)
     }
     this.warned.set(page.view_id, page.warnings)
     for (const warning of page.warnings) {
@@ -117,7 +123,6 @@ export class ViewController {
     await this.hooks.track(`Updating ${context.view_id}`, async () => {
       const { page_sources } = await this.brain.refresh(context.view_id, force)
       this.page_sources.set(context.view_id, page_sources)
-      this.depths.set(context.view_id, 1)
       await Promise.all([this.settle(context), this.read_and_settle(context, page_sources, force, 1)])
     })
   }
@@ -139,27 +144,39 @@ export class ViewController {
   }
 
   // You scrolled past everything stored: read the page sources again and further down, at the same human pace.
+  // A read still running may bring the next items, so it finishes first; only then, with nothing new waiting, go deeper.
   private async go_deeper(context: LensContext): Promise<void> {
     const view_id = context.view_id
     if (this.deepening.has(view_id)) return
-    const depth = (this.depths.get(view_id) ?? 1) + 1
-    if (depth > MAX_DEPTH) {
-      await this.append_next(context)
-      return
-    }
-    this.depths.set(view_id, depth)
     this.deepening.add(view_id)
     try {
+      await this.reading.get(view_id)
+      const page = await this.append_next(context)
+      const depth = (this.depths.get(view_id) ?? 1) + 1
+      if (page.items.length || page.has_more || depth > MAX_DEPTH) return
+      this.depths.set(view_id, depth)
       await this.hooks.track(`Reading further down for ${view_id}`, () => this.read_and_settle(context, this.page_sources.get(view_id) ?? [], true, depth))
     } finally {
       this.deepening.delete(view_id)
     }
   }
 
-  // A read further down that reached no more records than the one before means the page has nothing more: caught up.
-  private async read_and_settle(context: LensContext, sources: PageSource[], force: boolean, depth: number): Promise<void> {
-    if (!sources.length) return
+  // One read of a view's page sources at a time: a refresh during a read further down waits for it, so two reads never
+  // scroll your Chrome at once.
+  private read_and_settle(context: LensContext, sources: PageSource[], force: boolean, depth: number): Promise<void> {
+    if (!sources.length) return Promise.resolve()
     const view_id = context.view_id
+    const run = (this.reading.get(view_id) ?? Promise.resolve()).catch(ignore).then(() => this.read_once(context, sources, force, depth))
+    this.reading.set(view_id, run)
+    return run.finally(() => {
+      if (this.reading.get(view_id) === run) this.reading.delete(view_id)
+    })
+  }
+
+  // A read further down that reached no more records than the one before means the page has nothing more: caught up.
+  private async read_once(context: LensContext, sources: PageSource[], force: boolean, depth: number): Promise<void> {
+    const view_id = context.view_id
+    if (depth === 1) this.depths.set(view_id, 1)
     const reached = await this.read_sources(context, sources, force, depth)
     const previous = depth > 1 ? (this.reached.get(view_id) ?? 0) : 0
     this.reached.set(view_id, reached)

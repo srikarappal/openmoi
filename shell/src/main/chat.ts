@@ -40,7 +40,8 @@ export class ChatController {
   private entries: ChatEntry[] = []
   private next_id = 1
   private readonly requests = new Map<string, EditRequest>()
-  thinking = false
+  private readonly applying = new Set<string>()
+  private working_count = 0
 
   constructor(
     private readonly brain: BrainClient,
@@ -49,6 +50,11 @@ export class ChatController {
 
   list(): ChatEntry[] {
     return this.entries
+  }
+
+  // True while any request is still with the model, not only the last one sent.
+  get thinking(): boolean {
+    return this.working_count > 0
   }
 
   say(text: string): void {
@@ -63,14 +69,14 @@ export class ChatController {
   }
 
   private async working(work: () => Promise<void>): Promise<void> {
-    this.thinking = true
+    this.working_count += 1
     this.hooks.changed()
     try {
       await work()
     } catch (error) {
       this.say(explain(error))
     } finally {
-      this.thinking = false
+      this.working_count -= 1
       this.hooks.changed()
     }
   }
@@ -124,16 +130,15 @@ export class ChatController {
   }
 
   // A proposal made before another one was applied is stale; it is asked again on top of the current file instead of failing.
+  // A second click while the first is applying does nothing, and a problem after the files were written does not undo "applied".
   async apply(proposal_id: string): Promise<void> {
     const entry = this.pending(proposal_id)
-    if (!entry) return
+    if (!entry || this.applying.has(proposal_id)) return
     const request = this.requests.get(proposal_id)
-    this.requests.delete(proposal_id)
+    this.applying.add(proposal_id)
+    let proposal: Proposal
     try {
-      const proposal = await this.brain.apply_edit(proposal_id)
-      entry.status = "applied"
-      this.hooks.changed()
-      await this.hooks.on_applied(proposal)
+      proposal = await this.brain.apply_edit(proposal_id)
     } catch (error) {
       entry.status = "discarded"
       if (error instanceof BrainError && error.kind === "stale" && request) {
@@ -142,7 +147,14 @@ export class ChatController {
       } else {
         this.say(explain(error))
       }
+      return
+    } finally {
+      this.applying.delete(proposal_id)
+      this.requests.delete(proposal_id)
     }
+    entry.status = "applied"
+    this.hooks.changed()
+    await this.hooks.on_applied(proposal).catch((error) => this.say(`Saved, but the view could not update: ${explain(error)}`))
   }
 
   async discard(proposal_id: string): Promise<void> {
@@ -158,8 +170,11 @@ export class ChatController {
     return this.entries.find((entry) => entry.proposal?.proposal_id === proposal_id && entry.status === "pending")
   }
 
+  // Proposals that scroll out of the chat can no longer be confirmed, so their requests go too.
   private add(entry: Omit<ChatEntry, "entry_id">): void {
     this.entries = [...this.entries, { entry_id: this.next_id++, ...entry }].slice(-MAX_ENTRIES)
+    const shown = new Set(this.entries.map((each) => each.proposal?.proposal_id))
+    for (const proposal_id of this.requests.keys()) if (!shown.has(proposal_id)) this.requests.delete(proposal_id)
     this.hooks.changed()
   }
 }

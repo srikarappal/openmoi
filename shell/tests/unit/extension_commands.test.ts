@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { ChromeCommands, type ChromeApi } from "../../src/extension/commands"
 
 interface FakeTab {
@@ -14,13 +14,14 @@ class FakeChrome {
   readonly injected = new Set<number>()
   readonly calls: string[] = []
   group_fails = false
+  never_loads = false
   private next_id = 100
 
   readonly tabs = {
     create: async ({ url, active }: { url: string; active: boolean }) => {
       const id = this.next_id++
       this.tab_state.set(id, { url, status: "loading", active, windowId: 1 })
-      setTimeout(() => this.finish_loading(id), 20)
+      if (!this.never_loads) setTimeout(() => this.finish_loading(id), 20)
       return { id, windowId: 1 }
     },
     get: async (id: number) => {
@@ -95,9 +96,26 @@ describe("ChromeCommands", () => {
   it("opens originals in front of you and focuses the window", async () => {
     const { fake, commands } = make_commands()
     const { handle } = await commands.open({ url: "https://news.example.com/story", background: false })
-    expect(fake.tab_state.get(Number(handle))?.active).toBe(true)
+    expect(fake.tab_state.get(Number(handle))).toMatchObject({ active: true, status: "loading" })
     expect(fake.calls).toEqual(["focus window 1"])
     expect(commands.opened.has(Number(handle))).toBe(false)
+  })
+
+  it("closes a background tab that never finishes loading instead of leaving it in your Chrome", async () => {
+    vi.useFakeTimers()
+    try {
+      const { fake, commands } = make_commands()
+      fake.never_loads = true
+      const opening = commands.open({ url: "https://slow.example.com", background: true })
+      const failed = expect(opening).rejects.toThrow("the page did not finish loading")
+      await vi.advanceTimersByTimeAsync(21_000)
+      await failed
+      expect(fake.tab_state.size).toBe(0)
+      expect(fake.calls.at(-1)).toBe("remove 100")
+      expect(commands.opened.size).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("still reads when tab groups are unavailable", async () => {

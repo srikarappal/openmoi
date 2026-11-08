@@ -35,6 +35,8 @@ export interface MineHooks {
   less_like_this(view_id: string, item: Item): void
 }
 
+function ignore(): void {}
+
 export function tab_mine_key(tab_id: number): string {
   return `tab:${tab_id}`
 }
@@ -83,9 +85,12 @@ export class MineController {
     return true
   }
 
+  // Lets go of the page handle too; for your own tab or Chrome page that only forgets it, the page stays open.
   disable(key: string): void {
+    const page = this.pages.get(key)
     this.pages.delete(key)
     this.lenses.close(key)
+    page?.target.driver.close(page.target.handle).catch(ignore)
   }
 
   private async read_page(target: MineTarget): Promise<{ kind: PageKind; records: RawRecord[] } | null> {

@@ -56,7 +56,9 @@ export class LensGenerator {
       if (!problem) {
         const version = await this.brain.accept_lens(view_id, kind, html)
         this.hooks.say(`New look for ${view_label(view_id)} is live (version ${version}, ${Math.round((Date.now() - started) / 1000)} s).`)
-        await this.hooks.on_new_lens(view_id, kind)
+        await this.hooks
+          .on_new_lens(view_id, kind)
+          .catch((error) => this.hooks.say(`The new look is saved but could not be shown yet (${explain(error)}); reopen ${view_label(view_id)} to see it.`))
         return true
       }
       last_error = problem

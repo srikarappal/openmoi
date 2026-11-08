@@ -32,6 +32,14 @@ describe("LensGenerator", () => {
     expect(hooks.labels).toEqual(["Designing a new look for feed, usually under a minute"])
   })
 
+  it("a look that went live counts as built even when showing it fails", async () => {
+    const { generator, hooks } = make_generator([null])
+    hooks.on_new_lens.mockRejectedValueOnce(new Error("view closed"))
+    await generator.ensure("feed", "feed", "layout1")
+    expect(said(hooks).at(-1)).toBe("The new look is saved but could not be shown yet (view closed); reopen feed to see it.")
+    expect(said(hooks).some((text) => text.startsWith("Could not build"))).toBe(false)
+  })
+
   it("retries once with the smoke test problem", async () => {
     const { generator, brain } = make_generator(["0 of 30 items were not rendered", null])
     await generator.ensure("site_shop.example", "listing", "layout1")

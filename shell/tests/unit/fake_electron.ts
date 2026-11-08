@@ -1,0 +1,258 @@
+// A small stand in for the parts of Electron the main process and preloads use, so they run under vitest.
+// Tests mock "electron" with this module and inspect the fakes it hands out.
+import { EventEmitter } from "node:events"
+
+type OpenHandler = (details: { url: string }) => { action: string }
+type PermissionHandler = (contents: unknown, permission: string, callback: (allowed: boolean) => void) => void
+type RequestHandler = (details: { url: string; resourceType: string }, callback: (response: { cancel: boolean }) => void) => void
+
+let next_contents_id = 1
+
+export class FakeWebContents extends EventEmitter {
+  readonly id = next_contents_id++
+  url = ""
+  title = ""
+  destroyed = false
+  muted = false
+  sent: Array<[string, unknown]> = []
+  loads: string[] = []
+  load_error: Error | null = null
+  scripts: string[] = []
+  script_result: unknown = []
+  open_handler: OpenHandler | null = null
+  // Lets a test play the page: called with everything the main process sends to this web contents.
+  on_send: ((channel: string, message: unknown) => void) | null = null
+
+  send(channel: string, message: unknown): void {
+    this.sent.push([channel, message])
+    this.on_send?.(channel, message)
+  }
+
+  async loadURL(url: string): Promise<void> {
+    this.loads.push(url)
+    if (this.load_error) throw this.load_error
+    this.url = url
+  }
+
+  async loadFile(file: string): Promise<void> {
+    this.loads.push(file)
+  }
+
+  getURL(): string {
+    return this.url
+  }
+
+  getTitle(): string {
+    return this.title
+  }
+
+  close(): void {
+    this.destroyed = true
+  }
+
+  isDestroyed(): boolean {
+    return this.destroyed
+  }
+
+  setAudioMuted(muted: boolean): void {
+    this.muted = muted
+  }
+
+  setWindowOpenHandler(handler: OpenHandler): void {
+    this.open_handler = handler
+  }
+
+  async executeJavaScript(code: string): Promise<unknown> {
+    this.scripts.push(code)
+    return this.script_result
+  }
+
+  messages(channel: string): unknown[] {
+    return this.sent.filter(([name]) => name === channel).map(([, message]) => message)
+  }
+}
+
+export class FakeWebContentsView {
+  static created: FakeWebContentsView[] = []
+  readonly webContents = new FakeWebContents()
+  bounds: unknown = null
+  visible = true
+
+  constructor(readonly options: { webPreferences?: Record<string, unknown> } = {}) {
+    FakeWebContentsView.created.push(this)
+  }
+
+  setBounds(bounds: unknown): void {
+    this.bounds = bounds
+  }
+
+  setVisible(visible: boolean): void {
+    this.visible = visible
+  }
+}
+
+class FakeContentView {
+  children: FakeWebContentsView[] = []
+
+  addChildView(view: FakeWebContentsView, index?: number): void {
+    this.children = this.children.filter((child) => child !== view)
+    if (index === undefined) this.children.push(view)
+    else this.children.splice(index, 0, view)
+  }
+
+  removeChildView(view: FakeWebContentsView): void {
+    this.children = this.children.filter((child) => child !== view)
+  }
+}
+
+export class FakeBrowserWindow extends EventEmitter {
+  static created: FakeBrowserWindow[] = []
+  // Lets a test script each window as it is made (the smoke tester makes its own).
+  static on_created: ((window: FakeBrowserWindow) => void) | null = null
+  readonly webContents = new FakeWebContents()
+  readonly contentView = new FakeContentView()
+  size: [number, number] = [1280, 860]
+  shown = false
+  focused = false
+  destroyed = false
+
+  constructor(readonly options: Record<string, unknown> = {}) {
+    super()
+    FakeBrowserWindow.created.push(this)
+    FakeBrowserWindow.on_created?.(this)
+  }
+
+  async loadFile(file: string): Promise<void> {
+    this.webContents.loads.push(file)
+  }
+
+  getContentSize(): [number, number] {
+    return this.size
+  }
+
+  show(): void {
+    this.shown = true
+  }
+
+  focus(): void {
+    this.focused = true
+  }
+
+  destroy(): void {
+    this.destroyed = true
+  }
+}
+
+class FakeIpcMain extends EventEmitter {
+  readonly handlers = new Map<string, (...args: unknown[]) => unknown>()
+
+  handle(channel: string, handler: (...args: unknown[]) => unknown): void {
+    this.handlers.set(channel, handler)
+  }
+}
+
+export class FakeSession {
+  user_agent = "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) openmoi_shell/0.1.0 Chrome/140.0.0.0 Electron/45.2.3 Safari/537.36"
+  permission_handler: PermissionHandler | null = null
+  request_handler: RequestHandler | null = null
+  readonly webRequest = {
+    onBeforeRequest: (handler: RequestHandler): void => {
+      this.request_handler = handler
+    },
+  }
+
+  setUserAgent(user_agent: string): void {
+    this.user_agent = user_agent
+  }
+
+  getUserAgent(): string {
+    return this.user_agent
+  }
+
+  setPermissionRequestHandler(handler: PermissionHandler): void {
+    this.permission_handler = handler
+  }
+}
+
+const sessions = new Map<string, FakeSession>()
+
+class FakeApp extends EventEmitter {
+  quits = 0
+  private ready_resolve: () => void = () => {}
+  private ready = new Promise<void>((resolve) => {
+    this.ready_resolve = resolve
+  })
+
+  whenReady(): Promise<void> {
+    return this.ready
+  }
+
+  make_ready(): void {
+    this.ready_resolve()
+  }
+
+  quit(): void {
+    this.quits += 1
+  }
+}
+
+class FakeIpcRenderer extends EventEmitter {
+  sent: Array<[string, unknown]> = []
+  invoked: string[] = []
+  invoke_result: unknown = null
+
+  send(channel: string, message: unknown): void {
+    this.sent.push([channel, message])
+  }
+
+  async invoke(channel: string): Promise<unknown> {
+    this.invoked.push(channel)
+    return this.invoke_result
+  }
+}
+
+export const exposed: Record<string, unknown> = {}
+export const opened_paths: string[] = []
+
+export const ipcMain = new FakeIpcMain()
+export const ipcRenderer = new FakeIpcRenderer()
+export const app = new FakeApp()
+export const WebContentsView = FakeWebContentsView
+export const BrowserWindow = FakeBrowserWindow
+export const session = {
+  fromPartition(partition: string): FakeSession {
+    const existing = sessions.get(partition) ?? new FakeSession()
+    sessions.set(partition, existing)
+    return existing
+  },
+}
+export const shell = {
+  async openPath(target: string): Promise<string> {
+    opened_paths.push(target)
+    return ""
+  },
+}
+export const contextBridge = {
+  exposeInMainWorld(name: string, api: unknown): void {
+    exposed[name] = api
+  },
+}
+
+// The event object Electron passes to ipcMain listeners.
+export function ipc_event(sender: FakeWebContents): { sender: FakeWebContents } {
+  return { sender }
+}
+
+export function reset_electron(): void {
+  FakeWebContentsView.created = []
+  FakeBrowserWindow.created = []
+  FakeBrowserWindow.on_created = null
+  ipcMain.removeAllListeners()
+  ipcMain.handlers.clear()
+  ipcRenderer.removeAllListeners()
+  ipcRenderer.sent = []
+  ipcRenderer.invoked = []
+  sessions.clear()
+  opened_paths.length = 0
+  for (const name of Object.keys(exposed)) delete exposed[name]
+}

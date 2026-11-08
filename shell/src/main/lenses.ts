@@ -53,6 +53,8 @@ export class LensManager {
     const message = parse_lens_message(raw)
     if (!context || !message) return
     if (message.type === "ready") {
+      // A lens that calls ready again (say inside its render listener) must not start render and refresh over and over.
+      if (context.ready) return
       context.ready = true
       this.events.on_ready(context)
     } else {

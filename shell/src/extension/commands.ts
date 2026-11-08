@@ -62,16 +62,22 @@ export class ChromeCommands {
   }
 
   // Background reads go to a quiet tab in a collapsed "openMoi" group; originals open in front of you.
+  // A page opened in front of you is yours as soon as it shows; a background read waits for the load and closes a tab that never loads.
   async open({ url, background = true }: OpenArgs): Promise<{ handle: string }> {
     const tab = await this.api.tabs.create({ url, active: !background })
     if (tab.id === undefined) throw new Error("Chrome did not open a tab")
-    if (background) {
-      this.opened.add(tab.id)
-      await this.group(tab.id)
-    } else if (tab.windowId !== undefined) {
-      await this.api.windows.update(tab.windowId, { focused: true })
+    if (!background) {
+      if (tab.windowId !== undefined) await this.api.windows.update(tab.windowId, { focused: true })
+      return { handle: String(tab.id) }
     }
-    await this.loaded(tab.id)
+    this.opened.add(tab.id)
+    await this.group(tab.id)
+    try {
+      await this.loaded(tab.id)
+    } catch (error) {
+      await this.close(tab.id)
+      throw error
+    }
     return { handle: String(tab.id) }
   }
 

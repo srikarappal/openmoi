@@ -129,6 +129,55 @@ describe("ChatController", () => {
     expect(chat.thinking).toBe(false)
   })
 
+  it("applies once when Confirm is clicked twice", async () => {
+    let finish: (value: Proposal) => void = () => {}
+    const apply_edit = vi.fn(() => new Promise<Proposal>((resolve) => (finish = resolve)))
+    const { chat, hooks } = make_chat({ edit: async () => proposal(), apply_edit })
+    await chat.send("no shorts")
+    const first = chat.apply("p1")
+    const second = chat.apply("p1")
+    finish(proposal())
+    await Promise.all([first, second])
+    expect(apply_edit).toHaveBeenCalledTimes(1)
+    expect(chat.list()[1].status).toBe("applied")
+    expect(hooks.on_applied).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps an applied edit applied when the view fails to update afterwards", async () => {
+    const { chat, hooks } = make_chat({ edit: async () => proposal(), apply_edit: async () => proposal() })
+    hooks.on_applied.mockRejectedValueOnce(new Error("lens is gone"))
+    await chat.send("no shorts")
+    await chat.apply("p1")
+    expect(chat.list()[1].status).toBe("applied")
+    expect(last_reply(chat)).toBe("Saved, but the view could not update: lens is gone")
+  })
+
+  it("stays thinking until every request in flight has answered", async () => {
+    const finishers: Array<(value: Proposal) => void> = []
+    const edit = vi.fn(() => new Promise<Proposal>((resolve) => finishers.push(resolve)))
+    const { chat } = make_chat({ edit })
+    const first = chat.send("no shorts")
+    const second = chat.send("hide politics")
+    await Promise.resolve()
+    finishers[0](proposal({ proposal_id: "a" }))
+    await first
+    expect(chat.thinking).toBe(true)
+    finishers[1](proposal({ proposal_id: "b" }))
+    await second
+    expect(chat.thinking).toBe(false)
+  })
+
+  it("forgets the request behind a proposal once it scrolls out of the chat", async () => {
+    const edit = vi.fn(async () => proposal({ proposal_id: "old" }))
+    const apply_edit = vi.fn(async () => Promise.reject(new BrainError(409, "stale", "changed")))
+    const { chat } = make_chat({ edit, apply_edit })
+    await chat.send("/layout cards")
+    for (let index = 0; index < 70; index++) chat.say(`line ${index}`)
+    await chat.apply("old")
+    expect(apply_edit).not.toHaveBeenCalled()
+    expect(edit).toHaveBeenCalledTimes(1)
+  })
+
   it("discards and tells the brain, ignoring brain errors", async () => {
     const discard_edit = vi.fn(async () => Promise.reject(new Error("offline")))
     const { chat } = make_chat({ edit: async () => proposal(), discard_edit })
