@@ -354,7 +354,7 @@ Memory rules:
 ### 9.5 Lens
 
 * One self contained HTML file per view version, loaded as its own document in a dedicated sandboxed view. The host puts a CSP first in its head; a preload exposes the `moi` helper (11.6), the only thing a lens can call.
-* Sandbox: the lens view has its own session that loads nothing but its document and the https images of items it was sent (an "image" whose address carries your items elsewhere is refused), enforced by the session and by the CSP `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data:`, which comes first in every lens document. It cannot navigate or open windows; every message it sends is validated before the host acts on it, opens and "less like this" at most at the pace of clicks. The smoke test fails a lens that tries to load anything else.
+* Sandbox: the lens view has its own session that loads nothing but its document and the https images of items it was sent (an "image" whose address carries your items elsewhere is refused), enforced by the session and by the CSP `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data:`, which comes first in every lens document. It cannot navigate or open windows; every message it sends is validated before the host acts on it; opening an item or "less like this" needs your click or key press and comes at most at the pace of clicks. The smoke test fails a lens that tries to load anything else.
 * Generation (smart slot): input is the view's Layout text, the item model, the helper API and the matching default lens as an example; output is one HTML file.
 * Smoke test (shell, hidden window): render 30 synthetic items covering every kind, missing fields and long text; expect `ready`, every item id present in the DOM as `data-item-id` and no script errors. One retry with the error attached; if it still fails, keep the current lens and say so in chat. A layout that failed is not retried until its text changes.
 * Versions: numbered files; `current.json` records the live version and the layout hash it was built for; "go back to the previous look" moves the pointer.
@@ -748,7 +748,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 
 | Check | Result |
 |---|---|
-| Tests | 375 brain (unit, property, API integration and 22 user journeys; 100% line and branch coverage), 305 shell and extension unit (97% of lines), 25 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 393 brain (unit, property, API integration and 25 user journeys; 100% line and branch coverage), 315 shell and extension unit (97% of lines), 25 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; the background read tab closes after each read |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |

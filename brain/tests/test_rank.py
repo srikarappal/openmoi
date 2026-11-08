@@ -169,3 +169,12 @@ def test_items_seen_long_ago_still_use_up_the_daily_limit():
     page, _ = rank([item for item, _ in entries], [rule("limit", "source_id", "eq", "x", count_per_day=2)], NOW, hidden)
     assert ids(page) == []
 
+
+def test_a_story_already_shown_keeps_its_copy_when_a_newer_copy_arrives():
+    shown = make_item("rss:hn", "h1", url="https://story.example/1", hours_old=3)
+    newer = make_item("rss:lobsters", "l1", url="https://story.example/1", hours_old=1)
+    first, _ = rank([shown], [], NOW)
+    assert [entry.item.native_id for entry in first] == ["h1"]
+    later, has_more = rank([shown, newer], [], NOW, {shown.item_id})
+    assert later == [] and has_more is False
+

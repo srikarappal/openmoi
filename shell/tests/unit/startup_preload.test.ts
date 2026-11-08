@@ -96,6 +96,7 @@ describe("preloads", () => {
   })
 
   it("gives a lens the moi helper and coerces what it sends", async () => {
+    Object.defineProperty(navigator, "userActivation", { configurable: true, value: { isActive: true } })
     await import("../../src/preload/lens")
     const moi = exposed.moi as Record<string, (...args: unknown[]) => unknown>
     const rendered: unknown[] = []
@@ -120,6 +121,16 @@ describe("preloads", () => {
       { type: "less_like_this", item_id: "c" },
     ])
     expect(contextBridge).toBeDefined()
+  })
+
+  it("ignores open and less like this that no click or key press asked for", async () => {
+    Object.defineProperty(navigator, "userActivation", { configurable: true, value: { isActive: false } })
+    await import("../../src/preload/lens")
+    const moi = exposed.moi as Record<string, (...args: unknown[]) => unknown>
+    moi.open("a")
+    moi.less_like_this("a")
+    moi.seen(["a"])
+    expect(ipcRenderer.sent.map(([, message]) => (message as { type: string }).type)).toEqual(["seen"])
   })
 
   it("answers page operations in openMoi's own pages, errors included", async () => {

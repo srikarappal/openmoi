@@ -6,7 +6,10 @@ import type { ViewHost } from "./host"
 import { allow_lens_images, forget_lens, lens_preferences } from "./sessions"
 
 // A lens may open an item or ask for less like it at most this often: a click, not a script looping over items.
+// Less like this is paced per item (2 s) and per lens (one every 500 ms), so two different items in a row both count
+// but a lens firing it for every item does not.
 const ACTION_INTERVAL_MS: Partial<Record<LensToHost["type"], number>> = { open: 800, less_like_this: 2_000 }
+const LESS_LIKE_THIS_PER_LENS_MS = 500
 
 export class LensContext {
   readonly rendered = new Map<string, Item>()
@@ -71,11 +74,11 @@ export class LensManager {
   private in_time(context: LensContext, message: LensToHost): boolean {
     const interval = ACTION_INTERVAL_MS[message.type]
     if (interval === undefined) return true
-    const item = message.type === "less_like_this" ? message.item_id : ""
-    const key = `${context.key}\0${message.type}\0${item}`
     const now = Date.now()
-    if (now - (this.last_action.get(key) ?? 0) < interval) return false
-    this.last_action.set(key, now)
+    const paces: Array<[string, number]> = [[`${context.key}\0${message.type}`, message.type === "less_like_this" ? LESS_LIKE_THIS_PER_LENS_MS : interval]]
+    if (message.type === "less_like_this") paces.push([`${context.key}\0${message.type}\0${message.item_id}`, interval])
+    if (paces.some(([key, wait]) => now - (this.last_action.get(key) ?? 0) < wait)) return false
+    for (const [key] of paces) this.last_action.set(key, now)
     return true
   }
 

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from websockets.exceptions import ConnectionClosed
+from websockets.protocol import State
 from websockets.sync.server import Server, ServerConnection, serve
 
 from moi_brain.files import read_json, write_atomic
@@ -164,11 +165,14 @@ class RelayHub:
                 self.unrecognized = None
         self.send(connection, {"type": "approval_needed", "extension_id": extension_id})
 
-    def activate(self, connection: ServerConnection, extension_id: str, nonce: str, secret: str, issued: bool) -> None:
+    def activate(self, connection: ServerConnection, extension_id: str, nonce: str, secret: str, issued: bool) -> bool:
         """A new connection replaces the old one; calls sent on the old one will never be answered, so they fail now.
 
-        The welcome carries the hub's proof for the extension's nonce, plus the secret itself on first pairing."""
+        The welcome carries the hub's proof for the extension's nonce, plus the secret itself on first pairing.
+        A connection that closed meanwhile is not made the connected one (it would lock the real one out)."""
         with self.lock:
+            if connection.state is not State.OPEN:
+                return False
             previous = self.connection
             self.connection = connection
             self.extension_id = extension_id
@@ -182,6 +186,7 @@ class RelayHub:
         if issued:
             welcome["secret"] = secret
         self.send(connection, welcome)
+        return True
 
     def safe_config(self) -> dict[str, Any]:
         """The passive sources for the extension; a broken view file must not leave a connection half set up."""
@@ -273,9 +278,7 @@ class RelayHub:
         secret = secrets.token_hex(32) if candidate or extension_id not in self.trusted else self.trusted[extension_id]
         self.trusted[extension_id] = secret
         write_atomic(self.trust_file, json.dumps(self.trusted, indent=2, sort_keys=True), private=True)
-        if candidate:
-            self.activate(candidate[0], extension_id, candidate[2], secret, issued=True)
-        else:
+        if not (candidate and self.activate(candidate[0], extension_id, candidate[2], secret, issued=True)):
             self.allowed_at[extension_id] = time.monotonic()
 
     def push_config(self) -> None:

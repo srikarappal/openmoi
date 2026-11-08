@@ -99,13 +99,18 @@ def apply_limits(scored: list[Scored], rules: list[Rule], now: datetime) -> list
     return kept
 
 
-def best_copy_per_url(scored: list[Scored]) -> list[Scored]:
-    """One item per URL: the best scored copy among those the rules let through, so a story hidden in one
-    source still shows from another source a rule allows."""
-    kept: dict[str, Scored] = {}
+def best_copy_per_url(scored: list[Scored], shown: set[str] | frozenset[str]) -> list[Scored]:
+    """One item per URL, in score order. A copy already shown or seen stays its URL's copy, so a newer copy
+    from another source never brings the same story back; otherwise the best scored copy the rules let
+    through, so a story hidden in one source still shows from another source a rule allows."""
+    kept: dict[str, str] = {}
     for entry in scored:
-        kept.setdefault(entry[1].url, entry)
-    return list(kept.values())
+        if entry[1].item_id in shown:
+            kept.setdefault(entry[1].url, entry[1].item_id)
+    for entry in scored:
+        kept.setdefault(entry[1].url, entry[1].item_id)
+    chosen = set(kept.values())
+    return [entry for entry in scored if entry[1].item_id in chosen]
 
 
 def rank(
@@ -130,7 +135,7 @@ def rank(
         base = 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS) if order == "recency" else 1 - position / (len(items) + 1)
         scored.append((base + sum(rule.weight for rule in boosts), item, boosts))
     scored.sort(key=itemgetter(0), reverse=True)
-    scored = best_copy_per_url(scored)
+    scored = best_copy_per_url(scored, exclude_ids)
     already = [entry for entry in scored if entry[1].item_id in exclude_ids]
     candidates = [entry for entry in scored if entry[1].item_id not in exclude_ids]
     remaining = [entry for entry in apply_limits([*already, *candidates], rules, now) if entry[1].item_id not in exclude_ids]

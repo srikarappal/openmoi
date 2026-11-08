@@ -14,12 +14,22 @@ function send(message: LensToHost): void {
   ipcRenderer.send("moi:lens_event", message)
 }
 
+// Opening an item or asking for less like it takes your click or key press: a lens script calling these on its
+// own (say for every item as it renders) is ignored.
+function by_you(): boolean {
+  return navigator.userActivation?.isActive ?? false
+}
+
 contextBridge.exposeInMainWorld("moi", {
   on_render: (listener: Listener) => listeners.render.push(listener),
   on_append: (listener: Listener) => listeners.append.push(listener),
   ready: () => send({ type: "ready" }),
-  open: (item_id: string) => send({ type: "open", item_id: String(item_id) }),
+  open: (item_id: string) => {
+    if (by_you()) send({ type: "open", item_id: String(item_id) })
+  },
   more: (cursor: string) => send({ type: "more", cursor: String(cursor) }),
   seen: (item_ids: string[]) => send({ type: "seen", item_ids: Array.from(item_ids, String) }),
-  less_like_this: (item_id: string) => send({ type: "less_like_this", item_id: String(item_id) }),
+  less_like_this: (item_id: string) => {
+    if (by_you()) send({ type: "less_like_this", item_id: String(item_id) })
+  },
 })

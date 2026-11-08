@@ -142,7 +142,8 @@ export class Harness {
   async in_lenses<T>(script: string): Promise<T[]> {
     return this.app.evaluate(async ({ webContents }, code) => {
       const lenses = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("data:text/html"))
-      return Promise.all(lenses.sort((first, second) => first.id - second.id).map((contents) => contents.executeJavaScript(code)))
+      // As if you did it: clicks the script makes count as yours, the way a lens sees a real click.
+      return Promise.all(lenses.sort((first, second) => first.id - second.id).map((contents) => contents.executeJavaScript(code, true)))
     }, script)
   }
 

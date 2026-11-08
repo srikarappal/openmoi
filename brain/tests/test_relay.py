@@ -7,6 +7,7 @@ import time
 import pytest
 from helpers import EXTENSION_ID, FakeExtension, pair
 from websockets.exceptions import ConnectionClosed
+from websockets.protocol import State
 from websockets.sync.client import connect
 
 from moi_brain.relay import RelayError, RelayHub
@@ -380,3 +381,21 @@ def test_the_genuine_extension_connecting_clears_an_unrecognized_one(hub):
     genuine = FakeExtension(hub.port, secret=secret)
     assert genuine.recv()["type"] == "welcome"
     assert hub.status()["unrecognized"] is None
+
+
+def test_allowing_a_connection_that_just_closed_lets_its_next_one_pair(hub):
+    leaving = FakeExtension(hub.port)
+    assert leaving.recv()["type"] == "approval_needed"
+    candidate = hub.candidate[0]
+    leaving.close()
+    deadline = time.monotonic() + 3
+    while candidate.state is State.OPEN and time.monotonic() < deadline:
+        time.sleep(0.01)
+    with hub.lock:
+        hub.candidate = (candidate, EXTENSION_ID, "ab" * 16)
+    hub.trust(EXTENSION_ID)
+    assert not hub.connected
+    back = FakeExtension(hub.port)
+    welcome = back.recv()
+    assert welcome["type"] == "welcome" and welcome["secret"] == hub.trusted[EXTENSION_ID]
+
