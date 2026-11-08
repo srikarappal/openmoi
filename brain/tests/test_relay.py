@@ -369,3 +369,14 @@ def test_an_extension_paired_with_an_earlier_openmoi_is_told_to_pair_again_not_o
     assert reset.recv()["type"] == "welcome"
     assert hub.status()["unrecognized"] is None
 
+
+
+def test_the_genuine_extension_connecting_clears_an_unrecognized_one(hub):
+    secret = "ab" * 32
+    hub.trusted[EXTENSION_ID] = secret
+    stale = FakeExtension(hub.port, secret="cd" * 32)
+    stale.recv()
+    assert hub.status()["unrecognized"] == EXTENSION_ID
+    genuine = FakeExtension(hub.port, secret=secret)
+    assert genuine.recv()["type"] == "welcome"
+    assert hub.status()["unrecognized"] is None
