@@ -1,0 +1,233 @@
+import { act } from "react"
+import { beforeAll, describe, expect, it } from "vitest"
+import type { ChatEntry, ShellCommand, ShellState } from "../../src/shared/types"
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const BASE: ShellState = {
+  views: [
+    { view_id: "feed", title: "Feed" },
+    { view_id: "tech", title: "Tech" },
+  ],
+  tabs: [],
+  active: { kind: "view", view_id: "feed" },
+  address: "",
+  notices: [],
+  chat: [],
+  chat_view: "Feed",
+  thinking: false,
+  activities: [],
+  chrome_pages: [],
+  relay: { connected: false, waiting_for_approval: null, paired: false },
+}
+
+// The preload bridge as the UI sees it: commands are recorded, states are pushed by the test.
+class FakeBridge {
+  readonly sent: ShellCommand[] = []
+  listener: (state: ShellState) => void = () => {}
+  resolve_state: (state: ShellState) => void = () => {}
+
+  command(command: ShellCommand): void {
+    this.sent.push(command)
+  }
+
+  get_state(): Promise<ShellState> {
+    return new Promise((resolve) => (this.resolve_state = resolve))
+  }
+
+  on_state(listener: (state: ShellState) => void): void {
+    this.listener = listener
+  }
+}
+
+const bridge = new FakeBridge()
+
+async function show(fields: Partial<ShellState>): Promise<void> {
+  await act(async () => bridge.listener({ ...BASE, ...fields }))
+}
+
+async function click(element: Element | null): Promise<void> {
+  if (!element) throw new Error("nothing to click")
+  await act(async () => (element as HTMLElement).click())
+}
+
+async function type_into(input: Element | null, value: string): Promise<void> {
+  const field = input as HTMLInputElement
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set
+  await act(async () => {
+    setter?.call(field, value)
+    field.dispatchEvent(new Event("input", { bubbles: true }))
+  })
+}
+
+async function submit(form: Element | null): Promise<void> {
+  await act(async () => form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })))
+}
+
+function last_sent(): ShellCommand | undefined {
+  return bridge.sent.at(-1)
+}
+
+function query(selector: string): Element | null {
+  return document.querySelector(selector)
+}
+
+function texts(selector: string): string[] {
+  return Array.from(document.querySelectorAll(selector), (node) => node.textContent ?? "")
+}
+
+beforeAll(async () => {
+  document.body.innerHTML = '<div id="root"></div>'
+  Object.assign(window, { shell: bridge })
+  await act(async () => {
+    await import("../../src/ui/app")
+  })
+})
+
+describe("the openMoi window", () => {
+  it("says it is starting until the first state arrives", async () => {
+    expect(query(".loading")?.textContent).toBe("Starting openMoi")
+    await act(async () => bridge.resolve_state(BASE))
+    expect(texts("button.tab.view")).toEqual(["Feed", "Tech"])
+  })
+
+  it("shows view tabs, Chrome's state and Refresh", async () => {
+    await show({})
+    expect(query("button.tab.view.active")?.textContent).toBe("Feed")
+    expect(query(".relay")?.textContent).toBe("Chrome not connected")
+    await click(document.querySelectorAll("button.tab.view")[1])
+    expect(last_sent()).toEqual({ type: "open_view", view_id: "tech" })
+    await click(Array.from(document.querySelectorAll("button.action")).find((node) => node.textContent === "Refresh") ?? null)
+    expect(last_sent()).toEqual({ type: "refresh" })
+    await show({ relay: { connected: false, waiting_for_approval: "abc", paired: false } })
+    expect(query(".relay")?.textContent).toBe("Chrome waiting")
+    await show({ relay: { connected: true, waiting_for_approval: null, paired: true } })
+    expect(query(".relay.on")?.textContent).toBe("Chrome connected")
+  })
+
+  it("shows web tabs and Chrome pages, with Mine on the active tab", async () => {
+    await show({
+      tabs: [{ tab_id: 3, title: "", url: "https://shop.example.com/", mine: true }],
+      chrome_pages: [{ page_id: 1, title: "News", url: "https://news.example.com/" }],
+      active: { kind: "tab", tab_id: 3 },
+      address: "https://shop.example.com/",
+    })
+    expect(texts(".tab.web .tab_title")).toEqual(["https://shop.example.com/"])
+    expect(texts(".tab.chrome .tab_title")).toEqual(["Mine: News"])
+    await click(query(".tab.web .tab_title"))
+    expect(last_sent()).toEqual({ type: "select_tab", tab_id: 3 })
+    await click(query(".tab.web .close"))
+    expect(last_sent()).toEqual({ type: "close_tab", tab_id: 3 })
+    await click(query(".tab.chrome .tab_title"))
+    expect(last_sent()).toEqual({ type: "select_chrome_page", page_id: 1 })
+    await click(query(".tab.chrome .close"))
+    expect(last_sent()).toEqual({ type: "close_chrome_page", page_id: 1 })
+    expect(query("button.mine.on")?.textContent).toBe("Mine")
+    await click(query("button.mine"))
+    expect(last_sent()).toEqual({ type: "toggle_mine" })
+    expect((query(".address input") as HTMLInputElement).value).toBe("https://shop.example.com/")
+    await show({})
+    expect(query("button.mine")).toBeNull()
+  })
+
+  it("navigates to what you type in the address bar and ignores blanks", async () => {
+    await show({})
+    const sent = bridge.sent.length
+    await type_into(query(".address input"), "   ")
+    await submit(query("form.address"))
+    expect(bridge.sent).toHaveLength(sent)
+    await type_into(query(".address input"), "  example.com  ")
+    await submit(query("form.address"))
+    expect(last_sent()).toEqual({ type: "navigate", url: "example.com" })
+  })
+
+  it("shows notices with their actions", async () => {
+    await show({
+      notices: [
+        { notice_id: 1, text: "x needs you in Chrome", url: "https://x.com/login" },
+        { notice_id: 2, text: "A Chrome extension wants to read pages", action: { label: "Allow", command: { type: "relay_trust", extension_id: "abc" } } },
+      ],
+    })
+    expect(texts(".notice > span:first-child")).toEqual(["x needs you in Chrome", "A Chrome extension wants to read pages"])
+    const [first, second] = Array.from(document.querySelectorAll(".notice"))
+    expect(Array.from(first.querySelectorAll("button"), (button) => button.textContent)).toEqual(["Open", "Dismiss"])
+    await click(first.querySelector("button"))
+    expect(last_sent()).toEqual({ type: "open_notice", notice_id: 1 })
+    await click(second.querySelector("button"))
+    expect(last_sent()).toEqual({ type: "relay_trust", extension_id: "abc" })
+    await click(Array.from(second.querySelectorAll("button")).at(-1) ?? null)
+    expect(last_sent()).toEqual({ type: "dismiss_notice", notice_id: 2 })
+  })
+
+  it("says Idle, or what is running and for how long", async () => {
+    await show({})
+    expect(query(".status.idle")?.textContent).toBe("Idle")
+    await show({ activities: [{ activity_id: 1, label: "Designing a new look for feed, usually under a minute", started_at: Date.now() - 12_000 }] })
+    expect(texts(".activity_label")).toEqual(["Designing a new look for feed, usually under a minute"])
+    expect(query(".elapsed")?.textContent).toBe("12 s")
+  })
+})
+
+describe("the chat", () => {
+  const PENDING: ChatEntry = {
+    entry_id: 2,
+    role: "moi",
+    text: "Added a rule.",
+    status: "pending",
+    proposal: { proposal_id: "p1", view_id: "feed", lens_action: null, reply: "Added a rule.", changes: [{ file: "views/feed.md", diff: "--- a/views/feed.md\n+++ b/views/feed.md\n@@ -1 +1 @@\n ## Rules\n-* old\n+* No shorts.\n" }] },
+  }
+
+  it("shows messages, diffs and Confirm or Discard for a pending proposal", async () => {
+    await show({ chat: [{ entry_id: 1, role: "you", text: "no shorts" }, PENDING], chat_view: "Tech" })
+    expect(texts(".message .message_text")).toEqual(["no shorts", "Added a rule."])
+    expect(texts(".diff_file")).toEqual(["views/feed.md"])
+    expect(Array.from(document.querySelectorAll(".diff > div:not(.diff_file)"), (line) => `${line.className}:${line.textContent}`)).toEqual([
+      "same: ## Rules",
+      "remove:-* old",
+      "add:+* No shorts.",
+      "same: ",
+    ])
+    expect(query(".chat_view")?.textContent).toBe("Changes apply to Tech")
+    await click(query(".proposal_actions .confirm"))
+    expect(last_sent()).toEqual({ type: "proposal_apply", proposal_id: "p1" })
+    await click(document.querySelectorAll(".proposal_actions button")[1])
+    expect(last_sent()).toEqual({ type: "proposal_discard", proposal_id: "p1" })
+  })
+
+  it("shows what became of a proposal and a rollback", async () => {
+    const rollback = { ...PENDING, entry_id: 3, status: "applied" as const, proposal: { ...PENDING.proposal!, changes: [], lens_action: "rollback" as const } }
+    await show({ chat: [rollback], thinking: true })
+    expect(query(".lens_action")?.textContent).toBe("Bring back the previous look")
+    expect(query(".proposal_status.applied")?.textContent).toBe("applied")
+    expect(query(".message.thinking")?.textContent).toBe("Thinking")
+  })
+
+  it("sends what you type, offers commands as you type a slash and fills one in when picked", async () => {
+    await show({})
+    const input = query(".composer input")
+    await type_into(input, "/me")
+    expect(texts(".hint .hint_usage")).toEqual(["/memory <what to remember or forget>"])
+    const sent_before_pick = bridge.sent.length
+    await click(query(".hint"))
+    expect((input as HTMLInputElement).value).toBe("/memory ")
+    expect(bridge.sent).toHaveLength(sent_before_pick)
+    expect(texts(".hint .hint_usage")).toEqual(["/memory <what to remember or forget>"])
+    await type_into(input, "/memory I")
+    expect(query(".hints")).toBeNull()
+    const sent = bridge.sent.length
+    await type_into(input, "   ")
+    await submit(query("form.composer"))
+    expect(bridge.sent).toHaveLength(sent)
+    await type_into(input, "  /memory I'm vegetarian ")
+    await submit(query("form.composer"))
+    expect(last_sent()).toEqual({ type: "chat_send", text: "/memory I'm vegetarian" })
+    expect((input as HTMLInputElement).value).toBe("")
+  })
+
+  it("follows new messages to the bottom", async () => {
+    const list = query(".messages") as HTMLDivElement
+    Object.defineProperty(list, "scrollHeight", { configurable: true, value: 900 })
+    await show({ chat: [{ entry_id: 1, role: "you", text: "one" }, { entry_id: 2, role: "moi", text: "two" }, { entry_id: 3, role: "moi", text: "three" }] })
+    expect(list.scrollTop).toBe(900)
+  })
+})

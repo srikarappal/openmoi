@@ -28,10 +28,12 @@ export class FakeWebContents extends EventEmitter {
     this.on_send?.(channel, message)
   }
 
+  // Like Electron, the address changes as the load starts; a failure comes a moment later.
   async loadURL(url: string): Promise<void> {
     this.loads.push(url)
-    if (this.load_error) throw this.load_error
     this.url = url
+    await Promise.resolve()
+    if (this.load_error) throw this.load_error
   }
 
   async loadFile(file: string): Promise<void> {
@@ -40,6 +42,12 @@ export class FakeWebContents extends EventEmitter {
 
   getURL(): string {
     return this.url
+  }
+
+  reloads = 0
+
+  reload(): void {
+    this.reloads += 1
   }
 
   getTitle(): string {
@@ -141,6 +149,10 @@ export class FakeBrowserWindow extends EventEmitter {
   destroy(): void {
     this.destroyed = true
   }
+
+  isDestroyed(): boolean {
+    return this.destroyed
+  }
 }
 
 class FakeIpcMain extends EventEmitter {
@@ -232,6 +244,12 @@ export const shell = {
     return ""
   },
 }
+export const error_boxes: Array<[string, string]> = []
+export const dialog = {
+  showErrorBox(title: string, content: string): void {
+    error_boxes.push([title, content])
+  },
+}
 export const contextBridge = {
   exposeInMainWorld(name: string, api: unknown): void {
     exposed[name] = api
@@ -254,5 +272,6 @@ export function reset_electron(): void {
   ipcRenderer.invoked = []
   sessions.clear()
   opened_paths.length = 0
+  error_boxes.length = 0
   for (const name of Object.keys(exposed)) delete exposed[name]
 }

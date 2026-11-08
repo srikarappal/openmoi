@@ -21,7 +21,7 @@ function make_views(outcomes: SourceOutcome[], pages: ViewPage[] = []) {
   const { labels, track } = new Tracked()
   const hooks = { open_original: vi.fn(), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), track, labels }
   const views = new ViewController(brain as unknown as BrainClient, lenses as unknown as LensManager, sources as unknown as SourceReader, hooks)
-  return { views, context, sources, hooks }
+  return { views, context, sources, hooks, brain }
 }
 
 describe("ViewController page sources", () => {
@@ -162,3 +162,64 @@ describe("ViewController warnings that come back", () => {
   })
 })
 
+
+function render_count(context: LensContext): number {
+  return (context.send as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[0].type === "render").length
+}
+
+describe("ViewController rendering", () => {
+  function render_setup(pages: ViewPage[]) {
+    const made = make_views([], pages)
+    const lenses = { get: () => made.context, open: vi.fn(async () => made.context), load: vi.fn(async () => {}) }
+    const brain = Object.assign(made.brain, { lens: vi.fn(async () => "<p>lens</p>"), events: vi.fn(async () => ({ recorded: 1 })) })
+    const views = new ViewController(
+      brain as unknown as BrainClient,
+      lenses as unknown as LensManager,
+      { read: vi.fn(async () => ({ status: "skipped" })) } as unknown as SourceReader,
+      made.hooks,
+    )
+    return { ...made, views, lenses, brain }
+  }
+
+  it("re-renders an open view only when its files changed and says what it understood", async () => {
+    const changed = { ...PAGE, version: "v2", summary: "Reading X. No shorts." } as ViewPage
+    const { views, context, hooks } = render_setup([PAGE, PAGE, PAGE, changed, changed])
+    await views.show("feed")
+    expect(render_count(context)).toBe(1)
+    await views.show("feed")
+    expect(render_count(context)).toBe(1)
+    expect(hooks.echo).not.toHaveBeenCalled()
+    await views.show("feed")
+    expect(render_count(context)).toBe(2)
+    expect(hooks.echo).toHaveBeenCalledWith("I understood: Reading X. No shorts.")
+  })
+
+  it("after an edit renders at once, then again once the brain finished retagging", async () => {
+    const busy = { ...PAGE, refreshing: true } as ViewPage
+    const { views, context } = render_setup([PAGE, busy, PAGE, PAGE])
+    vi.useFakeTimers()
+    try {
+      const editing = views.after_edit("feed")
+      await vi.advanceTimersByTimeAsync(2_000)
+      await editing
+    } finally {
+      vi.useRealTimers()
+    }
+    expect((context.send as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[0].type === "render")).toHaveLength(2)
+  })
+
+  it("loads a new look into the open lens", async () => {
+    const { views, lenses, context } = render_setup([])
+    await views.reload_lens("feed")
+    expect(lenses.load).toHaveBeenCalledWith(context, "<p>lens</p>")
+  })
+
+  it("records only seen items it actually rendered and ignores events for unknown items", async () => {
+    const { views, context, brain } = render_setup([])
+    context.rendered.set("a", { item_id: "a", url: "https://a.com/a" } as never)
+    await views.on_event(context, { type: "seen", item_ids: ["a", "ghost"] })
+    await views.on_event(context, { type: "seen", item_ids: ["ghost"] })
+    await views.on_event(context, { type: "open", item_id: "ghost" })
+    expect(brain.events.mock.calls).toEqual([[[{ view_id: "feed", item_id: "a", event_kind: "seen" }]]])
+  })
+})

@@ -23,6 +23,9 @@ import type {
 
 const START_TIMEOUT_MS = 60_000
 const RESTART_DELAY_MS = 1_000
+const MAX_RESTART_DELAY_MS = 30_000
+// A brain that ran this long before exiting was working, so the next restart is quick again.
+const STABLE_MS = 30_000
 
 export class BrainError extends Error {
   constructor(
@@ -158,11 +161,21 @@ function free_port(): Promise<number> {
   })
 }
 
-// The brain child process: spawned with uv, restarted if it exits while the shell is running.
+function ignore(): void {}
+
+// The brain child process: spawned with uv, restarted if it exits while the shell is running, waiting longer
+// after each quick crash so a brain that cannot start does not spin.
 export class BrainProcess {
   readonly client: BrainClient
   private child: ChildProcess | null = null
   private stopping = false
+  private restarts = 0
+  private started_at = 0
+  private fail_start: (error: Error) => void = ignore
+  // Rejects when uv itself cannot be started: waiting the full start timeout would not help.
+  private readonly spawn_failed = new Promise<never>((_, reject) => {
+    this.fail_start = reject
+  })
 
   private constructor(
     private readonly repo_dir: string,
@@ -170,6 +183,7 @@ export class BrainProcess {
     private readonly token: string,
   ) {
     this.client = new BrainClient(`http://127.0.0.1:${port}`, token)
+    this.spawn_failed.catch(ignore)
   }
 
   static async start(repo_dir: string): Promise<BrainProcess> {
@@ -177,19 +191,32 @@ export class BrainProcess {
     const token = process.env.MOI_TOKEN || randomBytes(16).toString("hex")
     const brain = new BrainProcess(repo_dir, port, token)
     brain.spawn()
-    await wait_for(() => brain.client.health(), START_TIMEOUT_MS, 200)
+    await Promise.race([wait_for(() => brain.client.health(), START_TIMEOUT_MS, 200), brain.spawn_failed])
     return brain
   }
 
   private spawn(): void {
     const project = path.join(this.repo_dir, "brain")
+    this.started_at = Date.now()
     this.child = spawn("uv", ["run", "--project", project, "python", "-m", "moi_brain", "--port", String(this.port)], {
       env: { ...process.env, MOI_TOKEN: this.token },
       stdio: ["ignore", "inherit", "inherit"],
     })
-    this.child.on("exit", () => {
-      if (!this.stopping) setTimeout(() => this.spawn(), RESTART_DELAY_MS)
+    this.child.on("error", (error) => {
+      console.error(`openMoi brain: ${error.message}`)
+      this.fail_start(new Error(`the brain could not be started with uv (${error.message}); install uv, see the README`))
     })
+    this.child.on("exit", () => this.exited())
+  }
+
+  // Waits 1, 2, 4 ... up to 30 s between quick crashes; a brain that ran a while restarts after 1 s.
+  private exited(): void {
+    if (this.stopping) return
+    this.restarts = Date.now() - this.started_at > STABLE_MS ? 0 : this.restarts + 1
+    const delay = Math.min(RESTART_DELAY_MS * 2 ** Math.max(this.restarts - 1, 0), MAX_RESTART_DELAY_MS)
+    setTimeout(() => {
+      if (!this.stopping) this.spawn()
+    }, delay)
   }
 
   stop(): void {

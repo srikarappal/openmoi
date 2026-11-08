@@ -127,3 +127,37 @@ describe("sessions", () => {
     expect(web_preferences("/p.js", false)).toMatchObject({ sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: true })
   })
 })
+
+describe("RelayDriver", () => {
+  it("sends every page operation to your Chrome through the brain", async () => {
+    const { RelayDriver } = await import("../../src/main/drivers")
+    const relay_call = vi.fn(async (op: string) => (op === "open" ? { handle: "512" } : op === "url" ? "https://x.com/home" : null))
+    const driver = new RelayDriver({ relay_call } as never)
+    expect(await driver.open("https://x.com/home", true)).toBe("512")
+    expect(await driver.url("512")).toBe("https://x.com/home")
+    await driver.close("512")
+    expect(relay_call.mock.calls).toEqual([
+      ["open", { url: "https://x.com/home", background: true }],
+      ["url", { handle: "512" }],
+      ["close", { handle: "512" }],
+    ])
+  })
+})
+
+describe("ElectronDriver loads", () => {
+  it("keeps a page whose load was cut short by a redirect and closes one that failed", async () => {
+    const host = make_host()
+    const driver = new ElectronDriver(host)
+    FakeWebContentsView.created = []
+    const opening = driver.open("https://x.com/home", true)
+    const [view] = FakeWebContentsView.created
+    view.webContents.load_error = Object.assign(new Error("ERR_ABORTED (-3)"), { code: "ERR_ABORTED" })
+    expect(await opening.catch((error: Error) => error.message)).toMatch(/^view:/)
+    const failing = driver.open("https://offline.example", true)
+    const second = FakeWebContentsView.created[1]
+    second.webContents.load_error = Object.assign(new Error("ERR_NAME_NOT_RESOLVED"), { code: "ERR_NAME_NOT_RESOLVED" })
+    await expect(failing).rejects.toThrow("ERR_NAME_NOT_RESOLVED")
+    expect(host.detached).toEqual([second])
+    expect(second.webContents.isDestroyed()).toBe(true)
+  })
+})

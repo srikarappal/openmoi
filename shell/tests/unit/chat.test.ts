@@ -98,7 +98,7 @@ describe("ChatController", () => {
   })
 
   it("marks a failed apply as discarded and says why", async () => {
-    const apply_edit = async () => Promise.reject(new BrainError(400, "input", "views/feed.md changed since this was proposed; ask again."))
+    const apply_edit = vi.fn(async () => Promise.reject(new BrainError(400, "input", "views/feed.md changed since this was proposed; ask again.")))
     const { chat, hooks } = make_chat({ edit: async () => proposal(), apply_edit })
     await chat.send("no shorts")
     await chat.apply("p1")

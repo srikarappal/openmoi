@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { PageDriver } from "../../src/main/drivers"
 import { SourceReader } from "../../src/main/sources"
 import type { PageSource, RawRecord } from "../../src/shared/types"
@@ -84,3 +84,41 @@ describe("SourceReader retry", () => {
   })
 })
 
+
+// A page that never shows items: a sign in wall when wall is set, otherwise just empty.
+class EmptyPage implements PageDriver {
+  readonly kind = "openmoi" as const
+
+  constructor(private readonly wall: boolean) {}
+
+  async open(): Promise<string> {
+    return "view:1"
+  }
+
+  async run<T>(handle: string, op: string): Promise<T> {
+    return (op === "challenge" ? this.wall : []) as T
+  }
+
+  async url(): Promise<string> {
+    return "https://x.com/i/flow/login"
+  }
+
+  async close(): Promise<void> {}
+}
+
+describe("SourceReader without items", () => {
+  it("reports a sign in wall with the page it ended on", async () => {
+    expect(await new SourceReader(() => new EmptyPage(true)).read(SOURCE, true, async () => {})).toEqual({ status: "challenge", url: "https://x.com/i/flow/login", driver: "openmoi" })
+  })
+
+  it("gives up on a page that stays empty after ten seconds, without scrolling", async () => {
+    vi.useFakeTimers()
+    try {
+      const reading = new SourceReader(() => new EmptyPage(false)).read(SOURCE, true, async () => {})
+      await vi.advanceTimersByTimeAsync(11_000)
+      expect(await reading).toEqual({ status: "read", count: 0, driver: "openmoi" })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

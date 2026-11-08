@@ -1,0 +1,376 @@
+import { pathToFileURL } from "node:url"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { BrainClient } from "../../src/main/brain"
+import type { Proposal, RelayInfo, ShellCommand, ShellState, ViewPage } from "../../src/shared/types"
+import { FakeBrowserWindow, FakeWebContentsView, ipc_event, ipcMain, opened_paths, reset_electron } from "./fake_electron"
+
+vi.mock("electron", async () => await import("./fake_electron"))
+
+const { Shell } = await import("../../src/main/shell")
+
+const UI_URL = pathToFileURL("/dist/ui/index.html").href
+const PAGE = { view_id: "feed", items: [], has_more: false, refreshing: false, caught_up: true, summary: "Reading X.", warnings: [], version: "v1", layout_hash: "h", lens_stale: false } as unknown as ViewPage
+const OFFLINE = { connected: false, waiting_for_approval: null, paired: false, extension_id: null, passive_batches: 0 }
+
+function proposal(fields: Partial<Proposal> = {}): Proposal {
+  return { proposal_id: "p1", view_id: "feed", changes: [{ file: "views/feed.md", diff: "+* No shorts." }], lens_action: null, reply: "Added a rule.", ...fields }
+}
+
+function fake_brain(fields: Record<string, unknown> = {}) {
+  return {
+    views: vi.fn(async () => [
+      { view_id: "feed", title: "Feed" },
+      { view_id: "tech", title: "Tech" },
+    ]),
+    relay_poll: vi.fn(async () => ({ status: OFFLINE, events: [] })),
+    relay_trust: vi.fn(async () => OFFLINE),
+    relay_call: vi.fn(async () => ({ handle: "9" })),
+    lens: vi.fn(async () => "<p>lens</p>"),
+    view_page: vi.fn(async () => PAGE),
+    refresh: vi.fn(async () => ({ page_sources: [] })),
+    events: vi.fn(async () => ({ recorded: 1 })),
+    edit: vi.fn(async () => proposal()),
+    apply_edit: vi.fn(async () => proposal()),
+    discard_edit: vi.fn(async () => ({ status: "discarded" })),
+    ingest: vi.fn(async () => ({ items: [], view_items: [], lens_stale: false, layout_hash: "h" })),
+    ...fields,
+  }
+}
+
+async function started(fields: Record<string, unknown> = {}) {
+  const brain = fake_brain(fields)
+  const shell = new Shell(brain as unknown as BrainClient, "/dist", true)
+  await shell.start()
+  shell.relay.stop()
+  const [window] = FakeBrowserWindow.created
+  return { shell, brain, window }
+}
+
+function from_ui(window: FakeBrowserWindow) {
+  return { ...ipc_event(window.webContents), senderFrame: { url: UI_URL } }
+}
+
+async function command(window: FakeBrowserWindow, message: ShellCommand): Promise<void> {
+  ipcMain.emit("moi:command", from_ui(window), message)
+  await new Promise((resolve) => setTimeout(resolve, 5))
+}
+
+function state_of(shell: InstanceType<typeof Shell>): ShellState {
+  return shell.state()
+}
+
+// Private parts of the shell that the tests drive directly.
+interface ShellInside {
+  on_relay_changed(status: RelayInfo, previous: RelayInfo): void
+  open_original(url: string): void
+}
+
+function inside(shell: InstanceType<typeof Shell>): ShellInside {
+  return shell as unknown as ShellInside
+}
+
+beforeEach(() => {
+  reset_electron()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe("Shell window", () => {
+  it("loads the UI and opens the first view in a lens", async () => {
+    const { shell, window } = await started()
+    expect(window.webContents.loads).toEqual(["/dist/ui/index.html"])
+    expect(window.options).toMatchObject({ show: false, title: "openMoi" })
+    expect(shell.lenses.get("view:feed")).toBeDefined()
+    expect(state_of(shell)).toMatchObject({ active: { kind: "view", view_id: "feed" }, chat_view: "Feed", address: "", thinking: false })
+    expect(state_of(shell).views.map((view) => view.view_id)).toEqual(["feed", "tech"])
+  })
+
+  it("takes commands and answers state only for the UI page itself", async () => {
+    const { shell, window } = await started()
+    const page = { ...ipc_event(window.webContents), senderFrame: { url: "https://evil.example/" } }
+    ipcMain.emit("moi:command", page, { type: "open_tab", url: "https://a.example" })
+    ipcMain.emit("moi:command", ipc_event(new FakeBrowserWindow().webContents), { type: "open_tab", url: "https://a.example" })
+    expect(shell.tabs.all()).toHaveLength(0)
+    const get_state = ipcMain.handlers.get("moi:get_state")
+    expect(get_state?.(page)).toBeNull()
+    expect(get_state?.(from_ui(window))).toMatchObject({ active: { kind: "view" } })
+    await command(window, { type: "open_tab", url: "https://a.example" })
+    expect(shell.tabs.all()).toHaveLength(1)
+  })
+
+  it("never navigates the UI window or opens windows from it", async () => {
+    const { window } = await started()
+    const navigation = { preventDefault: vi.fn() }
+    window.webContents.emit("will-navigate", navigation)
+    expect(navigation.preventDefault).toHaveBeenCalled()
+    expect(window.webContents.open_handler?.({ url: "https://a.example" })).toEqual({ action: "deny" })
+  })
+
+  it("lays every view out below the top bar and beside the side panel when the window resizes", async () => {
+    const { shell, window } = await started()
+    shell.open_tab("https://a.example")
+    window.size = [1000, 700]
+    window.emit("resize")
+    for (const child of window.contentView.children) expect(child.bounds).toEqual({ x: 0, y: 48, width: 660, height: 652 })
+  })
+
+  it("pushes its state to the UI as it changes", async () => {
+    const { shell, window } = await started()
+    shell.notify("hello")
+    const [, last] = window.webContents.sent.at(-1) ?? []
+    expect((last as ShellState).notices.map((notice) => notice.text)).toEqual(["hello"])
+    window.destroyed = true
+    shell.notify("not sent")
+    expect((window.webContents.sent.at(-1)?.[1] as ShellState).notices).toHaveLength(1)
+  })
+})
+
+describe("Shell notices", () => {
+  it("shows each text once, keeps the latest six and lets you dismiss or open them", async () => {
+    const { shell, window } = await started()
+    shell.notify("same")
+    shell.notify("same")
+    for (let index = 0; index < 7; index++) shell.notify(`notice ${index}`, index === 6 ? "https://sign.in/" : undefined)
+    const notices = state_of(shell).notices
+    expect(notices.map((notice) => notice.text)).toEqual(["notice 1", "notice 2", "notice 3", "notice 4", "notice 5", "notice 6"])
+    await command(window, { type: "dismiss_notice", notice_id: notices[0].notice_id })
+    expect(state_of(shell).notices).toHaveLength(5)
+    await command(window, { type: "open_notice", notice_id: notices[5].notice_id })
+    expect(shell.tabs.infos().map((tab) => tab.url)).toEqual(["https://sign.in/"])
+  })
+})
+
+describe("Shell originals", () => {
+  it("opens web links only, in an openMoi tab without Chrome and in Chrome with it", async () => {
+    const { shell, brain } = await started()
+    inside(shell).open_original("javascript:alert(1)")
+    expect(state_of(shell).notices.at(-1)?.text).toBe("openMoi only opens web links, not javascript:alert(1)")
+    inside(shell).open_original("https://a.example/story")
+    expect(shell.tabs.infos().map((tab) => tab.url)).toEqual(["https://a.example/story"])
+    shell.relay.status = { connected: true, waiting_for_approval: null, paired: true }
+    inside(shell).open_original("https://b.example/story")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(brain.relay_call).toHaveBeenCalledWith("open", { url: "https://b.example/story", background: false })
+    brain.relay_call.mockRejectedValueOnce(new Error("Chrome is not connected"))
+    inside(shell).open_original("https://c.example/story")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(state_of(shell).notices.at(-1)?.text).toBe("Could not open it in Chrome: Chrome is not connected")
+    expect(shell.tabs.infos().map((tab) => tab.url)).toEqual(["https://a.example/story", "https://c.example/story"])
+  })
+})
+
+describe("Shell tabs and commands", () => {
+  it("opens, selects, navigates and closes tabs, returning to the first view", async () => {
+    const { shell, window } = await started()
+    await command(window, { type: "navigate", url: "a.example" })
+    const [tab] = shell.tabs.all()
+    expect(state_of(shell).active).toEqual({ kind: "tab", tab_id: tab.tab_id })
+    expect(state_of(shell).address).toBe("https://a.example")
+    await command(window, { type: "navigate", url: "https://b.example" })
+    expect(shell.tabs.all()).toHaveLength(1)
+    await command(window, { type: "refresh" })
+    expect((tab.view.webContents as unknown as { reloads: number }).reloads).toBe(1)
+    await command(window, { type: "select_tab", tab_id: 99 })
+    expect(state_of(shell).active).toEqual({ kind: "tab", tab_id: tab.tab_id })
+    await command(window, { type: "open_view", view_id: "feed" })
+    await command(window, { type: "select_tab", tab_id: tab.tab_id })
+    await command(window, { type: "close_tab", tab_id: tab.tab_id })
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "feed" })
+  })
+
+  it("refreshes the view you are looking at", async () => {
+    const { brain, window } = await started()
+    await command(window, { type: "refresh" })
+    expect(brain.refresh).toHaveBeenLastCalledWith("feed", true)
+  })
+
+  it("passes chat, proposals and approvals on", async () => {
+    const { shell, brain, window } = await started()
+    await command(window, { type: "chat_send", text: "no shorts" })
+    expect(brain.edit).toHaveBeenCalledWith("feed", "no shorts", undefined, "any")
+    await command(window, { type: "proposal_apply", proposal_id: "p1" })
+    expect(brain.apply_edit).toHaveBeenCalledWith("p1")
+    expect(state_of(shell).chat.find((entry) => entry.proposal)?.status).toBe("applied")
+    await command(window, { type: "relay_trust", extension_id: "abcdefghijklmnopabcdefghijklmnop" })
+    expect(brain.relay_trust).toHaveBeenCalledWith("abcdefghijklmnopabcdefghijklmnop")
+  })
+
+  it("opens your openMoi folder for /settings open", async () => {
+    const { window } = await started({ overview: vi.fn(async () => ({ home: "/Users/me/openMoi", view_id: "feed", view_file: "views/feed.md", sections: {}, memory: {}, model: { fast: {}, smart: {}, allow_content_to_hosted: false }, relay: { connected: false } })) })
+    await command(window, { type: "chat_send", text: "/settings open" })
+    expect(opened_paths).toEqual(["/Users/me/openMoi"])
+  })
+})
+
+describe("Shell and Chrome", () => {
+  it("clears the Allow notice once Chrome connects and says when Chrome comes and goes", async () => {
+    const { shell } = await started()
+    shell.notify("A Chrome extension wants to read pages", undefined, { label: "Allow", command: { type: "relay_trust", extension_id: "x" } })
+    inside(shell).on_relay_changed({ connected: true, waiting_for_approval: null, paired: true }, { connected: false, waiting_for_approval: null, paired: false })
+    expect(state_of(shell).notices.some((notice) => notice.action)).toBe(false)
+    expect(state_of(shell).chat.at(-1)?.text).toBe("Chrome is connected: openMoi now reads through your own Chrome sessions.")
+    inside(shell).on_relay_changed({ connected: false, waiting_for_approval: null, paired: true }, { connected: true, waiting_for_approval: null, paired: true })
+    expect(state_of(shell).chat.at(-1)?.text).toBe("Chrome disconnected: openMoi falls back to its own session until it is back.")
+  })
+
+  it("shows the full extension id in the approval notice", async () => {
+    const { shell } = await started({
+      relay_poll: vi.fn(async () => ({ status: { ...OFFLINE, waiting_for_approval: "abcdefghijklmnopabcdefghijklmnop" }, events: [] })),
+    })
+    await shell.relay.poll()
+    expect(state_of(shell).notices.at(-1)?.text).toContain("(id abcdefghijklmnopabcdefghijklmnop)")
+  })
+
+  it("shows a Chrome page as Mine and goes back to the view when you close it", async () => {
+    const mine_request = { event: "mine" as const, handle: "512", url: "https://news.example.com/", title: "News" }
+    const status = { ...OFFLINE, connected: true, paired: true }
+    const relay_poll = vi.fn().mockResolvedValueOnce({ status, events: [] }).mockResolvedValueOnce({ status, events: [mine_request] }).mockResolvedValue({ status, events: [] })
+    const { shell, window } = await started({ relay_poll })
+    vi.spyOn(shell.mine, "enable").mockResolvedValue(true)
+    await shell.relay.poll()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const [page] = state_of(shell).chrome_pages
+    expect(page).toMatchObject({ title: "News", url: "https://news.example.com/" })
+    expect(state_of(shell).active).toEqual({ kind: "chrome", page_id: page.page_id })
+    await command(window, { type: "open_view", view_id: "feed" })
+    await command(window, { type: "select_chrome_page", page_id: page.page_id })
+    await command(window, { type: "close_chrome_page", page_id: page.page_id })
+    expect(state_of(shell).chrome_pages).toEqual([])
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "feed" })
+  })
+})
+
+describe("Shell Mine on tabs", () => {
+  it("drops a Mine view whose tab you closed while it was being made", async () => {
+    const { shell, window } = await started()
+    shell.open_tab("https://shop.example.com/")
+    const [tab] = shell.tabs.all()
+    let finish: (enabled: boolean) => void = () => {}
+    vi.spyOn(shell.mine, "enable").mockReturnValue(new Promise((resolve) => (finish = resolve)))
+    const disable = vi.spyOn(shell.mine, "disable")
+    const toggling = command(window, { type: "toggle_mine" })
+    await new Promise((resolve) => setTimeout(resolve, 1))
+    await command(window, { type: "close_tab", tab_id: tab.tab_id })
+    finish(true)
+    await toggling
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(disable).toHaveBeenCalledWith(`tab:${tab.tab_id}`)
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "feed" })
+  })
+
+  it("leaves you where you went while a Mine view was being made, then marks the tab", async () => {
+    const { shell, window } = await started()
+    shell.open_tab("https://shop.example.com/")
+    const [tab] = shell.tabs.all()
+    let finish: (enabled: boolean) => void = () => {}
+    vi.spyOn(shell.mine, "enable").mockReturnValue(new Promise((resolve) => (finish = resolve)))
+    const toggling = command(window, { type: "toggle_mine" })
+    await new Promise((resolve) => setTimeout(resolve, 1))
+    await command(window, { type: "open_view", view_id: "feed" })
+    finish(true)
+    await toggling
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(tab.mine).toBe(true)
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "feed" })
+    expect(FakeWebContentsView.created.length).toBeGreaterThan(1)
+  })
+})
+
+function item(item_id: string, title: string) {
+  return { item: { item_id, title, url: `https://a.example/${item_id}`, source_id: "x", kind: "post" }, reasons: [] }
+}
+
+async function lens_says(contents: unknown, message: unknown): Promise<void> {
+  ipcMain.emit("moi:lens_event", ipc_event(contents as never), message)
+  await new Promise((resolve) => setTimeout(resolve, 10))
+}
+
+describe("Shell flows through the lens", () => {
+  it("renders a view when its lens is ready, opens items and turns less like this into a chat request", async () => {
+    const page = { ...PAGE, items: [item("i1", "Election night"), item("i2", "Sourdough")] }
+    const { shell, brain } = await started({ view_page: vi.fn(async () => page) })
+    const lens = shell.lenses.get("view:feed")
+    await lens_says(lens?.view.webContents, { type: "ready" })
+    const renders = (lens?.view.webContents as unknown as { messages(channel: string): Array<{ type: string }> }).messages("moi:lens")
+    expect(renders[0]).toMatchObject({ type: "render" })
+    await lens_says(lens?.view.webContents, { type: "open", item_id: "i1" })
+    expect(brain.events).toHaveBeenCalledWith([{ view_id: "feed", item_id: "i1", event_kind: "open" }])
+    expect(shell.tabs.infos().map((tab) => tab.url)).toEqual(["https://a.example/i1"])
+    await lens_says(lens?.view.webContents, { type: "less_like_this", item_id: "i2" })
+    expect(brain.edit).toHaveBeenCalledWith("feed", "Less like this: Sourdough", "i2", "any")
+  })
+
+  it("asks for a new look when the brain says the lens is stale", async () => {
+    const { shell } = await started({ view_page: vi.fn(async () => ({ ...PAGE, lens_stale: true, layout_hash: "h2" })) })
+    const ensure = vi.spyOn(shell.lens_gen, "ensure").mockResolvedValue()
+    await lens_says(shell.lenses.get("view:feed")?.view.webContents, { type: "ready" })
+    expect(ensure).toHaveBeenCalledWith("feed", "feed", "h2")
+  })
+})
+
+describe("Shell after edits", () => {
+  it("opens a view an applied edit created", async () => {
+    const views = vi
+      .fn()
+      .mockResolvedValueOnce([{ view_id: "feed", title: "Feed" }])
+      .mockResolvedValue([
+        { view_id: "feed", title: "Feed" },
+        { view_id: "science", title: "Science" },
+      ])
+    const { shell, window } = await started({ views, edit: vi.fn(async () => proposal({ view_id: "science" })), apply_edit: vi.fn(async () => proposal({ view_id: "science" })) })
+    await command(window, { type: "chat_send", text: "/newview science space and physics" })
+    await command(window, { type: "proposal_apply", proposal_id: "p1" })
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "science" })
+  })
+
+  it("reloads the look on a rollback and re-renders on other edits", async () => {
+    const { shell, brain, window } = await started({ apply_edit: vi.fn(async () => proposal({ lens_action: "rollback" })) })
+    const reload = vi.spyOn(shell.views, "reload_lens")
+    await command(window, { type: "chat_send", text: "bring back the previous look" })
+    await command(window, { type: "proposal_apply", proposal_id: "p1" })
+    expect(reload).toHaveBeenCalledWith("feed")
+    brain.apply_edit.mockResolvedValue(proposal({ proposal_id: "p2" }))
+    brain.edit.mockResolvedValue(proposal({ proposal_id: "p2" }))
+    const after_edit = vi.spyOn(shell.views, "after_edit").mockResolvedValue()
+    await command(window, { type: "chat_send", text: "no shorts" })
+    await command(window, { type: "proposal_apply", proposal_id: "p2" })
+    expect(after_edit).toHaveBeenCalledWith("feed")
+  })
+
+  it("makes an empty view a tab right away and rechecks after a model change", async () => {
+    const views = vi
+      .fn()
+      .mockResolvedValueOnce([{ view_id: "feed", title: "Feed" }])
+      .mockResolvedValue([
+        { view_id: "feed", title: "Feed" },
+        { view_id: "tech", title: "Tech" },
+      ])
+    const info = { fast: { provider: "ollama", model: "llama3", base_url: "", local: true, key_ready: true }, smart: { provider: "ollama", model: "llama3", base_url: "", local: true, key_ready: true }, allow_content_to_hosted: true }
+    const { shell, window } = await started({ views, create_view: vi.fn(async () => ({ view_id: "tech", title: "Tech" })), update_model: vi.fn(async () => info) })
+    await command(window, { type: "chat_send", text: "/newview Tech" })
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "tech" })
+    const recheck = vi.spyOn(shell.views, "recheck").mockResolvedValue()
+    await command(window, { type: "chat_send", text: "/model privacy on" })
+    expect(recheck).toHaveBeenCalledWith("tech")
+  })
+})
+
+describe("Shell Mine toggling", () => {
+  it("turns Mine off again and drops it when the page navigates underneath", async () => {
+    const { shell, window } = await started()
+    shell.open_tab("https://shop.example.com/")
+    const [tab] = shell.tabs.all()
+    vi.spyOn(shell.mine, "enable").mockResolvedValue(true)
+    const disable = vi.spyOn(shell.mine, "disable")
+    await command(window, { type: "toggle_mine" })
+    expect(tab.mine).toBe(true)
+    await command(window, { type: "toggle_mine" })
+    expect(tab.mine).toBe(false)
+    await command(window, { type: "toggle_mine" })
+    tab.view.webContents.emit("did-navigate")
+    expect(tab.mine).toBe(false)
+    expect(disable).toHaveBeenCalledTimes(2)
+  })
+})

@@ -1,5 +1,5 @@
 // The chrome UI: view and web tabs, the address bar and the side panel.
-import { useEffect, useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 import { createRoot } from "react-dom/client"
 import { matching_commands } from "../shared/commands"
 import type { Activity, ChatEntry, ShellCommand, ShellState } from "../shared/types"
@@ -133,7 +133,7 @@ function CommandHints({ text, pick }: { text: string; pick: (name: string) => vo
   return (
     <div className="hints">
       {hints.map((hint) => (
-        <button key={hint.name} className="hint" onClick={() => pick(hint.name)}>
+        <button key={hint.name} type="button" className="hint" onClick={() => pick(hint.name)}>
           <span className="hint_usage">{hint.usage}</span>
           <span className="hint_summary">{hint.summary}</span>
         </button>
@@ -142,8 +142,13 @@ function CommandHints({ text, pick }: { text: string; pick: (name: string) => vo
   )
 }
 
+// New replies, proposals and "new look is live" land at the bottom, so the chat follows them there.
 function Chat({ state }: { state: ShellState }) {
   const [text, set_text] = useState("")
+  const messages = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (messages.current) messages.current.scrollTop = messages.current.scrollHeight
+  }, [state.chat.length, state.thinking])
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!text.trim()) return
@@ -152,7 +157,7 @@ function Chat({ state }: { state: ShellState }) {
   }
   return (
     <section className="chat">
-      <div className="messages">
+      <div className="messages" ref={messages}>
         {state.chat.map((entry) => (
           <ChatMessage key={entry.entry_id} entry={entry} />
         ))}

@@ -38,3 +38,6 @@ element("mine").addEventListener("click", () => mine_this_page())
 element("passive").addEventListener("change", () => set_passive())
 element("pair").addEventListener("click", () => pair_again())
 show_status()
+
+// A module, so the tests can load it; the build bundles it as a plain script.
+export {}
