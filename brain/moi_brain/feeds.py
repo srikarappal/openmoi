@@ -1,11 +1,12 @@
-"""Rung 1 sources: RSS and Atom feeds plus YouTube channel feeds."""
+"""Rung 1 sources: RSS and Atom feeds plus YouTube channel feeds, with the channel page as YouTube's fallback."""
 
 import csv
 import html
 import json
 import re
 from calendar import timegm
-from datetime import UTC, datetime
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,9 @@ CHANNEL_FEED_LINK = re.compile(r"feeds/videos\.xml\?channel_id=(UC[\w-]{22})")
 CHANNEL_JSON = re.compile(r'"(?:externalId|channelId)":"(UC[\w-]{22})"')
 TAG = re.compile(r"<[^>]+>")
 IMG_SRC = re.compile(r"<img[^>]+src=[\"']([^\"']+)[\"']", re.IGNORECASE)
+INITIAL_DATA = re.compile(r"var ytInitialData = (\{.*?\});</script>", re.DOTALL)
+RELATIVE_AGE = re.compile(r"(\d+) (second|minute|hour|day|week|month|year)s? ago")
+AGE_SECONDS = {"second": 1, "minute": 60, "hour": 3_600, "day": 86_400, "week": 604_800, "month": 2_592_000, "year": 31_536_000}
 
 
 class FeedError(Exception):
@@ -66,6 +70,72 @@ def entry_record(entry: Any, kind: str) -> dict[str, Any]:
     return record
 
 
+def nested(node: Any, key: str) -> Iterator[Any]:
+    """Every value stored under key anywhere inside parsed JSON."""
+    if isinstance(node, dict):
+        for name, value in node.items():
+            if name == key:
+                yield value
+            yield from nested(value, key)
+    elif isinstance(node, list):
+        for value in node:
+            yield from nested(value, key)
+
+
+def published_from_age(label: str, now: datetime) -> str | None:
+    """'3 days ago' becomes a time about three days before now."""
+    match = RELATIVE_AGE.search(label)
+    return (now - timedelta(seconds=int(match.group(1)) * AGE_SECONDS[match.group(2)])).isoformat() if match else None
+
+
+def page_video(video_id: str, title: str, age: str, image_url: str | None, author: str | None, now: datetime) -> dict[str, Any]:
+    return {
+        "native_id": video_id,
+        "url": f"{YOUTUBE_BASE}/watch?v={video_id}",
+        "title": title,
+        "text": "",
+        "author_name": author,
+        "image_url": image_url,
+        "published_at": published_from_age(age, now),
+        "kind": "video",
+        "media_kind": "long_video",
+    }
+
+
+def lockup_video(lockup: dict[str, Any], author: str | None, now: datetime) -> dict[str, Any] | None:
+    if lockup.get("contentType") != "LOCKUP_CONTENT_TYPE_VIDEO" or not lockup.get("contentId"):
+        return None
+    meta = lockup.get("metadata", {}).get("lockupMetadataViewModel", {})
+    age = " ".join(str(label) for label in nested(meta.get("metadata", {}), "accessibilityLabel"))
+    images = lockup.get("contentImage", {}).get("thumbnailViewModel", {}).get("image", {}).get("sources", [])
+    image_url = images[-1].get("url") if images else None
+    return page_video(lockup["contentId"], meta.get("title", {}).get("content", ""), age, image_url, author, now)
+
+
+def renderer_video(renderer: dict[str, Any], author: str | None, now: datetime) -> dict[str, Any] | None:
+    if not renderer.get("videoId"):
+        return None
+    title = "".join(run.get("text", "") for run in renderer.get("title", {}).get("runs", []))
+    images = renderer.get("thumbnail", {}).get("thumbnails", [])
+    image_url = images[-1].get("url") if images else None
+    return page_video(renderer["videoId"], title, renderer.get("publishedTimeText", {}).get("simpleText", ""), image_url, author, now)
+
+
+def channel_page_videos(page: str, now: datetime) -> list[dict[str, Any]]:
+    """Uploads listed on a channel's videos page, in either of the two shapes YouTube serves."""
+    match = INITIAL_DATA.search(page)
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(1))
+    except ValueError:
+        return []
+    author = next((meta.get("title") for meta in nested(data, "channelMetadataRenderer")), None)
+    videos = [lockup_video(lockup, author, now) for lockup in nested(data, "lockupViewModel")]
+    videos += [renderer_video(renderer, author, now) for renderer in nested(data, "videoRenderer")]
+    return list({video["native_id"]: video for video in videos if video}.values())
+
+
 def read_takeout(path: Path) -> list[str]:
     """Channel ids from a Google Takeout subscriptions.csv."""
     if not path.exists():
@@ -90,9 +160,23 @@ class FeedFetcher:
     def fetch_youtube(self, channel: str) -> list[dict[str, Any]]:
         is_id = bool(CHANNEL_ID.fullmatch(channel))
         channel_id = channel if is_id else self.resolve_channel(channel)
-        records = self.read_entries(f"{self.youtube_base}/feeds/videos.xml?channel_id={channel_id}", "video")
+        try:
+            records = self.read_entries(f"{self.youtube_base}/feeds/videos.xml?channel_id={channel_id}", "video")
+        except FeedError as error:
+            records = self.read_channel_page(channel_id, error)
         handle = None if is_id else channel.lstrip("@").lower()
         return [record | {"author_handle": handle} for record in records]
+
+    def read_channel_page(self, channel_id: str, feed_error: FeedError) -> list[dict[str, Any]]:
+        """YouTube's feed server goes down for hours at a time; the channel's videos page lists the same uploads."""
+        try:
+            page = self.get(f"{self.youtube_base}/channel/{channel_id}/videos", {"accept-language": "en"}) or b""
+        except FeedError as error:
+            raise FeedError(f"{feed_error}; the channel page failed too: {error}") from error
+        videos = channel_page_videos(page.decode("utf-8", errors="replace"), datetime.now(UTC))
+        if not videos:
+            raise FeedError(f"{feed_error}; the channel page listed no videos")
+        return videos
 
     def resolve_channel(self, handle: str) -> str:
         key = handle.lstrip("@").lower()

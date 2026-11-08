@@ -193,6 +193,8 @@ export interface Notice {
   text: string
   url?: string
   action?: { label: string; command: ShellCommand }
+  // Notices with a tag are withdrawn together once what they asked for has happened.
+  tag?: string
 }
 
 // A page in your Chrome shown here as Mine.
@@ -205,6 +207,8 @@ export interface ChromePageInfo {
 export interface RelayInfo {
   connected: boolean
   waiting_for_approval: string | null
+  // An extension was approved before, so Chrome is expected back even while it is not connected.
+  paired: boolean
 }
 
 export interface MineRequestEvent {

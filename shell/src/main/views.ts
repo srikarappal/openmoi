@@ -11,7 +11,8 @@ const SETTLE_ATTEMPTS = 30
 
 export interface ViewHooks {
   open_original(url: string): void
-  notify(text: string, url?: string): void
+  notify(text: string, url?: string, tag?: string): void
+  retract(tag: string): void
   echo(text: string): void
   less_like_this(view_id: string, item: Item): void
   lens_stale(view_id: string, layout_hash: string): void
@@ -24,7 +25,11 @@ export function view_lens_key(view_id: string): string {
 // In Chrome you only need to sign in; without the relay, openMoi's own session is the one missing the sign in.
 function challenge_text(source_id: string, driver: DriverKind): string {
   if (driver === "chrome") return `${source_id} needs you in Chrome: sign in or finish the check there, then refresh.`
-  return `${source_id} needs you: connect Chrome (the openMoi extension) to use your Chrome sign in, or sign in here, then refresh.`
+  return `${source_id} needs your Chrome sign in: open Chrome with the openMoi extension and it loads by itself, or sign in here, then refresh.`
+}
+
+function source_tag(source_id: string): string {
+  return `source:${source_id}`
 }
 
 function cursor_for(page: ViewPage): string | null {
@@ -35,6 +40,7 @@ export class ViewController {
   private readonly versions = new Map<string, string>()
   private readonly summaries = new Map<string, string>()
   private readonly reported = new Set<string>()
+  private readonly waiting_for_chrome = new Map<string, { view_id: string; source: PageSource }>()
 
   constructor(
     private readonly brain: BrainClient,
@@ -84,14 +90,44 @@ export class ViewController {
     }
   }
 
-  // Reads page sources in your session, then appends whatever is new until the brain finishes its own feeds.
+  // The brain's feeds show as they arrive while page sources load in your session, which may wait for Chrome.
   async refresh(context: LensContext, force: boolean): Promise<void> {
     const { page_sources } = await this.brain.refresh(context.view_id, force)
-    for (const source of page_sources) {
-      const outcome = await this.sources.read(source, force, (records) => this.ingest_batch(context, source, records))
-      if (outcome.status === "challenge") this.hooks.notify(challenge_text(source.source_id, outcome.driver), outcome.url)
-      else if (outcome.status === "failed") this.hooks.notify(`${source.source_id} could not be read: ${outcome.error}`)
+    await Promise.all([this.settle(context), this.read_sources(context, page_sources, force)])
+  }
+
+  // Chrome connected after a read had to use openMoi's own session: read those sources again in Chrome.
+  async chrome_connected(): Promise<void> {
+    const waiting = [...this.waiting_for_chrome.values()]
+    this.waiting_for_chrome.clear()
+    for (const { view_id, source } of waiting) {
+      const context = this.lenses.get(view_lens_key(view_id))
+      if (context) await this.read_sources(context, [source], true)
     }
+  }
+
+  // A notice about a source is replaced by its latest read, so one that worked leaves nothing behind.
+  private async read_sources(context: LensContext, sources: PageSource[], force: boolean): Promise<void> {
+    for (const source of sources) {
+      const tag = source_tag(source.source_id)
+      const outcome = await this.sources.read(source, force, (records) => {
+        this.hooks.retract(tag)
+        return this.ingest_batch(context, source, records)
+      })
+      if (outcome.status === "skipped") continue
+      this.hooks.retract(tag)
+      if (outcome.status === "challenge") {
+        if (outcome.driver === "openmoi") this.waiting_for_chrome.set(`${context.view_id}\0${source.source_id}`, { view_id: context.view_id, source })
+        this.hooks.notify(challenge_text(source.source_id, outcome.driver), outcome.url, tag)
+      } else if (outcome.status === "failed") {
+        this.hooks.notify(`${source.source_id} could not be read: ${outcome.error}`, undefined, tag)
+      }
+    }
+    if (sources.length) await this.settle(context)
+  }
+
+  // Appends whatever is new until the brain has finished fetching and tagging.
+  private async settle(context: LensContext): Promise<void> {
     for (let attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
       const page = await this.append_next(context)
       if (!page.refreshing) return

@@ -1,9 +1,11 @@
+from datetime import UTC, datetime
+
 import feedparser
 import httpx
 import pytest
 from fake_services import CHANNEL_ID
 
-from moi_brain.feeds import FeedError, FeedFetcher, entry_image, entry_record, read_takeout, strip_html
+from moi_brain.feeds import FeedError, FeedFetcher, channel_page_videos, entry_image, entry_record, published_from_age, read_takeout, strip_html
 
 
 @pytest.fixture
@@ -73,6 +75,49 @@ def test_channel_cache_is_reused_across_fetchers(tmp_path, services):
     with httpx.Client(timeout=5) as http:
         FeedFetcher(http, tmp_path / "channels.json", services.base_url).fetch_youtube("@veritasium")
     assert not [request for request in services.requests if request["path"] == "/@veritasium"]
+
+
+def test_youtube_falls_back_to_the_channel_page_when_the_feed_server_is_down(fetcher, services):
+    services.youtube_feed_down = True
+    records = fetcher.fetch_youtube("@veritasium")
+    assert [record["native_id"] for record in records] == ["VIDEO00001A", "VIDEO00002C", "VIDEO00003D"]
+    first = records[0]
+    assert first["url"] == "https://www.youtube.com/watch?v=VIDEO00001A"
+    assert (first["title"], first["author_name"], first["author_handle"]) == ("Why the sky is blue, really", "Veritasium", "veritasium")
+    assert (first["kind"], first["media_kind"], first["image_url"]) == ("video", "long_video", "https://i.ytimg.com/vi/VIDEO00001A/hq720.jpg")
+    assert records[0]["published_at"] > records[1]["published_at"] > records[2]["published_at"]
+    page_request = next(request for request in services.requests if request["path"] == f"/channel/{CHANNEL_ID}/videos")
+    assert page_request["headers"]["accept-language"] == "en"
+
+
+def test_feed_and_page_ids_match_so_videos_do_not_repeat(fetcher, services):
+    from_feed = {record["native_id"] for record in fetcher.fetch_youtube(CHANNEL_ID)}
+    services.youtube_feed_down = True
+    from_page = {record["native_id"] for record in fetcher.fetch_youtube(CHANNEL_ID)}
+    assert {"VIDEO00001A", "VIDEO00002C"} <= from_feed & from_page
+
+
+def test_youtube_fails_only_when_the_page_fails_too(tmp_path, services):
+    services.youtube_feed_down = True
+    (tmp_path / "channels.json").write_text('{"ghost": "UCghostchannel0000000001"}')
+    with httpx.Client(timeout=5) as http:
+        with pytest.raises(FeedError, match="returned 404; the channel page failed too"):
+            FeedFetcher(http, tmp_path / "channels.json", services.base_url).fetch_youtube("@ghost")
+
+
+@pytest.mark.parametrize("page", ["<html>no data</html>", "<script>var ytInitialData = {broken;</script>", '<script>var ytInitialData = {"a": 1};</script>'])
+def test_channel_pages_without_videos_give_nothing(page):
+    assert channel_page_videos(page, datetime.now(UTC)) == []
+
+
+@pytest.mark.parametrize(
+    ("label", "hours"),
+    [("4 hours ago", 4), ("Streamed 1 day ago", 24), ("2 weeks ago", 336), ("10 million views 3 months ago", 2160)],
+)
+def test_published_from_age(label, hours):
+    now = datetime(2026, 11, 7, tzinfo=UTC)
+    assert (now - datetime.fromisoformat(published_from_age(label, now))).total_seconds() == hours * 3600
+    assert published_from_age("10 million views", now) is None
 
 
 def test_read_takeout(tmp_path):

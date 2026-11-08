@@ -77,6 +77,7 @@ class RelayHub:
                 "connected": self.connection is not None,
                 "extension_id": self.extension_id,
                 "waiting_for_approval": self.candidate[1] if self.candidate else None,
+                "paired": bool(self.trusted),
             }
 
     def handle(self, connection: ServerConnection) -> None:

@@ -85,12 +85,42 @@ def channel_page(base_url: str) -> str:
     )
 
 
+def lockup(video_id: str, title: str, age: str) -> dict[str, Any]:
+    return {
+        "contentId": video_id,
+        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+        "contentImage": {"thumbnailViewModel": {"image": {"sources": [{"url": f"https://i.ytimg.com/vi/{video_id}/small.jpg"}, {"url": f"https://i.ytimg.com/vi/{video_id}/hq720.jpg"}]}}},
+        "metadata": {"lockupMetadataViewModel": {
+            "title": {"content": title},
+            "metadata": {"contentMetadataViewModel": {"metadataRows": [{"metadataParts": [{"accessibilityLabel": "10 million views"}, {"accessibilityLabel": age}]}]}},
+        }},
+    }
+
+
+def channel_videos_page(base_url: str) -> str:
+    """The channel's videos tab as YouTube serves it: uploads inside the ytInitialData script, mostly as lockups."""
+    data = {
+        "metadata": {"channelMetadataRenderer": {"title": "Veritasium", "externalId": CHANNEL_ID}},
+        "contents": {"tabs": [{"richGridRenderer": {"contents": [
+            {"richItemRenderer": {"content": {"lockupViewModel": lockup("VIDEO00001A", "Why the sky is blue, really", "4 hours ago")}}},
+            {"richItemRenderer": {"content": {"lockupViewModel": lockup("VIDEO00002C", "The surprising math of traffic", "3 days ago")}}},
+            {"richItemRenderer": {"content": {"lockupViewModel": {"contentId": "PLAYLIST01", "contentType": "LOCKUP_CONTENT_TYPE_PLAYLIST"}}}},
+            {"richItemRenderer": {"content": {"videoRenderer": {
+                "videoId": "VIDEO00003D", "title": {"runs": [{"text": "Older layout video"}]},
+                "publishedTimeText": {"simpleText": "2 weeks ago"}, "thumbnail": {"thumbnails": [{"url": "https://i.ytimg.com/vi/VIDEO00003D/hq.jpg"}]},
+            }}}},
+        ]}}]},
+    }
+    return f"<html><body><script>var ytInitialData = {json.dumps(data)};</script></body></html>"
+
+
 ROUTES = {
     "/rss/tech.xml": ("application/rss+xml", tech_feed),
     "/rss/news.xml": ("application/rss+xml", news_feed),
     "/rss/broken.xml": ("application/rss+xml", broken_feed),
     "/@veritasium": ("text/html", channel_page),
     "/feeds/videos.xml": ("application/atom+xml", youtube_feed),
+    f"/channel/{CHANNEL_ID}/videos": ("text/html", channel_videos_page),
 }
 
 
@@ -111,6 +141,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, "application/json", json.dumps([{"path": call["path"], "payload": call["payload"]} for call in services.model_calls(task)]))
         elif parts.path == "/pages/x_home_signed_in.html":
             self.signed_in_page()
+        elif parts.path == "/feeds/videos.xml" and services.youtube_feed_down:
+            self.reply(404, "text/html", "YouTube RSS Feeds server: not found")
         elif parts.path == "/rss/etag.xml":
             self.etag_feed(base)
         elif parts.path in ROUTES:
@@ -186,6 +218,7 @@ class FakeServices:
         self.requests: list[dict[str, Any]] = []
         self.model_queue: dict[str, list[str | None]] = {}
         self.model_delay = 0.0
+        self.youtube_feed_down = False
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     @property
@@ -227,6 +260,7 @@ class FakeServices:
             self.requests.clear()
             self.model_queue.clear()
             self.model_delay = 0.0
+            self.youtube_feed_down = False
 
 
 def main() -> None:

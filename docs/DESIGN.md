@@ -191,7 +191,7 @@ Not a goal for the MVP: being safe to hand to strangers. It is a dogfood build f
 |---|---|
 | Electron shell with tabs and your own sessions | Packaging, signing, auto update (L9) |
 | Python brain on localhost HTTP | Unix socket RPC, schema codegen, supervisor (L9) |
-| Sources: X home timeline, YouTube channels through RSS, any RSS feed | Facebook and Amazon as sources, passive JSON capture, assist mode (L1) |
+| Sources: X home timeline, YouTube channels through RSS (the channel's videos page when YouTube's feed server is down, which happens for hours at a time), any RSS feed | Facebook and Amazon as sources, passive JSON capture, assist mode (L1) |
 | "Mine" for any page: Readability for articles, generated extractor for listings | Page classifier with many types, structured data paths, health monitor, packs (L1) |
 | Views as .md files: sources, rules, layout in plain words | Match kinds beyond union, identity links (L7) |
 | Memory as .md files | Journal rollups, vectors (L2) |
@@ -232,6 +232,7 @@ Not a goal for the MVP: being safe to hand to strangers. It is a dogfood build f
 
 * Three things we write: the openMoi window (TypeScript), the Chrome extension (TypeScript, sharing the page operation code) and the brain (Python). Models run outside them: a local model server for the fast slot, a hosted API for the smart slot.
 * The window drives every page read through a page driver: your Chrome through the relay whenever the extension is connected, openMoi's own hidden views only as a fallback.
+* Once you have paired Chrome, a read waits up to 35 s for it to reconnect (the extension wakes on a 30 s alarm) instead of falling back to openMoi's session, which is signed in nowhere. If a read did fall back and hit a sign in, it runs again in Chrome the moment Chrome connects and its notice is withdrawn with the first items.
 * The window calls the brain; the brain never calls the window. Anything that needs a browser (running an extractor, smoke testing a lens) runs on the window's side, which sends the result back in its next request.
 * RSS and YouTube feeds are public feeds meant for machines, so the brain fetches them directly. X is read in your Chrome: a background tab in a collapsed "openMoi" group, closed right after.
 
@@ -732,7 +733,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 
 | Check | Result |
 |---|---|
-| Tests | 223 brain (unit and API integration), 172 shell and extension unit, 20 end to end in the real app (4 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 233 brain (unit and API integration), 179 shell and extension unit, 21 end to end in the real app (5 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; the background read tab closes after each read |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |

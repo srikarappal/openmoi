@@ -1,6 +1,7 @@
 // The Chrome relay in the real app: a real Chromium with the openMoi extension, signed in where openMoi is not.
 import { expect, test } from "@playwright/test"
-import { ChromeWithExtension, FakeWorld, Harness, eventually } from "./harness"
+import { sleep } from "../../src/shared/timing"
+import { ChromeWithExtension, FakeWorld, Harness, eventually, unpacked_extension_id } from "./harness"
 
 interface Debug {
   store: { items: Record<string, number> }
@@ -31,28 +32,49 @@ async function close_both(app: Harness, chrome: ChromeWithExtension): Promise<vo
   await app.close()
 }
 
-test("until you allow Chrome nothing is read there; after, X comes through your Chrome sign in", async () => {
+test("until you allow Chrome nothing is read there; after, X comes through your Chrome sign in by itself", async () => {
   const { app, chrome } = await launch_both()
   try {
-    await expect(app.chrome.locator(".notice", { hasText: "connect Chrome (the openMoi extension)" })).toHaveCount(1, { timeout: 30_000 })
+    const needs_chrome = app.chrome.locator(".notice", { hasText: "open Chrome with the openMoi extension" })
+    await expect(needs_chrome).toHaveCount(1, { timeout: 30_000 })
     await expect(app.chrome.locator(".relay")).toHaveText("Chrome waiting")
     expect((await app.brain<Debug>("/debug")).relay.connected).toBe(false)
     expect(await app.lens_text()).not.toContain("Post number")
 
     await approve(app)
     await expect(app.chrome.locator(".message.moi", { hasText: "Chrome is connected" })).toHaveCount(1)
-    await app.chrome.locator("button.action", { hasText: "Refresh" }).click()
     const text = await eventually(
       () => app.lens_text(),
       (value) => value.includes("Post number 0 from maya"),
     )
     expect(text).toContain("Post number 0 from maya")
+    await expect(needs_chrome).toHaveCount(0)
     expect((await app.brain<Debug>("/debug")).store.items.x).toBeGreaterThanOrEqual(5)
     const tabs = await eventually(
       async () => chrome.urls(),
       (urls) => !urls.some((url) => url.includes("x_home_signed_in")),
     )
     expect(tabs.some((url) => url.includes("x_home_signed_in"))).toBe(false)
+  } finally {
+    await close_both(app, chrome)
+  }
+})
+
+test("after a restart openMoi waits for the Chrome you paired, so X never asks for a sign in", async () => {
+  const app = await Harness.launch(world, { x_page: "x_home_signed_in.html", files: { ".moi/relay_trusted.json": JSON.stringify([unpacked_extension_id()]) } })
+  await sleep(3_000)
+  const chrome = await ChromeWithExtension.launch(world, app.relay_port)
+  try {
+    const seen = new Set<string>()
+    await eventually(
+      async () => {
+        for (const text of await app.chrome.locator(".notice").allInnerTexts()) seen.add(text)
+        return app.lens_text()
+      },
+      (value) => value.includes("Post number 0 from maya"),
+    )
+    await expect(app.chrome.locator(".relay.on")).toHaveText("Chrome connected")
+    expect([...seen].filter((text) => text.includes("Chrome"))).toEqual([])
   } finally {
     await close_both(app, chrome)
   }

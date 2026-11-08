@@ -82,7 +82,7 @@ export class Shell implements ViewHost {
       approval_needed: (extension_id) => this.ask_approval(extension_id),
       mine: (request) => this.open_chrome_page(request).catch((error) => this.notify(explain(error))),
     })
-    this.sources = new SourceReader(() => this.relay.driver())
+    this.sources = new SourceReader(() => this.relay.reading_driver())
     this.lenses = new LensManager(this, { on_ready: (context) => this.on_lens_ready(context), on_event: (context, message) => this.on_lens_event(context, message) })
     this.chat = new ChatController(brain, {
       chat_view: () => this.chat_view_id,
@@ -99,7 +99,8 @@ export class Shell implements ViewHost {
     })
     this.views = new ViewController(brain, this.lenses, this.sources, {
       open_original: (url) => this.open_original(url),
-      notify: (text, url) => this.notify(text, url),
+      notify: (text, url, tag) => this.notify(text, url, undefined, tag),
+      retract: (tag) => this.retract(tag),
       echo: (text) => this.chat.say(text),
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
       lens_stale: (view_id, layout_hash) => this.lens_gen.ensure(view_id, "feed", layout_hash),
@@ -188,9 +189,16 @@ export class Shell implements ViewHost {
     this.activate({ kind: "tab", tab_id: this.tabs.open(url).tab_id })
   }
 
-  notify(text: string, url?: string, action?: Notice["action"]): void {
+  notify(text: string, url?: string, action?: Notice["action"], tag?: string): void {
     if (this.notices.some((notice) => notice.text === text)) return
-    this.notices = [...this.notices, { notice_id: this.next_notice_id++, text, url, action }].slice(-MAX_NOTICES)
+    this.notices = [...this.notices, { notice_id: this.next_notice_id++, text, url, action, tag }].slice(-MAX_NOTICES)
+    this.push_state()
+  }
+
+  private retract(tag: string): void {
+    const kept = this.notices.filter((notice) => notice.tag !== tag)
+    if (kept.length === this.notices.length) return
+    this.notices = kept
     this.push_state()
   }
 
@@ -215,6 +223,7 @@ export class Shell implements ViewHost {
     if (status.connected && !previous.connected) {
       this.notices = this.notices.filter((notice) => notice.action?.command.type !== "relay_trust")
       this.chat.say("Chrome is connected: openMoi now reads through your own Chrome sessions.")
+      this.views.chrome_connected().catch((error) => this.notify(String(error)))
     } else if (!status.connected && previous.connected) {
       this.chat.say("Chrome disconnected: openMoi falls back to its own session until it is back.")
     }

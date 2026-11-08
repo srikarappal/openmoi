@@ -1,5 +1,6 @@
 // Launches the real app against the shared fake services, in a throwaway home and assets folder.
 import { spawn, type ChildProcess } from "node:child_process"
+import { createHash } from "node:crypto"
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
@@ -9,6 +10,13 @@ import { sleep, wait_for } from "../../src/shared/timing"
 
 export const SHELL_DIR = path.resolve(__dirname, "..", "..")
 export const REPO_DIR = path.resolve(SHELL_DIR, "..")
+const EXTENSION_DIR = path.join(SHELL_DIR, "dist", "extension")
+
+// Chrome names an unpacked extension after its folder: the first 32 hex digits of sha256(path), written with the letters a to p.
+export function unpacked_extension_id(folder = EXTENSION_DIR): string {
+  const hex = createHash("sha256").update(folder).digest("hex").slice(0, 32)
+  return [...hex].map((digit) => String.fromCharCode(97 + Number.parseInt(digit, 16))).join("")
+}
 const TOKEN = "e2e_token"
 
 export function free_port(): Promise<number> {
@@ -201,11 +209,10 @@ export class ChromeWithExtension {
 
   static async launch(world: FakeWorld, relay_port: number): Promise<ChromeWithExtension> {
     const profile = mkdtempSync(path.join(tmpdir(), "moi_chrome_"))
-    const extension = path.join(SHELL_DIR, "dist", "extension")
     const context = await chromium.launchPersistentContext(profile, {
       channel: "chromium",
       headless: true,
-      args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
+      args: [`--disable-extensions-except=${EXTENSION_DIR}`, `--load-extension=${EXTENSION_DIR}`],
     })
     await context.addCookies([{ name: "moi_session", value: "1", url: world.base_url }])
     const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"))

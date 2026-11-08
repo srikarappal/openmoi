@@ -44,7 +44,7 @@ def wait_for_passive(client, batches: int) -> dict:
 
 def test_without_chrome_calls_fail_as_relay_errors(client, relay_port):
     assert client.get("/relay/poll").json() == {
-        "status": {"connected": False, "extension_id": None, "waiting_for_approval": None, "passive_batches": 0},
+        "status": {"connected": False, "extension_id": None, "waiting_for_approval": None, "paired": False, "passive_batches": 0},
         "events": [],
     }
     failed = client.post("/relay/call", json={"op": "open", "args": {"url": "https://x.com/home"}})

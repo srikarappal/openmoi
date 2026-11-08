@@ -1,9 +1,13 @@
 // The app's view of the Chrome relay: connection state, approval requests, Mine requests and which driver reads pages.
+import { sleep } from "../shared/timing"
 import type { MineRequestEvent, RelayInfo } from "../shared/types"
 import type { BrainClient } from "./brain"
 import { RelayDriver, type PageDriver } from "./drivers"
 
 const POLL_MS = 1_000
+// The extension retries every 3 s while Chrome keeps it awake and wakes on a 30 s alarm otherwise.
+const CHROME_WAIT_MS = 35_000
+const WAIT_STEP_MS = 100
 
 export interface RelayLinkHooks {
   changed(status: RelayInfo, previous: RelayInfo): void
@@ -14,9 +18,10 @@ export interface RelayLinkHooks {
 function ignore(): void {}
 
 export class RelayLink {
-  status: RelayInfo = { connected: false, waiting_for_approval: null }
+  status: RelayInfo = { connected: false, waiting_for_approval: null, paired: false }
   readonly chrome: RelayDriver
   private polling = false
+  private polled = false
   private asked: string | null = null
   private timer: ReturnType<typeof setInterval> | null = null
 
@@ -42,6 +47,13 @@ export class RelayLink {
     return this.status.connected ? this.chrome : this.fallback
   }
 
+  // For reading: a Chrome you paired before gets time to reconnect, since openMoi's own session is not signed in anywhere.
+  async reading_driver(wait_ms = CHROME_WAIT_MS): Promise<PageDriver> {
+    const deadline = Date.now() + wait_ms
+    while (!this.status.connected && (!this.polled || this.status.paired) && Date.now() < deadline) await sleep(WAIT_STEP_MS)
+    return this.driver()
+  }
+
   async trust(extension_id: string): Promise<void> {
     await this.brain.relay_trust(extension_id)
     await this.poll()
@@ -53,7 +65,8 @@ export class RelayLink {
     try {
       const { status, events } = await this.brain.relay_poll()
       const previous = this.status
-      this.status = { connected: status.connected, waiting_for_approval: status.waiting_for_approval }
+      this.status = { connected: status.connected, waiting_for_approval: status.waiting_for_approval, paired: status.paired }
+      this.polled = true
       if (previous.connected !== this.status.connected || previous.waiting_for_approval !== this.status.waiting_for_approval) {
         this.hooks.changed(this.status, previous)
       }

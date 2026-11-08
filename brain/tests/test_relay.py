@@ -80,7 +80,7 @@ def test_web_pages_cannot_connect(hub):
     page = FakeExtension(hub.port, "evil.example", origin_scheme="https")
     with pytest.raises(ConnectionClosed):
         page.recv()
-    assert hub.status() == {"connected": False, "extension_id": None, "waiting_for_approval": None}
+    assert hub.status() == {"connected": False, "extension_id": None, "waiting_for_approval": None, "paired": False}
 
 
 def test_a_new_extension_waits_for_approval_then_gets_the_passive_config(hub, tmp_path):
@@ -91,7 +91,7 @@ def test_a_new_extension_waits_for_approval_then_gets_the_passive_config(hub, tm
         hub.call("open", {})
     hub.trust(EXTENSION_ID)
     assert extension.recv() == {"type": "welcome", **passive_config()}
-    assert hub.status() == {"connected": True, "extension_id": EXTENSION_ID, "waiting_for_approval": None}
+    assert hub.status() == {"connected": True, "extension_id": EXTENSION_ID, "waiting_for_approval": None, "paired": True}
     assert EXTENSION_ID in (tmp_path / "trusted.json").read_text()
 
 

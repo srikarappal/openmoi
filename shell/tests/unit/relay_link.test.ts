@@ -7,7 +7,7 @@ import type { RelayPoll } from "../../src/shared/types"
 const FALLBACK = { kind: "openmoi" } as PageDriver
 
 function poll_result(fields: Partial<RelayPoll["status"]> = {}, events: RelayPoll["events"] = []): RelayPoll {
-  return { status: { connected: false, waiting_for_approval: null, extension_id: null, passive_batches: 0, ...fields }, events }
+  return { status: { connected: false, waiting_for_approval: null, paired: false, extension_id: null, passive_batches: 0, ...fields }, events }
 }
 
 function make_link(polls: RelayPoll[]) {
@@ -29,7 +29,37 @@ describe("RelayLink", () => {
     expect(hooks.changed).not.toHaveBeenCalled()
     await link.poll()
     expect(link.driver().kind).toBe("chrome")
-    expect(hooks.changed).toHaveBeenCalledWith({ connected: true, waiting_for_approval: null }, { connected: false, waiting_for_approval: null })
+    expect(hooks.changed).toHaveBeenCalledWith({ connected: true, waiting_for_approval: null, paired: false }, { connected: false, waiting_for_approval: null, paired: false })
+  })
+
+  it("reads through openMoi at once when Chrome was never paired", async () => {
+    const { link } = make_link([poll_result()])
+    await link.poll()
+    const started = Date.now()
+    expect(await link.reading_driver(5_000)).toBe(FALLBACK)
+    expect(Date.now() - started).toBeLessThan(500)
+  })
+
+  it("waits for a paired Chrome to come back before reading", async () => {
+    const { link } = make_link([poll_result({ paired: true }), poll_result({ paired: true, connected: true })])
+    await link.poll()
+    const reading = link.reading_driver(5_000)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await link.poll()
+    expect((await reading).kind).toBe("chrome")
+  })
+
+  it("falls back once a paired Chrome stays away too long", async () => {
+    const { link } = make_link([poll_result({ paired: true })])
+    await link.poll()
+    expect(await link.reading_driver(250)).toBe(FALLBACK)
+  })
+
+  it("waits for the first poll before choosing", async () => {
+    const { link } = make_link([poll_result({ paired: true, connected: true })])
+    const reading = link.reading_driver(5_000)
+    await link.poll()
+    expect((await reading).kind).toBe("chrome")
   })
 
   it("asks for approval once per extension", async () => {

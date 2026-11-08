@@ -27,14 +27,14 @@ function ignore(): void {}
 
 export class SourceReader {
   constructor(
-    private readonly driver_for: () => PageDriver,
+    private readonly driver_for: () => PageDriver | Promise<PageDriver>,
     private readonly throttle = new Throttle(AUTO_INTERVAL_MS),
   ) {}
 
   // One page load plus the budgeted scrolls; automatic reads at most every 10 minutes per source.
   async read(source: PageSource, force: boolean, on_batch: BatchHandler): Promise<SourceOutcome> {
     if (!this.throttle.allow(source.source_id, force)) return { status: "skipped" }
-    const driver = this.driver_for()
+    const driver = await this.driver_for()
     let handle: string | null = null
     try {
       handle = await driver.open(source.start_url, true)
