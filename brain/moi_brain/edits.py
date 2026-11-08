@@ -40,7 +40,7 @@ Files you may edit, all given to you with their current content:
 * views/<view>.md: sections "Sources", "Rules" and "Layout". For these give "section" and the complete new text of that section.
   Rules are plain words, one per line, each line starting with "* ".
   Layout describes the look in plain words. Keep every detail the person asks for, close to their own words
-  (for example "a separate section for each source"), and drop only older lines the request replaces.
+  (for example "a separate section for each source") and drop only older lines the request replaces.
 * memory/about_me.md, memory/likes.md, memory/dislikes.md, memory/people.md: lists of lines starting with "* ".
   For these use "section": null and give the complete new list.
 

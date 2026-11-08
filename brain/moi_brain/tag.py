@@ -161,7 +161,7 @@ class Tagger:
             self.catch_up(now)
 
     def catch_up(self, now: datetime) -> None:
-        """Untagged items are retried at once while tagging works, and once a minute while it is paused."""
+        """Untagged items are retried at once while tagging works and once a minute while it is paused."""
         if self.busy or (not self.healthy and time.monotonic() - self.failed_at < RETRY_SECONDS):
             return
         untagged = [item for item in self.store.recent_items(now - RETAG_WINDOW) if not item.tagged]
