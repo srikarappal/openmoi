@@ -319,6 +319,7 @@ class Brain:
         settings = apply_model_change(self.gateway.settings, change)
         save_settings(self.paths, settings)
         self.gateway.settings = settings
+        self.tagger.retry_now()
         return model_info(settings)
 
     def overview(self, view_id: str) -> Overview:

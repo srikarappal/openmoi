@@ -53,6 +53,23 @@ def test_change_for_refuses_other_files_sections_and_no_op_edits(editor, edit):
     assert editor.change_for("feed", edit, editor.files("feed")) is None
 
 
+def test_edits_to_one_file_build_on_each_other(editor, services):
+    reply = {
+        "edits": [
+            {"file": "views/feed.md", "section": "Sources", "text": ""},
+            {"file": "views/feed.md", "section": "Rules", "text": "* No shorts.\n* No The Verge."},
+        ],
+        "reply": "Removed the source and added a rule.",
+    }
+    services.queue_model_reply("edit", json.dumps(reply))
+    proposal = editor.propose("feed", "drop X and hide The Verge", None, [])
+    [change] = proposal.changes
+    assert "-* X" in change.diff and "+* No The Verge." in change.diff
+    editor.apply(proposal.proposal_id)
+    written = (editor.paths.views / "feed.md").read_text()
+    assert "* X" not in written and "* No The Verge." in written
+
+
 def test_propose_sends_files_and_item_then_apply_writes(editor, services):
     proposal = editor.propose("feed", "hide politics and maya first", None, ["* 09:30 opened: Sourdough tips (https://a.com/1)"])
     assert [change.file for change in proposal.changes] == ["views/feed.md"]

@@ -1,6 +1,7 @@
 // Feed style views: render from cache, refresh sources, append new items, re-render after edits, forward lens events.
 import { sleep } from "../shared/timing"
 import type { Item, LensToHost, PageSource, RawRecord, ViewPage } from "../shared/types"
+import type { Track } from "./activity"
 import type { BrainClient } from "./brain"
 import type { DriverKind } from "./drivers"
 import type { LensContext, LensManager } from "./lenses"
@@ -16,6 +17,7 @@ export interface ViewHooks {
   echo(text: string): void
   less_like_this(view_id: string, item: Item): void
   lens_stale(view_id: string, layout_hash: string): void
+  track: Track
 }
 
 export function view_lens_key(view_id: string): string {
@@ -32,6 +34,10 @@ function source_tag(source_id: string): string {
   return `source:${source_id}`
 }
 
+function warning_tag(warning: string): string {
+  return `warning:${warning}`
+}
+
 function cursor_for(page: ViewPage): string | null {
   return page.has_more ? "more" : null
 }
@@ -40,6 +46,7 @@ export class ViewController {
   private readonly versions = new Map<string, string>()
   private readonly summaries = new Map<string, string>()
   private readonly reported = new Set<string>()
+  private readonly warned = new Map<string, string[]>()
   private readonly waiting_for_chrome = new Map<string, { view_id: string; source: PageSource }>()
 
   constructor(
@@ -80,20 +87,32 @@ export class ViewController {
     if (page.lens_stale) this.hooks.lens_stale(context.view_id, page.layout_hash)
   }
 
-  // Each warning shows once per view, so a notice you dismissed stays dismissed.
+  // Each warning shows once per view and version, so a notice you dismissed stays dismissed; one that no longer holds goes away.
   private report(page: ViewPage): void {
+    for (const warning of this.warned.get(page.view_id) ?? []) {
+      if (!page.warnings.includes(warning)) this.hooks.retract(warning_tag(warning))
+    }
+    this.warned.set(page.view_id, page.warnings)
     for (const warning of page.warnings) {
       const key = `${page.view_id}\0${page.version}\0${warning}`
       if (this.reported.has(key)) continue
       this.reported.add(key)
-      this.hooks.notify(warning)
+      this.hooks.notify(warning, undefined, warning_tag(warning))
     }
   }
 
   // The brain's feeds show as they arrive while page sources load in your session, which may wait for Chrome.
   async refresh(context: LensContext, force: boolean): Promise<void> {
-    const { page_sources } = await this.brain.refresh(context.view_id, force)
-    await Promise.all([this.settle(context), this.read_sources(context, page_sources, force)])
+    await this.hooks.track(`Updating ${context.view_id}`, async () => {
+      const { page_sources } = await this.brain.refresh(context.view_id, force)
+      await Promise.all([this.settle(context), this.read_sources(context, page_sources, force)])
+    })
+  }
+
+  // After a model change: follow the brain while it retries tagging, so warnings that no longer hold go away.
+  async recheck(view_id: string): Promise<void> {
+    const context = this.lenses.get(view_lens_key(view_id))
+    if (context) await this.hooks.track(`Checking ${view_id} with the new model`, () => this.settle(context))
   }
 
   // Chrome connected after a read had to use openMoi's own session: read those sources again in Chrome.
@@ -110,10 +129,12 @@ export class ViewController {
   private async read_sources(context: LensContext, sources: PageSource[], force: boolean): Promise<void> {
     for (const source of sources) {
       const tag = source_tag(source.source_id)
-      const outcome = await this.sources.read(source, force, (records) => {
-        this.hooks.retract(tag)
-        return this.ingest_batch(context, source, records)
-      })
+      const outcome = await this.hooks.track(`Reading ${source.source_id}`, () =>
+        this.sources.read(source, force, (records) => {
+          this.hooks.retract(tag)
+          return this.ingest_batch(context, source, records)
+        }),
+      )
       if (outcome.status === "skipped") continue
       this.hooks.retract(tag)
       if (outcome.status === "challenge") {
@@ -139,8 +160,10 @@ export class ViewController {
   async after_edit(view_id: string): Promise<void> {
     const context = this.lenses.get(view_lens_key(view_id))
     if (!context) return
-    await context.serial(() => this.render(context))
-    if (await this.waited_for_brain(view_id)) await context.serial(() => this.render(context))
+    await this.hooks.track(`Updating ${view_id} with your change`, async () => {
+      await context.serial(() => this.render(context))
+      if (await this.waited_for_brain(view_id)) await context.serial(() => this.render(context))
+    })
   }
 
   // Loads the view's current lens HTML; the lens announces ready and gets a fresh render.

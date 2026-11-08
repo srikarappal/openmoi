@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from moi_brain.brain import Brain, MineRequest, Overview, PageSource, ViewPage
 from moi_brain.compile import BadInput, ViewInfo
 from moi_brain.config import ModelChange, ModelInfo
-from moi_brain.edits import EditScope, Proposal
+from moi_brain.edits import EditScope, Proposal, StaleProposal
 from moi_brain.extractors import ExtractorSpec
 from moi_brain.items import Event, Item, ViewItem
 from moi_brain.llm import LlmError, PrivacyBlocked
@@ -255,6 +255,10 @@ def relay_error(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": str(error), "kind": "relay"})
 
 
+def stale_proposal(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(error), "kind": "stale"})
+
+
 def bad_input(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(error), "kind": "input"})
 
@@ -267,5 +271,6 @@ def create_app(brain: Brain, token: str | None = None) -> FastAPI:
     app.add_exception_handler(PrivacyBlocked, privacy_error)
     app.add_exception_handler(LlmError, llm_error)
     app.add_exception_handler(BadInput, bad_input)
+    app.add_exception_handler(StaleProposal, stale_proposal)
     app.add_exception_handler(RelayError, relay_error)
     return app

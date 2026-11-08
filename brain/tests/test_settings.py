@@ -78,6 +78,12 @@ def test_model_endpoint_changes_and_saves_settings(client, paths, brain):
     assert client.post("/model", json={"provider": "somewhere"}).status_code == 422
 
 
+def test_a_model_change_lets_paused_tagging_try_again_at_once(client, brain):
+    brain.tagger.failed_at = 123.0
+    client.post("/model", json={"allow_content_to_hosted": True})
+    assert brain.tagger.failed_at == 0.0
+
+
 def test_new_views_become_tabs(client, paths):
     assert client.post("/views", json={"view_id": "tech", "title": "Tech"}).json() == {"view_id": "tech", "title": "Tech"}
     assert (paths.views / "tech.md").read_text() == "# Tech\n\n## Sources\n\n## Rules\n\n## Layout\n"

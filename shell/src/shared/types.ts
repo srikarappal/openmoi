@@ -223,6 +223,12 @@ export interface RelayPoll {
   events: MineRequestEvent[]
 }
 
+export interface Activity {
+  activity_id: number
+  label: string
+  started_at: number
+}
+
 export interface ShellState {
   views: ViewInfo[]
   tabs: TabInfo[]
@@ -232,6 +238,7 @@ export interface ShellState {
   chat: ChatEntry[]
   chat_view: string
   thinking: boolean
+  activities: Activity[]
   chrome_pages: ChromePageInfo[]
   relay: RelayInfo
 }

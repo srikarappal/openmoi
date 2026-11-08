@@ -117,7 +117,8 @@ def test_stale_unknown_and_discarded_proposals_are_refused(client, paths):
     proposal = client.post("/edit", json={"view_id": "feed", "text": "no shorts"}).json()
     (paths.views / "feed.md").write_text((paths.views / "feed.md").read_text() + "\n")
     stale = client.post("/edit/apply", json={"proposal_id": proposal["proposal_id"]})
-    assert stale.status_code == 400
+    assert stale.status_code == 409
+    assert stale.json()["kind"] == "stale"
     assert "changed since" in stale.json()["detail"]
     assert client.post("/edit/apply", json={"proposal_id": "unknown"}).status_code == 400
     discarded = client.post("/edit", json={"view_id": "feed", "text": "no shorts"}).json()

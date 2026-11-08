@@ -95,6 +95,10 @@ class Tagger:
     def healthy(self) -> bool:
         return self.status == "ok"
 
+    def retry_now(self) -> None:
+        """After a model change, a paused tagger tries again on the next look instead of within a minute."""
+        self.failed_at = 0.0
+
     def enqueue(self, items: list[Item]) -> None:
         with self.condition:
             self.pending.extend(item.item_id for item in items)

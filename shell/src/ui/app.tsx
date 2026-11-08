@@ -2,7 +2,7 @@
 import { useEffect, useState, type FormEvent } from "react"
 import { createRoot } from "react-dom/client"
 import { matching_commands } from "../shared/commands"
-import type { ChatEntry, ShellCommand, ShellState } from "../shared/types"
+import type { Activity, ChatEntry, ShellCommand, ShellState } from "../shared/types"
 
 interface ShellBridge {
   command(command: ShellCommand): void
@@ -167,9 +167,39 @@ function Chat({ state }: { state: ShellState }) {
   )
 }
 
+// Ticks once a second while something runs, so elapsed times move.
+function use_now(ticking: boolean): number {
+  const [now, set_now] = useState(Date.now())
+  useEffect(() => {
+    if (!ticking) return
+    set_now(Date.now())
+    const timer = setInterval(() => set_now(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [ticking])
+  return now
+}
+
+// What openMoi is doing right now: the model thinking, a new look being designed, sources being read.
+function StatusLine({ activities }: { activities: Activity[] }) {
+  const now = use_now(activities.length > 0)
+  if (!activities.length) return <section className="status idle">Idle</section>
+  return (
+    <section className="status" aria-live="polite">
+      {activities.map((activity) => (
+        <div key={activity.activity_id} className="activity">
+          <span className="pulse" />
+          <span className="activity_label">{activity.label}</span>
+          <span className="elapsed">{Math.max(0, Math.round((now - activity.started_at) / 1000))} s</span>
+        </div>
+      ))}
+    </section>
+  )
+}
+
 function SidePanel({ state }: { state: ShellState }) {
   return (
     <aside className="side">
+      <StatusLine activities={state.activities} />
       <section className="notices">
         {state.notices.map((notice) => (
           <div key={notice.notice_id} className="notice">

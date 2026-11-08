@@ -27,6 +27,7 @@ Rules:
 * Every item element carries data-item-id set to item.item_id; clicking it calls moi.open(item.item_id).
 * Set text with textContent, never innerHTML: item text comes from the web.
 * Handle missing fields, long text and every item kind: post, article, video, product, link.
+* item.source_id is "x", "youtube:<channel>", "rss:<site>" or "site:<domain>"; the part before ":" names the source, for layouts that group or label by source.
 * One article item whose extra.blocks is a JSON list of {type: h | p | img | quote | li, text, src} renders as a reader.
 * Support light and dark mode with prefers-color-scheme.
 Start from the example lens and change it to match the layout request. If last_error is set, your previous lens failed that check; fix it."""

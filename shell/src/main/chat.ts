@@ -2,6 +2,7 @@
 // Every change to your .md files is a proposed edit you confirm or discard; /model, /settings and /help answer directly.
 import { format_model, format_overview, help_text, parse_chat, type ChatCommand } from "../shared/commands"
 import type { ChatEntry, EditScope, Proposal } from "../shared/types"
+import type { Track } from "./activity"
 import { BrainError, type BrainClient } from "./brain"
 
 const MAX_ENTRIES = 60
@@ -10,9 +11,20 @@ export interface ChatHooks {
   chat_view(): string
   on_applied(proposal: Proposal): Promise<void>
   view_created(view_id: string): Promise<void>
+  model_changed(): void
   open_folder(path: string): void
+  track: Track
   changed(): void
 }
+
+interface EditRequest {
+  view_id: string
+  text: string
+  scope: EditScope
+  item_id?: string
+}
+
+const ASKING = "Asking the model about your request"
 
 export function explain(error: unknown): string {
   if (error instanceof BrainError && error.kind === "privacy") {
@@ -27,6 +39,7 @@ function ignore(): void {}
 export class ChatController {
   private entries: ChatEntry[] = []
   private next_id = 1
+  private readonly requests = new Map<string, EditRequest>()
   thinking = false
 
   constructor(
@@ -45,10 +58,15 @@ export class ChatController {
   // A reaction to an item ("less like this") is always free form, for the view it came from.
   async send(text: string, item_id?: string, view_id = this.hooks.chat_view()): Promise<void> {
     this.add({ role: "you", text })
+    const command: ChatCommand = item_id ? { kind: "edit", scope: "any", text } : parse_chat(text)
+    await this.working(() => this.run(command, view_id, item_id))
+  }
+
+  private async working(work: () => Promise<void>): Promise<void> {
     this.thinking = true
     this.hooks.changed()
     try {
-      await this.run(item_id ? { kind: "edit", scope: "any", text } : parse_chat(text), view_id, item_id)
+      await work()
     } catch (error) {
       this.say(explain(error))
     } finally {
@@ -60,12 +78,13 @@ export class ChatController {
   private async run(command: ChatCommand, view_id: string, item_id?: string): Promise<void> {
     switch (command.kind) {
       case "edit":
-        return this.propose(view_id, command.text, command.scope, item_id)
+        return this.propose({ view_id, text: command.text, scope: command.scope, item_id })
       case "new_view":
         return this.new_view(command.view_id, command.title, command.description)
       case "model": {
         const info = command.change ? await this.brain.update_model(command.change) : await this.brain.model_info()
         this.say(`${command.change ? "Models updated.\n" : ""}${format_model(info)}`)
+        if (command.change) this.hooks.model_changed()
         return
       }
       case "settings": {
@@ -83,16 +102,20 @@ export class ChatController {
     }
   }
 
-  private async propose(view_id: string, text: string, scope: EditScope, item_id?: string): Promise<void> {
-    const proposal = await this.brain.edit(view_id, text, item_id, scope)
-    if (proposal.changes.length || proposal.lens_action) this.add({ role: "moi", text: proposal.reply || "Here is what I would change.", proposal, status: "pending" })
-    else this.say(proposal.reply || "Nothing to change.")
+  private async propose(request: EditRequest): Promise<void> {
+    const proposal = await this.hooks.track(ASKING, () => this.brain.edit(request.view_id, request.text, request.item_id, request.scope))
+    if (!proposal.changes.length && !proposal.lens_action) {
+      this.say(proposal.reply || "Nothing to change.")
+      return
+    }
+    this.requests.set(proposal.proposal_id, request)
+    this.add({ role: "moi", text: proposal.reply || "Here is what I would change.", proposal, status: "pending" })
   }
 
   // A bare name makes an empty view right away; with a description the model drafts the file for you to confirm.
   private async new_view(view_id: string, title: string, description: string): Promise<void> {
     if (description) {
-      await this.propose(view_id, description, "view")
+      await this.propose({ view_id, text: description, scope: "view" })
       return
     }
     await this.brain.create_view(view_id, title)
@@ -100,9 +123,12 @@ export class ChatController {
     await this.hooks.view_created(view_id)
   }
 
+  // A proposal made before another one was applied is stale; it is asked again on top of the current file instead of failing.
   async apply(proposal_id: string): Promise<void> {
     const entry = this.pending(proposal_id)
     if (!entry) return
+    const request = this.requests.get(proposal_id)
+    this.requests.delete(proposal_id)
     try {
       const proposal = await this.brain.apply_edit(proposal_id)
       entry.status = "applied"
@@ -110,7 +136,12 @@ export class ChatController {
       await this.hooks.on_applied(proposal)
     } catch (error) {
       entry.status = "discarded"
-      this.say(explain(error))
+      if (error instanceof BrainError && error.kind === "stale" && request) {
+        this.say("The file changed after this was proposed, so I asked again on top of the current version.")
+        await this.working(() => this.propose(request))
+      } else {
+        this.say(explain(error))
+      }
     }
   }
 
@@ -118,6 +149,7 @@ export class ChatController {
     const entry = this.pending(proposal_id)
     if (!entry) return
     entry.status = "discarded"
+    this.requests.delete(proposal_id)
     this.hooks.changed()
     await this.brain.discard_edit(proposal_id).catch(ignore)
   }

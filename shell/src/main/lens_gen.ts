@@ -1,5 +1,6 @@
 // Builds a new lens when a view's Layout changed: generate, smoke test, one retry with the error, then accept or keep the old one.
 import type { LensKind } from "../shared/types"
+import type { Track } from "./activity"
 import type { BrainClient } from "./brain"
 import { explain } from "./chat"
 import type { SmokeTester } from "./smoke"
@@ -9,6 +10,7 @@ const ATTEMPTS = 2
 export interface LensGenHooks {
   say(text: string): void
   on_new_lens(view_id: string, kind: LensKind): Promise<void>
+  track: Track
 }
 
 export function view_label(view_id: string): string {
@@ -31,7 +33,8 @@ export class LensGenerator {
     const layout_key = `${running_key}:${layout_hash}`
     if (this.running.has(running_key) || this.failed.has(layout_key)) return Promise.resolve()
     this.running.add(running_key)
-    return this.build(view_id, kind)
+    return this.hooks
+      .track(`Designing a new look for ${view_label(view_id)}, usually under a minute`, () => this.build(view_id, kind))
       .then((built) => {
         if (!built) this.failed.add(layout_key)
       })

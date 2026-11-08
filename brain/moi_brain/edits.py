@@ -38,7 +38,9 @@ Reply with one JSON object:
 recent_journal lists what the person opened lately; use it when the request refers to it.
 Files you may edit, all given to you with their current content:
 * views/<view>.md: sections "Sources", "Rules" and "Layout". For these give "section" and the complete new text of that section.
-  Rules are plain words, one per line, each line starting with "* ". Layout describes the look in plain words.
+  Rules are plain words, one per line, each line starting with "* ".
+  Layout describes the look in plain words. Keep every detail the person asks for, close to their own words
+  (for example "a separate section for each source"), and drop only older lines the request replaces.
 * memory/about_me.md, memory/likes.md, memory/dislikes.md, memory/people.md: lists of lines starting with "* ".
   For these use "section": null and give the complete new list.
 
@@ -51,6 +53,10 @@ When they ask for the previous look back, reply with no edits and "lens_action":
 When nothing should change, reply with no edits.
 When the request has only_change, edit nothing else.
 The reply says in plain words what you changed."""
+
+
+class StaleProposal(BadInput):
+    """A file changed between proposing and applying; the request has to be asked again on top of it."""
 
 
 class FileEdit(BaseModel):
@@ -124,7 +130,7 @@ class Editor:
         }
         messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": json.dumps(payload)}]
         reply = self.gateway.complete_json("fast", "edit", messages, True, EditReply)
-        changes = [change for edit in reply.edits if (change := self.change_for(view_id, edit, files, scope))]
+        changes = self.changes_for(view_id, reply.edits, files, scope)
         proposal = Proposal(
             proposal_id=uuid.uuid4().hex, view_id=view_id, changes=changes, lens_action=reply.lens_action, reply=reply.reply
         )
@@ -151,6 +157,18 @@ class Editor:
             return None
         return Change(file=file, old_text=old, new_text=new, diff=unified_diff(file, old, new))
 
+    def changes_for(self, view_id: str, edits: list[FileEdit], files: dict[str, str], scope: EditScope = "any") -> list[Change]:
+        """One change per file: edits to the same file build on each other instead of overwriting."""
+        current = dict(files)
+        for edit in edits:
+            if change := self.change_for(view_id, edit, current, scope):
+                current[change.file] = change.new_text
+        return [
+            Change(file=file, old_text=files[file], new_text=text, diff=unified_diff(file, files[file], text))
+            for file, text in current.items()
+            if text != files[file]
+        ]
+
     def apply(self, proposal_id: str) -> Proposal:
         """Write a proposal's changes, refusing if any file changed since it was proposed."""
         with self.lock:
@@ -160,7 +178,7 @@ class Editor:
         targets = [(self.paths.home / change.file, change) for change in proposal.changes]
         for path, change in targets:
             if (path.read_text() if path.exists() else "") != change.old_text:
-                raise BadInput(f"{change.file} changed since this was proposed; ask again.")
+                raise StaleProposal(f"{change.file} changed since this was proposed; ask again.")
         for path, change in targets:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(change.new_text)

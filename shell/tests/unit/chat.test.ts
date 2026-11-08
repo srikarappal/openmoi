@@ -24,8 +24,21 @@ const OVERVIEW: Overview = {
 }
 
 function make_chat(brain: Partial<BrainClient>) {
-  const hooks = { chat_view: () => "feed", on_applied: vi.fn(async () => {}), view_created: vi.fn(async () => {}), open_folder: vi.fn(), changed: vi.fn() }
-  return { chat: new ChatController(brain as BrainClient, hooks), hooks }
+  const labels: string[] = []
+  const track = <T>(label: string, work: () => Promise<T>): Promise<T> => {
+    labels.push(label)
+    return work()
+  }
+  const hooks = {
+    chat_view: () => "feed",
+    on_applied: vi.fn(async () => {}),
+    view_created: vi.fn(async () => {}),
+    model_changed: vi.fn(),
+    open_folder: vi.fn(),
+    track,
+    changed: vi.fn(),
+  }
+  return { chat: new ChatController(brain as BrainClient, hooks), hooks, labels }
 }
 
 function last_reply(chat: ChatController): string {
@@ -35,12 +48,13 @@ function last_reply(chat: ChatController): string {
 describe("ChatController", () => {
   it("turns a request into a pending proposal for the current view", async () => {
     const edit = vi.fn(async () => proposal())
-    const { chat, hooks } = make_chat({ edit })
+    const { chat, hooks, labels } = make_chat({ edit })
     const sending = chat.send("no shorts")
     expect(chat.thinking).toBe(true)
     await sending
     expect(chat.thinking).toBe(false)
     expect(edit).toHaveBeenCalledWith("feed", "no shorts", undefined, "any")
+    expect(labels).toEqual(["Asking the model about your request"])
     expect(chat.list().map((entry) => [entry.role, entry.text, entry.status])).toEqual([
       ["you", "no shorts", undefined],
       ["moi", "Added a rule.", "pending"],
@@ -96,6 +110,25 @@ describe("ChatController", () => {
     expect(hooks.on_applied).not.toHaveBeenCalled()
   })
 
+  it("asks again on top of the current file when a proposal went stale", async () => {
+    const edit = vi.fn(async () => proposal({ proposal_id: `p${edit.mock.calls.length}` }))
+    const apply_edit = vi.fn(async () => Promise.reject(new BrainError(409, "stale", "views/feed.md changed since this was proposed; ask again.")))
+    const { chat } = make_chat({ edit, apply_edit })
+    await chat.send("/layout separate sections per source")
+    await chat.apply("p1")
+    expect(edit.mock.calls).toEqual([
+      ["feed", "separate sections per source", undefined, "layout"],
+      ["feed", "separate sections per source", undefined, "layout"],
+    ])
+    expect(chat.list().map((entry) => entry.status ?? entry.text)).toEqual([
+      "/layout separate sections per source",
+      "discarded",
+      "The file changed after this was proposed, so I asked again on top of the current version.",
+      "pending",
+    ])
+    expect(chat.thinking).toBe(false)
+  })
+
   it("discards and tells the brain, ignoring brain errors", async () => {
     const discard_edit = vi.fn(async () => Promise.reject(new Error("offline")))
     const { chat } = make_chat({ edit: async () => proposal(), discard_edit })
@@ -145,12 +178,14 @@ describe("chat commands", () => {
   it("shows and changes models without asking a model", async () => {
     const model_info = vi.fn(async () => MODEL_INFO)
     const update_model = vi.fn(async () => ({ ...MODEL_INFO, allow_content_to_hosted: true }))
-    const { chat } = make_chat({ model_info, update_model })
+    const { chat, hooks } = make_chat({ model_info, update_model })
     await chat.send("/model")
     expect(last_reply(chat)).toContain("fast: nvidia/nemotron-3.5-super-vl:free via openrouter (hosted)")
     expect(last_reply(chat)).toContain("smart: llama3 via ollama (on this machine)")
+    expect(hooks.model_changed).not.toHaveBeenCalled()
     await chat.send("/model privacy on")
     expect(update_model).toHaveBeenCalledWith({ allow_content_to_hosted: true })
+    expect(hooks.model_changed).toHaveBeenCalledTimes(1)
     expect(last_reply(chat)).toMatch(/^Models updated\./)
     expect(last_reply(chat)).toContain("Your content may go to hosted models: on")
   })

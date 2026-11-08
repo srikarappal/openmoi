@@ -405,6 +405,10 @@ The chat panel takes slash commands for each kind of setting; anything without a
 
 A scope is enforced in the brain, not just asked of the model: files outside the scope are not even sent and edits to other sections are dropped.
 
+Several edits to one file in a reply build on each other. A proposal made before another one was applied is stale; applying it asks the model again on top of the current file instead of failing.
+
+The top of the side panel says what openMoi is doing and for how long: asking the model, designing a new look, reading a source, updating a view, or Idle. Notices withdraw themselves once what they reported is no longer true (a source reads again, tagging works again after `/model`).
+
 ## 10. MVP flows
 
 ### 10.1 Open a view
@@ -733,7 +737,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 
 | Check | Result |
 |---|---|
-| Tests | 233 brain (unit and API integration), 179 shell and extension unit, 21 end to end in the real app (5 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 235 brain (unit and API integration), 182 shell and extension unit, 21 end to end in the real app (5 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; the background read tab closes after each read |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |

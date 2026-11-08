@@ -6,7 +6,12 @@ import type { SmokeTester } from "../../src/main/smoke"
 function make_generator(problems: Array<string | null>, generate = vi.fn(async () => "<html>lens</html>")) {
   const brain = { generate_lens: generate, accept_lens: vi.fn(async () => 3) }
   const smoke = { problem: vi.fn(async () => problems.shift() ?? null) }
-  const hooks = { say: vi.fn(), on_new_lens: vi.fn(async () => {}) }
+  const labels: string[] = []
+  const track = <T>(label: string, work: () => Promise<T>): Promise<T> => {
+    labels.push(label)
+    return work()
+  }
+  const hooks = { say: vi.fn(), on_new_lens: vi.fn(async () => {}), track, labels }
   const generator = new LensGenerator(brain as unknown as BrainClient, smoke as unknown as SmokeTester, hooks)
   return { generator, brain, smoke, hooks }
 }
@@ -24,6 +29,7 @@ describe("LensGenerator", () => {
     expect(brain.accept_lens).toHaveBeenCalledWith("feed", "feed", "<html>lens</html>")
     expect(hooks.on_new_lens).toHaveBeenCalledWith("feed", "feed")
     expect(said(hooks)[1]).toMatch(/^New look for feed is live \(version 3, \d+ s\)\.$/)
+    expect(hooks.labels).toEqual(["Designing a new look for feed, usually under a minute"])
   })
 
   it("retries once with the smoke test problem", async () => {

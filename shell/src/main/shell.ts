@@ -23,6 +23,7 @@ import type { ViewHost } from "./host"
 import { LensGenerator, view_label } from "./lens_gen"
 import { LensManager, type LensContext } from "./lenses"
 import { MineController, chrome_mine_key, tab_mine_key } from "./mine"
+import { ActivityTracker } from "./activity"
 import { RelayLink } from "./relay_link"
 import { SmokeTester } from "./smoke"
 import { SourceReader } from "./sources"
@@ -48,6 +49,7 @@ export class Shell implements ViewHost {
   readonly lens_gen: LensGenerator
   readonly electron: ElectronDriver
   readonly relay: RelayLink
+  readonly activity = new ActivityTracker(() => this.push_state())
   private readonly chrome_pages = new Map<number, ChromePageInfo>()
   private next_chrome_page = 1
   private active: ActiveTarget = { kind: "view", view_id: "feed" }
@@ -88,6 +90,10 @@ export class Shell implements ViewHost {
       chat_view: () => this.chat_view_id,
       on_applied: (proposal) => this.on_applied(proposal),
       view_created: (view_id) => this.on_view_created(view_id),
+      model_changed: () => {
+        this.views.recheck(this.chat_view_id).catch((error) => this.notify(String(error)))
+      },
+      track: (label, work) => this.activity.track(label, work),
       open_folder: (folder) => {
         desktop.openPath(folder).catch(ignore)
       },
@@ -96,6 +102,7 @@ export class Shell implements ViewHost {
     this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload), {
       say: (text) => this.chat.say(text),
       on_new_lens: (view_id, kind) => this.reload_lens(view_id, kind),
+      track: (label, work) => this.activity.track(label, work),
     })
     this.views = new ViewController(brain, this.lenses, this.sources, {
       open_original: (url) => this.open_original(url),
@@ -104,6 +111,7 @@ export class Shell implements ViewHost {
       echo: (text) => this.chat.say(text),
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
       lens_stale: (view_id, layout_hash) => this.lens_gen.ensure(view_id, "feed", layout_hash),
+      track: (label, work) => this.activity.track(label, work),
     })
     this.mine = new MineController(brain, this.lenses, {
       notify: (text) => this.notify(text),
@@ -414,6 +422,7 @@ export class Shell implements ViewHost {
       chat: this.chat.list(),
       chat_view: this.view_infos.find((view) => view.view_id === this.chat_view_id)?.title ?? view_label(this.chat_view_id),
       thinking: this.chat.thinking,
+      activities: this.activity.list(),
       chrome_pages: [...this.chrome_pages.values()],
       relay: this.relay.status,
     }

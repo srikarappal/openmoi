@@ -40,6 +40,13 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .message.you { align-self: flex-end; background: var(--accent); color: #fff; }
 .message.moi { align-self: flex-start; background: var(--bg); }
 .message.thinking { color: var(--muted); font-style: italic; }
+.status { padding: 8px 12px; border-bottom: 1px solid var(--line); display: grid; gap: 4px; font-size: 12.5px; }
+.status.idle { color: var(--muted); }
+.activity { display: flex; align-items: center; gap: 8px; }
+.activity_label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.elapsed { color: var(--muted); font-variant-numeric: tabular-nums; }
+.pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 0.9s ease-in-out infinite alternate; }
+@keyframes pulse { from { opacity: 0.25; } to { opacity: 1; } }
 .proposal { margin-top: 8px; display: grid; gap: 6px; }
 .diff { font: 11.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--panel); }
 .diff_file { padding: 3px 8px; color: var(--muted); border-bottom: 1px solid var(--line); }
