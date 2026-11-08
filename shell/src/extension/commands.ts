@@ -135,6 +135,15 @@ export class ChromeCommands {
     return tab_id
   }
 
+  // openMoi is gone: its reading tabs close; your own tabs are only let go of.
+  async close_opened(): Promise<void> {
+    const tabs = [...this.opened]
+    this.opened.clear()
+    this.chosen.clear()
+    this.remember()
+    await Promise.all(tabs.map((tab_id) => this.api.tabs.remove(tab_id).catch(ignore)))
+  }
+
   forget(tab_id: number): void {
     this.opened.delete(tab_id)
     this.chosen.delete(tab_id)

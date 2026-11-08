@@ -99,6 +99,17 @@ def apply_limits(scored: list[Scored], rules: list[Rule], now: datetime) -> list
     return kept
 
 
+def kept_share(items: list[Item], rules: list[Rule], now: datetime) -> dict[str, float]:
+    """For each source, the share of its items no hide rule removes: how many raw items it takes to show one."""
+    totals: dict[str, int] = {}
+    kept: dict[str, int] = {}
+    for item in items:
+        totals[item.source_id] = totals.get(item.source_id, 0) + 1
+        if not any(rule.do == "hide" and applies(rule, item, now) for rule in rules):
+            kept[item.source_id] = kept.get(item.source_id, 0) + 1
+    return {source_id: kept.get(source_id, 0) / total for source_id, total in totals.items()}
+
+
 def best_copy_per_url(scored: list[Scored], shown: set[str] | frozenset[str]) -> list[Scored]:
     """One item per URL, in score order. A copy already shown or seen stays its URL's copy, so a newer copy
     from another source never brings the same story back; otherwise the best scored copy the rules let

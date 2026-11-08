@@ -1,26 +1,27 @@
 import { describe, expect, it, vi } from "vitest"
 import type { BrainClient } from "../../src/main/brain"
 import type { LensContext, LensManager } from "../../src/main/lenses"
-import type { SourceOutcome, SourceReader } from "../../src/main/sources"
+import type { FillOutcome, ReaderPool } from "../../src/main/readers"
 import { ViewController, view_lens_key } from "../../src/main/views"
 import type { PageSource, ViewPage } from "../../src/shared/types"
 import { Tracked } from "./tracked"
 
 const X_SOURCE = { source_id: "x", start_url: "https://x.com/home" } as PageSource
+const FEED_SOURCE = { source_id: "page:feed.example.com", start_url: "https://feed.example.com/" } as PageSource
 const PAGE = { view_id: "feed", items: [], has_more: false, refreshing: false, warnings: [], version: "v1", summary: "", lens_stale: false, layout_hash: "h" } as unknown as ViewPage
 
-function make_views(outcomes: SourceOutcome[], pages: ViewPage[] = []) {
+function make_views(outcomes: FillOutcome[], pages: ViewPage[] = [], page_sources: PageSource[] = [X_SOURCE]) {
   const context = { key: view_lens_key("feed"), view_id: "feed", rendered: new Map(), send: vi.fn(), serial: <T>(work: () => Promise<T>) => work() } as unknown as LensContext
   const brain = {
-    refresh: vi.fn(async () => ({ page_sources: [X_SOURCE] })),
+    refresh: vi.fn(async () => ({ page_sources })),
     view_page: vi.fn(async () => pages.shift() ?? PAGE),
     ingest: vi.fn(async () => {}),
   }
-  const sources = { read: vi.fn(async () => outcomes.shift() ?? ({ status: "skipped" } as SourceOutcome)) }
+  const sources = { fill: vi.fn(async (..._args: unknown[]) => outcomes.shift() ?? ({ status: "skipped" } as FillOutcome)) }
   const lenses = { get: (key: string) => (key === context.key ? context : undefined) }
   const { labels, track } = new Tracked()
   const hooks = { open_original: vi.fn(), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), track, labels }
-  const views = new ViewController(brain as unknown as BrainClient, lenses as unknown as LensManager, sources as unknown as SourceReader, hooks)
+  const views = new ViewController(brain as unknown as BrainClient, lenses as unknown as LensManager, sources as unknown as ReaderPool, hooks)
   return { views, context, sources, hooks, brain }
 }
 
@@ -28,17 +29,17 @@ describe("ViewController page sources", () => {
   it("asks for Chrome when openMoi's own session hits a login wall, then reads again once Chrome connects", async () => {
     const { views, context, sources, hooks } = make_views([
       { status: "challenge", url: "https://x.com/login", driver: "openmoi" },
-      { status: "read", count: 12, driver: "chrome" },
+      { status: "read", delivered: 12, driver: "chrome" },
     ])
     await views.refresh(context, false)
     expect(hooks.labels).toEqual(["Updating feed", "Reading x"])
     expect(hooks.notify).toHaveBeenCalledWith(expect.stringContaining("x needs your Chrome sign in"), "https://x.com/login", "source:x")
     await views.chrome_connected()
-    expect(sources.read).toHaveBeenLastCalledWith(X_SOURCE, true, expect.any(Function), 1)
+    expect(sources.fill).toHaveBeenLastCalledWith(X_SOURCE, 30, expect.any(Function), true, true)
     expect(hooks.retract).toHaveBeenLastCalledWith("source:x")
     expect(hooks.notify).toHaveBeenCalledTimes(1)
     await views.chrome_connected()
-    expect(sources.read).toHaveBeenCalledTimes(2)
+    expect(sources.fill).toHaveBeenCalledTimes(2)
   })
 
   it("does not read again for a sign in that is missing in Chrome itself", async () => {
@@ -46,7 +47,7 @@ describe("ViewController page sources", () => {
     await views.refresh(context, false)
     expect(hooks.notify).toHaveBeenCalledWith(expect.stringContaining("x needs you in Chrome"), "https://x.com/login", "source:x")
     await views.chrome_connected()
-    expect(sources.read).toHaveBeenCalledTimes(1)
+    expect(sources.fill).toHaveBeenCalledTimes(1)
   })
 
   it("replaces a failure notice with the next read and leaves skipped reads alone", async () => {
@@ -75,79 +76,110 @@ describe("ViewController warnings", () => {
   })
 })
 
-describe("ViewController reading further down", () => {
-  function cursors(context: LensContext): Array<string | null> {
-    return (context.send as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0].cursor)
-  }
+function cursors(context: LensContext): Array<string | null> {
+  return (context.send as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0].cursor)
+}
 
-  function reads(...counts: number[]): SourceOutcome[] {
-    return counts.map((count) => ({ status: "read", count, driver: "chrome" }))
-  }
+function fills(sources: { fill: ReturnType<typeof vi.fn> }): unknown[][] {
+  return sources.fill.mock.calls.map((call) => [(call[0] as PageSource).source_id, call[1], call[3], call[4]])
+}
 
-  it("past the stored items it reads X further down each time, then says caught up", async () => {
-    const { views, context, sources, hooks } = make_views(reads(10, 20, 30, 40))
+// The lens shows count items, as if rendered and appended in that order.
+function show_items(context: LensContext, count: number): string[] {
+  const item_ids = Array.from({ length: count }, (_, index) => `item${index}`)
+  for (const item_id of item_ids) context.rendered.set(item_id, { item_id } as never)
+  return item_ids
+}
+
+function read(delivered: number): FillOutcome {
+  return { status: "read", delivered, driver: "chrome" }
+}
+
+describe("ViewController reading ahead", () => {
+  const RATED = { ...PAGE, keep_rate: { x: 0.5 } } as ViewPage
+
+  it("starts every source from the top on a refresh and offers more past what is stored", async () => {
+    const { views, context, sources } = make_views([read(20)])
     await views.refresh(context, false)
+    expect(fills(sources)).toEqual([["x", 30, false, true]])
     expect(cursors(context).at(-1)).toBe("deeper")
-    for (const depth of [2, 3, 4]) {
-      await views.on_event(context, { type: "more", cursor: "deeper" })
-      expect(sources.read).toHaveBeenLastCalledWith(X_SOURCE, true, expect.any(Function), depth)
-    }
-    expect(cursors(context).at(-1)).toBeNull()
-    expect(hooks.labels).toContain("Reading further down for feed")
-    await views.on_event(context, { type: "more", cursor: "more" })
-    expect(sources.read).toHaveBeenCalledTimes(4)
   })
 
-  it("says caught up as soon as reading further down reaches nothing new", async () => {
-    const { views, context, sources } = make_views(reads(20, 20))
+  it("reads ahead as you near the end, enough raw items for what the rules keep", async () => {
+    const { views, context, sources, brain } = make_views([read(20), read(32)], [RATED, RATED, RATED])
+    Object.assign(brain, { events: vi.fn(async () => ({ recorded: 1 })) })
+    await views.refresh(context, false)
+    const shown = show_items(context, 25)
+    await views.on_event(context, { type: "seen", item_ids: [shown[2]] })
+    expect(sources.fill).toHaveBeenCalledTimes(1)
+    await views.on_event(context, { type: "seen", item_ids: [shown[10], shown[9]] })
+    expect(fills(sources).at(-1)).toEqual(["x", 32, true, false])
+  })
+
+  it("reads ahead from where the tab stopped when the lens asks at the end", async () => {
+    const { views, context, sources } = make_views([read(20), read(30)])
+    await views.refresh(context, false)
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(fills(sources).at(-1)).toEqual(["x", 30, true, false])
+  })
+
+  it("splits the need between sources by how much of each the rules keep, within limits", async () => {
+    const rated = { ...PAGE, keep_rate: { x: 1, "page:feed.example.com": 0 } } as ViewPage
+    const { views, context, sources } = make_views([read(5), read(5), read(5), read(5)], [rated, rated, rated, rated], [X_SOURCE, FEED_SOURCE])
+    await views.refresh(context, false)
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(fills(sources).slice(2)).toEqual([
+      ["x", 15, true, false],
+      ["page:feed.example.com", 120, true, false],
+    ])
+  })
+
+  it("stops reading a source that ended or used today's budget until a refresh brings it back", async () => {
+    const { views, context, sources } = make_views([read(20), { status: "ended", delivered: 0, driver: "chrome" }, read(20)])
     await views.refresh(context, false)
     await views.on_event(context, { type: "more", cursor: "deeper" })
     expect(cursors(context).at(-1)).toBeNull()
     await views.on_event(context, { type: "more", cursor: "deeper" })
-    expect(sources.read).toHaveBeenCalledTimes(2)
-  })
-
-  it("starts from the top again after a refresh", async () => {
-    const { views, context, sources } = make_views(reads(10, 20, 10, 20))
-    await views.refresh(context, false)
-    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(sources.fill).toHaveBeenCalledTimes(2)
     await views.refresh(context, true)
+    expect(cursors(context).at(-1)).toBe("deeper")
+  })
+
+  it("never reads ahead for a view without page sources", async () => {
+    const { views, context, sources } = make_views([], [], [])
+    await views.refresh(context, false)
     await views.on_event(context, { type: "more", cursor: "deeper" })
-    expect(sources.read).toHaveBeenLastCalledWith(X_SOURCE, true, expect.any(Function), 2)
+    expect(sources.fill).not.toHaveBeenCalled()
+    expect(cursors(context).at(-1)).toBeNull()
   })
 })
 
 describe("ViewController one read at a time", () => {
-  it("a refresh during a read further down waits for it, so two reads never overlap", async () => {
+  it("does not start a read ahead while a read is going and a refresh waits for one", async () => {
     let running = 0
     let most = 0
     const { views, context, sources } = make_views([])
-    sources.read.mockImplementation(async () => {
+    sources.fill.mockImplementation(async () => {
       running += 1
       most = Math.max(most, running)
-      await new Promise((resolve) => setTimeout(resolve, 250))
+      await new Promise((resolve) => setTimeout(resolve, 100))
       running -= 1
-      return { status: "read", count: 10 * sources.read.mock.calls.length, driver: "chrome" } as SourceOutcome
+      return read(10)
     })
     await views.refresh(context, false)
-    const deeper = views.on_event(context, { type: "more", cursor: "deeper" })
-    await vi.waitFor(() => expect(sources.read).toHaveBeenCalledTimes(2))
-    await Promise.all([deeper, views.refresh(context, true), views.on_event(context, { type: "more", cursor: "deeper" })])
+    const ahead = views.on_event(context, { type: "more", cursor: "deeper" })
+    await vi.waitFor(() => expect(sources.fill).toHaveBeenCalledTimes(2))
+    await Promise.all([ahead, views.refresh(context, true), views.on_event(context, { type: "more", cursor: "deeper" })])
     expect(most).toBe(1)
-    expect(sources.read.mock.calls.map((call) => (call as unknown[])[3])).toEqual([1, 2, 1])
+    expect(fills(sources).map((call) => call[3])).toEqual([true, false, true])
   })
 
-  it("reading further down waits for the first read and skips going deeper when it brought new items", async () => {
-    let finish: (outcome: SourceOutcome) => void = () => {}
-    const more_page = { ...PAGE, has_more: true } as ViewPage
-    const { views, context, sources } = make_views([], [PAGE, PAGE, more_page])
-    sources.read.mockImplementationOnce(() => new Promise<SourceOutcome>((resolve) => (finish = resolve)))
-    const refreshing = views.refresh(context, false)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const deeper = views.on_event(context, { type: "more", cursor: "deeper" })
-    finish({ status: "read", count: 20, driver: "chrome" })
-    await Promise.all([refreshing, deeper])
-    expect(sources.read).toHaveBeenCalledTimes(1)
+  it("reads ahead again after a read that failed", async () => {
+    const { views, context, sources } = make_views([])
+    sources.fill.mockRejectedValueOnce(new Error("brain restarting")).mockResolvedValue(read(30))
+    await views.refresh(context, false).catch(() => undefined)
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(fills(sources).at(-1)).toEqual(["x", 30, true, false])
   })
 })
 
@@ -177,7 +209,7 @@ describe("ViewController rendering", () => {
     const views = new ViewController(
       brain as unknown as BrainClient,
       lenses as unknown as LensManager,
-      { read: vi.fn(async () => ({ status: "skipped" })) } as unknown as SourceReader,
+      { fill: vi.fn(async () => ({ status: "skipped" })) } as unknown as ReaderPool,
       made.hooks,
     )
     return { ...made, views, lenses, brain }
@@ -225,14 +257,3 @@ describe("ViewController rendering", () => {
     expect(brain.events.mock.calls).toEqual([[[{ view_id: "feed", item_id: "a", event_kind: "seen" }]]])
   })
 })
-
-describe("ViewController after a failed read", () => {
-  it("still reads further down when the read before it failed", async () => {
-    const { views, context, sources } = make_views([])
-    sources.read.mockRejectedValueOnce(new Error("brain restarting")).mockResolvedValue({ status: "read", count: 30, driver: "chrome" } as SourceOutcome)
-    await views.refresh(context, false).catch(() => undefined)
-    await views.on_event(context, { type: "more", cursor: "deeper" })
-    expect(sources.read).toHaveBeenLastCalledWith(X_SOURCE, true, expect.any(Function), 2)
-  })
-})
-

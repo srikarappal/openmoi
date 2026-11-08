@@ -57,7 +57,7 @@ class FakeChrome {
     query: async () => Object.values(this.tabs_by_id).slice(0, 1),
     create: async () => ({ id: 1, windowId: 1 }),
     group: async () => 1,
-    remove: async () => {},
+    remove: async (_id: number) => {},
   }
   readonly tabGroups = { update: async () => {} }
   readonly windows = { update: async () => {} }
@@ -178,6 +178,25 @@ describe("extension background", () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(FakeWebSocket.opened.at(-1)?.url).toBe("ws://127.0.0.1:6666/relay")
     expect(FakeWebSocket.opened[1].readyState).toBe(3)
+  })
+
+  it("closes its reading tabs a minute after openMoi went away, not before", async () => {
+    const socket = await load_background({ relay_secret: SECRET })
+    await welcome(socket)
+    const relay = (globalThis as unknown as { moi_relay: { commands: { opened: Set<number> } } }).moi_relay
+    relay.commands.opened.add(41)
+    const removed: number[] = []
+    fake.tabs.remove = async (id: number) => {
+      removed.push(id)
+    }
+    vi.useFakeTimers()
+    socket.close()
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(removed).toEqual([])
+    await vi.advanceTimersByTimeAsync(58_000)
+    fake.fire("alarm", { name: "moi_reconnect" })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(removed).toEqual([41])
   })
 
   it("lets openMoi read a tab of yours only after you press Mine on it", async () => {

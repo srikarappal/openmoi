@@ -55,7 +55,7 @@ def test_refresh_returns_page_sources_and_reads_feeds_in_the_background(client):
     assert x_source["source_id"] == "x"
     assert x_source["start_url"] == "https://x.com/home"
     assert x_source["spec"]["item_root"] == "article[data-testid='tweet']"
-    assert x_source["budget"] == {"page_loads": 1, "scroll_steps": 5, "min_step_interval_ms": 1500}
+    assert x_source["budget"] == {"page_loads": 1, "scroll_steps": 5, "min_step_interval_ms": 1500, "daily_steps": 200}
     page = wait_until_refreshed(client)
     sources = {view_item["item"]["source_id"] for view_item in page["items"]}
     assert sources == {"rss:tech", "rss:news", "youtube:veritasium"}

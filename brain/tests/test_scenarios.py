@@ -428,3 +428,22 @@ def test_a_view_file_that_is_not_utf8_does_not_break_the_other_views(client, pat
     assert client.post("/view/feed", json={}).status_code == 200
     assert client.post("/view/notes", json={}).status_code == 200
 
+
+def test_any_site_page_reads_as_a_source_once_it_has_an_extractor_and_shows_what_the_rules_keep(client, brain, paths, services):
+    page_url = f"{services.base_url}/pages/endless.html"
+    write_view(paths, f"# Feed\n\n## Sources\n* Page: {page_url}\n\n## Rules\n* Hide crypto\n")
+    [first] = client.post("/refresh", json={"view_id": "feed", "force": True}).json()["page_sources"]
+    assert (first["source_id"], first["start_url"], first["spec"], first["budget"]["daily_steps"]) == ("page:127.0.0.1/pages/endless.html", page_url, None, 200)
+    assert brain.relay_config()["passive"] == []
+    spec = client.post("/extractor/generate", json={"url": page_url, "skeleton": '<div class="stream-entry">{t:9}</div>'}).json()["spec"]
+    client.post("/extractor/accept", json=spec)
+    [ready] = client.post("/refresh", json={"view_id": "feed", "force": True}).json()["page_sources"]
+    assert ready["spec"]["item_root"] == spec["item_root"]
+    assert [source["source_id"] for source in brain.relay_config()["passive"]] == ["page:127.0.0.1/pages/endless.html"]
+    records = [{"native_id": f"e{index}", "url": f"https://endless.example/{index}", "text": f"Endless post {index}" + (" about crypto" if index % 4 == 0 else "")} for index in range(8)]
+    client.post("/ingest", json={"source_id": "page:127.0.0.1/pages/endless.html", "records": records, "page_url": page_url})
+    shown = tagging_done(client)
+    assert not [title for title in titles(shown) if "crypto" in title]
+    assert len(shown["items"]) == 6
+    assert shown["keep_rate"] == {"page:127.0.0.1/pages/endless.html": 0.75}
+

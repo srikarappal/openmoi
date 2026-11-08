@@ -1,18 +1,26 @@
 // Feed style views: render from cache, refresh sources, append new items, re-render after edits, forward lens events.
+// Page sources read ahead of you: as you near the end of what is shown, their reader tabs scroll further, enough to
+// refill the view after your rules hide some, so the feed goes on like the site's own until a source ends.
 import { sleep } from "../shared/timing"
 import type { Item, LensToHost, PageSource, RawRecord, ViewPage } from "../shared/types"
 import type { Track } from "./activity"
 import type { BrainClient } from "./brain"
 import type { DriverKind } from "./drivers"
 import type { LensContext, LensManager } from "./lenses"
-import type { SourceReader } from "./sources"
+import type { ReaderPool } from "./readers"
 
 const SETTLE_POLL_MS = 1_000
 const SETTLE_ATTEMPTS = 30
 const MORE_CURSOR = "more"
-// Past the stored items the lens may ask to read the page sources further down, one more budget of scrolling each time.
+// Past the stored items the lens may ask for more: the reader tabs then scroll their sources further.
 const DEEPER_CURSOR = "deeper"
-const MAX_DEPTH = 4
+// Fewer than READ_AHEAD_ITEMS filtered items left below the furthest one you saw: top the view up to BUFFER_ITEMS.
+const READ_AHEAD_ITEMS = 20
+const BUFFER_ITEMS = 30
+const FIRST_FILL_RECORDS = 30
+const MAX_FILL_RECORDS = 120
+// A source whose items your rules almost all hide is still read at most ten raw items for each one wanted.
+const MIN_KEEP_RATE = 0.1
 
 export interface ViewHooks {
   open_original(url: string): void
@@ -51,15 +59,17 @@ export class ViewController {
   private readonly warned = new Map<string, string[]>()
   private readonly waiting_for_chrome = new Map<string, { view_id: string; source: PageSource }>()
   private readonly page_sources = new Map<string, PageSource[]>()
-  private readonly depths = new Map<string, number>()
-  private readonly reached = new Map<string, number>()
-  private readonly deepening = new Set<string>()
+  private readonly keep_rates = new Map<string, Record<string, number>>()
+  // Sources that ended or used today's budget: no more reading ahead from them until a refresh.
+  private readonly finished = new Map<string, Set<string>>()
+  // Per lens, the position of the furthest item you have seen, in the order the lens shows them.
+  private readonly furthest = new Map<string, number>()
   private readonly reading = new Map<string, Promise<void>>()
 
   constructor(
     private readonly brain: BrainClient,
     private readonly lenses: LensManager,
-    private readonly sources: SourceReader,
+    private readonly readers: ReaderPool,
     private readonly hooks: ViewHooks,
   ) {}
 
@@ -85,6 +95,7 @@ export class ViewController {
 
   private async render(context: LensContext): Promise<void> {
     const page = await this.brain.view_page(context.view_id, [])
+    this.furthest.delete(context.key)
     context.send({ type: "render", items: page.items, cursor: this.cursor_for(page) })
     this.versions.set(context.view_id, page.version)
     const previous = this.summaries.get(context.view_id)
@@ -94,11 +105,15 @@ export class ViewController {
     if (page.lens_stale) this.hooks.lens_stale(context.view_id, page.layout_hash)
   }
 
-  // The next page of stored items, else reading the page sources further down, else caught up.
+  // The next page of stored items, else reading the page sources further, else caught up.
   private cursor_for(page: ViewPage): string | null {
     if (page.has_more) return MORE_CURSOR
-    const deeper = (this.page_sources.get(page.view_id)?.length ?? 0) > 0 && (this.depths.get(page.view_id) ?? 1) < MAX_DEPTH
-    return deeper ? DEEPER_CURSOR : null
+    return this.open_sources(page.view_id).length ? DEEPER_CURSOR : null
+  }
+
+  private open_sources(view_id: string): PageSource[] {
+    const finished = this.finished.get(view_id) ?? new Set<string>()
+    return (this.page_sources.get(view_id) ?? []).filter((source) => !finished.has(source.source_id))
   }
 
   // Each warning shows once per view and version, so a notice you dismissed stays dismissed; one that no longer holds goes away
@@ -123,7 +138,9 @@ export class ViewController {
     await this.hooks.track(`Updating ${context.view_id}`, async () => {
       const { page_sources } = await this.brain.refresh(context.view_id, force)
       this.page_sources.set(context.view_id, page_sources)
-      await Promise.all([this.settle(context), this.read_and_settle(context, page_sources, force, 1)])
+      this.finished.delete(context.view_id)
+      const wanted = new Map(page_sources.map((source) => [source.source_id, FIRST_FILL_RECORDS]))
+      await Promise.all([this.settle(context), this.read_and_settle(context, page_sources, force, wanted, true)])
     })
   }
 
@@ -139,71 +156,62 @@ export class ViewController {
     this.waiting_for_chrome.clear()
     for (const { view_id, source } of waiting) {
       const context = this.lenses.get(view_lens_key(view_id))
-      if (context) await this.read_and_settle(context, [source], true, 1)
+      if (context) await this.read_and_settle(context, [source], true, new Map([[source.source_id, FIRST_FILL_RECORDS]]), true)
     }
   }
 
-  // You scrolled past everything stored: read the page sources again and further down, at the same human pace.
-  // A read still running may bring the next items, so it finishes first; only then, with nothing new waiting, go deeper.
-  private async go_deeper(context: LensContext): Promise<void> {
+  // You are near the end of what is shown (or at it, when the lens asks for more): top the view up from the sources
+  // that have more, asking each for enough raw items to fill the buffer after your rules hide some of them.
+  // A read already going will append what it finds, so this one waits its turn rather than starting another.
+  private async read_ahead(context: LensContext, at_end: boolean): Promise<void> {
     const view_id = context.view_id
-    if (this.deepening.has(view_id)) return
-    this.deepening.add(view_id)
-    try {
-      await this.reading.get(view_id)?.catch(ignore)
-      const page = await this.append_next(context)
-      const depth = (this.depths.get(view_id) ?? 1) + 1
-      if (page.items.length || page.has_more || depth > MAX_DEPTH) return
-      this.depths.set(view_id, depth)
-      await this.hooks.track(`Reading further down for ${view_id}`, () => this.read_and_settle(context, this.page_sources.get(view_id) ?? [], true, depth))
-    } finally {
-      this.deepening.delete(view_id)
-    }
+    const sources = this.open_sources(view_id)
+    if (!sources.length || this.reading.has(view_id)) return
+    const below = at_end ? 0 : context.rendered.size - 1 - (this.furthest.get(context.key) ?? -1)
+    if (below >= READ_AHEAD_ITEMS) return
+    const per_source = Math.ceil((BUFFER_ITEMS - below) / sources.length)
+    const rates = this.keep_rates.get(view_id) ?? {}
+    const wanted = new Map(sources.map((source) => [source.source_id, Math.min(MAX_FILL_RECORDS, Math.ceil(per_source / Math.max(rates[source.source_id] ?? 1, MIN_KEEP_RATE)))]))
+    await this.hooks.track(`Reading ahead for ${view_id}`, () => this.read_and_settle(context, sources, true, wanted, false))
   }
 
-  // One read of a view's page sources at a time: a refresh during a read further down waits for it, so two reads never
+  // One read of a view's page sources at a time: a refresh during a read ahead waits for it, so two reads never
   // scroll your Chrome at once.
-  private read_and_settle(context: LensContext, sources: PageSource[], force: boolean, depth: number): Promise<void> {
+  private read_and_settle(context: LensContext, sources: PageSource[], force: boolean, wanted: Map<string, number>, from_top: boolean): Promise<void> {
     if (!sources.length) return Promise.resolve()
     const view_id = context.view_id
-    const run = (this.reading.get(view_id) ?? Promise.resolve()).catch(ignore).then(() => this.read_once(context, sources, force, depth))
+    const run = (this.reading.get(view_id) ?? Promise.resolve()).catch(ignore).then(() => this.read_once(context, sources, force, wanted, from_top))
     this.reading.set(view_id, run)
     return run.finally(() => {
       if (this.reading.get(view_id) === run) this.reading.delete(view_id)
     })
   }
 
-  // A read further down that reached no more records than the one before means the page has nothing more: caught up.
-  private async read_once(context: LensContext, sources: PageSource[], force: boolean, depth: number): Promise<void> {
-    const view_id = context.view_id
-    if (depth === 1) this.depths.set(view_id, 1)
-    const reached = await this.read_sources(context, sources, force, depth)
-    const previous = depth > 1 ? (this.reached.get(view_id) ?? 0) : 0
-    this.reached.set(view_id, reached)
-    if (depth > 1 && reached <= previous) this.depths.set(view_id, MAX_DEPTH)
+  private async read_once(context: LensContext, sources: PageSource[], force: boolean, wanted: Map<string, number>, from_top: boolean): Promise<void> {
+    await this.read_sources(context, sources, force, wanted, from_top)
     await this.settle(context)
   }
 
-  // A notice about a source is replaced by its latest read, so one that worked leaves nothing behind. Returns the records reached.
-  private async read_sources(context: LensContext, sources: PageSource[], force: boolean, depth: number): Promise<number> {
-    let reached = 0
+  // A notice about a source is replaced by its latest read, so one that worked leaves nothing behind.
+  private async read_sources(context: LensContext, sources: PageSource[], force: boolean, wanted: Map<string, number>, from_top: boolean): Promise<void> {
     for (const source of sources) {
       const tag = source_tag(source.source_id)
       const outcome = await this.hooks.track(`Reading ${source.source_id}`, () =>
-        this.sources.read(
+        this.readers.fill(
           source,
-          force,
+          wanted.get(source.source_id) ?? FIRST_FILL_RECORDS,
           (records) => {
             this.hooks.retract(tag)
             return this.ingest_batch(context, source, records)
           },
-          depth,
+          force,
+          from_top,
         ),
       )
       if (outcome.status === "skipped") continue
       this.hooks.retract(tag)
-      if (outcome.status === "read") {
-        reached += outcome.count
+      if (outcome.status === "ended" || outcome.status === "exhausted") {
+        this.finished.set(context.view_id, (this.finished.get(context.view_id) ?? new Set<string>()).add(source.source_id))
       } else if (outcome.status === "challenge") {
         if (outcome.driver === "openmoi") this.waiting_for_chrome.set(`${context.view_id}\0${source.source_id}`, { view_id: context.view_id, source })
         this.hooks.notify(challenge_text(source.source_id, outcome.driver), outcome.url, tag)
@@ -211,7 +219,6 @@ export class ViewController {
         this.hooks.notify(`${source.source_id} could not be read: ${outcome.error}`, undefined, tag)
       }
     }
-    return reached
   }
 
   // Appends whatever is new until the brain has finished fetching and tagging.
@@ -255,6 +262,7 @@ export class ViewController {
   private append_next(context: LensContext): Promise<ViewPage> {
     return context.serial(async () => {
       const page = await this.brain.view_page(context.view_id, [...context.rendered.keys()])
+      if (page.keep_rate) this.keep_rates.set(context.view_id, page.keep_rate)
       if (page.items.length || !page.has_more) context.send({ type: "append", items: page.items, cursor: this.cursor_for(page) })
       this.report(page)
       return page
@@ -270,12 +278,16 @@ export class ViewController {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "less_like_this" }])
       this.hooks.less_like_this(context.view_id, item)
     } else if (message.type === "more" && message.cursor === DEEPER_CURSOR) {
-      await this.go_deeper(context)
+      await this.read_ahead(context, true)
     } else if (message.type === "more") {
       await this.append_next(context)
     } else if (message.type === "seen") {
       const known = message.item_ids.filter((item_id) => context.rendered.has(item_id))
-      if (known.length) await this.brain.events(known.map((item_id) => ({ view_id: context.view_id, item_id, event_kind: "seen" })))
+      if (!known.length) return
+      await this.brain.events(known.map((item_id) => ({ view_id: context.view_id, item_id, event_kind: "seen" })))
+      const order = [...context.rendered.keys()]
+      this.furthest.set(context.key, Math.max(this.furthest.get(context.key) ?? -1, ...known.map((item_id) => order.indexOf(item_id))))
+      await this.read_ahead(context, false)
     }
   }
 }

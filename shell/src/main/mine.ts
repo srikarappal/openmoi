@@ -1,14 +1,13 @@
 // Mine: your own version of any page, in openMoi or in your Chrome. Articles go through reader mode;
 // listings through a saved or generated extractor. The page itself is only read, never changed or closed.
 import { site_domain } from "../shared/address"
-import { is_good_extraction } from "../shared/extract"
-import type { ExtractorSpec, Item, LensToHost, RawRecord, ViewItem } from "../shared/types"
+import type { Item, LensToHost, RawRecord, ViewItem } from "../shared/types"
 import type { BrainClient } from "./brain"
 import { explain } from "./chat"
 import type { PageDriver } from "./drivers"
 import type { LensContext, LensManager } from "./lenses"
+import { find_listing_spec } from "./listing_spec"
 
-const ATTEMPTS = 2
 type PageKind = "article" | "listing"
 
 // The page to read: its lens key, the driver that reaches it and the driver's handle for it.
@@ -43,14 +42,6 @@ export function tab_mine_key(tab_id: number): string {
 
 export function chrome_mine_key(page_id: number): string {
   return `chrome:${page_id}`
-}
-
-function usable(records: RawRecord[]): number {
-  return records.filter((record) => record.url && (record.title || record.text)).length
-}
-
-function extract(target: MineTarget, spec: ExtractorSpec): Promise<RawRecord[]> {
-  return target.driver.run<RawRecord[]>(target.handle, "extract", { spec })
 }
 
 export class MineController {
@@ -105,30 +96,10 @@ export class MineController {
     }
   }
 
-  // The saved spec first; a missing or broken one is regenerated from the page skeleton, at most twice.
   private async listing_records(target: MineTarget): Promise<RawRecord[] | null> {
-    const saved = await this.brain.find_extractor(target.url)
-    let last_error: string | undefined
-    if (saved) {
-      const records = await extract(target, saved)
-      if (is_good_extraction(records)) return records
-      last_error = `the saved spec v${saved.version} found ${usable(records)} items with a title and url`
-    }
-    const skeleton = await target.driver.run<string>(target.handle, "skeleton")
-    for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-      try {
-        const spec = await this.brain.generate_extractor(target.url, skeleton, last_error)
-        const records = await extract(target, spec)
-        if (is_good_extraction(records)) {
-          await this.brain.accept_extractor(spec)
-          return records
-        }
-        last_error = `the spec found ${usable(records)} items with a title and url; it needs at least 3`
-      } catch (error) {
-        last_error = explain(error)
-      }
-    }
-    this.hooks.notify(`Could not make a Mine view of this page: ${last_error}`)
+    const found = await find_listing_spec(this.brain, target.driver, target.handle, target.url, await this.brain.find_extractor(target.url))
+    if ("records" in found) return found.records
+    this.hooks.notify(`Could not make a Mine view of this page: ${found.problem}`)
     return null
   }
 

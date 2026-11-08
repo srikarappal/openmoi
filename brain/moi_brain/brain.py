@@ -19,18 +19,19 @@ from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
-from moi_brain.items import Event, Item, ViewItem, normalize, rss_source_id, youtube_source_id
+from moi_brain.items import Event, Item, ViewItem, normalize, page_source_id, rss_source_id, youtube_source_id
 from moi_brain.lens_gen import generate_lens
 from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway
 from moi_brain.md import parse_sections, section_text
 from moi_brain.memory import TOPIC_FILES, Memory
-from moi_brain.rank import PAGE_SIZE, Order, rank
+from moi_brain.rank import PAGE_SIZE, Order, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, rule_topics, watch_list
 
-PILOT_BUDGET = {"page_loads": 1, "scroll_steps": 5, "min_step_interval_ms": 1500}
+# A read scrolls a source page step by step at human pace; daily_steps caps how far it scrolls each source per day.
+PILOT_BUDGET = {"page_loads": 1, "scroll_steps": 5, "min_step_interval_ms": 1500, "daily_steps": 200}
 FEED_INTERVAL = timedelta(minutes=5)
 VIEW_WINDOW = timedelta(days=7)
 # What you saw stays in the view this long, so a new look or a reload shows the same feed instead of an empty one.
@@ -44,12 +45,12 @@ def utc_now() -> datetime:
 
 
 class PageSource(BaseModel):
-    """A source the shell reads inside your session in a hidden source view."""
+    """A source the shell reads inside your session in a reader tab. Without a spec the shell makes one from the page."""
 
     source_id: str
     page_type: str
     start_url: str
-    spec: ExtractorSpec
+    spec: ExtractorSpec | None
     budget: dict[str, int]
 
 
@@ -64,6 +65,8 @@ class ViewPage(BaseModel):
     version: str
     layout_hash: str
     lens_stale: bool = False
+    # Per source, the share of its items your rules let through, so the shell reads enough ahead.
+    keep_rate: dict[str, float] = Field(default_factory=dict)
 
 
 class PassiveRecords(BaseModel):
@@ -197,6 +200,9 @@ class Brain:
             spec = self.extractors.for_page_type(X_DOMAIN, source.page_type or "home_timeline")
             if spec and spec.start_url:
                 found.append(PageSource(source_id="x", page_type=spec.page_type, start_url=spec.start_url, spec=spec, budget=PILOT_BUDGET))
+        for source in compiled.sources:
+            for page in source.pages:
+                found.append(PageSource(source_id=page_source_id(page), page_type="listing", start_url=page, spec=self.extractors.for_url(page), budget=PILOT_BUDGET))
         return found
 
     def passive_sources(self) -> list[PageSource]:
@@ -205,7 +211,11 @@ class Brain:
         return list(found.values())
 
     def relay_config(self) -> dict[str, Any]:
-        passive = [{"source_id": source.source_id, "url_prefix": url_prefix(source.start_url), "spec": source.spec.model_dump()} for source in self.passive_sources()]
+        passive = [
+            {"source_id": source.source_id, "url_prefix": url_prefix(source.start_url), "spec": source.spec.model_dump()}
+            for source in self.passive_sources()
+            if source.spec
+        ]
         return {"passive": passive}
 
     def queue_relay_event(self, message: dict[str, Any]) -> None:
@@ -332,6 +342,7 @@ class Brain:
             version=compiled.file_hash,
             layout_hash=compiled.layout_hash,
             lens_stale=self.lenses.is_stale(lens_key(view_id, "feed"), compiled.layout, compiled.layout_hash),
+            keep_rate=kept_share(items, compiled.rules, now),
         )
 
     def record_events(self, events: list[Event]) -> None:

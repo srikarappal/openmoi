@@ -94,3 +94,34 @@ test("after openMoi forgets a pairing, the app says to pair again, then Allow pa
     await app.close()
   }
 })
+
+function posts_in(text: string): number {
+  return (text.match(/Endless post \d+/g) ?? []).length
+}
+
+test("a page you add as a source keeps reading as you scroll, filtered by your rules, in one reader tab", async () => {
+  const feed = `# Feed\n\n## Sources\n* Page: ${world.base_url}/pages/endless.html\n\n## Rules\n* Hide crypto\n`
+  const harness = await Harness.launch(world, { views: { feed } })
+  try {
+    const first = await eventually(
+      () => harness.lens_text(),
+      (text) => posts_in(text) >= 10,
+      60_000,
+    )
+    const scrolled = await eventually(
+      async () => {
+        await harness.in_lenses("window.scrollTo(0, document.body.scrollHeight)")
+        return harness.lens_text()
+      },
+      (text) => posts_in(text) >= posts_in(first) + 30,
+      120_000,
+    )
+    expect(scrolled).not.toContain("crypto")
+    expect(scrolled).not.toContain("You're caught up.")
+    const readers = await harness.app.evaluate(({ webContents }) => webContents.getAllWebContents().filter((contents) => contents.getURL().includes("endless.html")).length)
+    expect(readers).toBe(1)
+    expect(harness.files_in(".moi/extractors").length).toBe(1)
+  } finally {
+    await harness.close()
+  }
+})

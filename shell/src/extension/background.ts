@@ -34,8 +34,13 @@ async function settings(): Promise<Settings> {
   return { relay_url: String(stored.relay_url || DEFAULT_RELAY_URL), passive_enabled: stored.passive_enabled !== false }
 }
 
+// When openMoi went away (you quit it) its reading tabs have no one to read for: after a minute they close.
+const GONE_MS = 60_000
+let offline_since: number | null = null
+
 function on_relay_change(state: RelayState): void {
   chrome.action.setBadgeText({ text: BADGES[state] }).catch(ignore)
+  offline_since = state === "offline" ? (offline_since ?? Date.now()) : null
   if (state === "offline") setTimeout(() => ensure_connected().catch(ignore), RECONNECT_MS)
 }
 
@@ -57,6 +62,7 @@ const commands = new ChromeCommands(chrome, tab_memory)
 const relay = new RelayClient(commands, open_socket, on_relay_change, secrets)
 
 async function ensure_connected(): Promise<void> {
+  if (offline_since !== null && Date.now() - offline_since > GONE_MS) await commands.close_opened()
   relay.connect((await settings()).relay_url)
 }
 

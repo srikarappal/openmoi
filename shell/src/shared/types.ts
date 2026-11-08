@@ -53,13 +53,16 @@ export interface PilotBudget {
   page_loads: number
   scroll_steps: number
   min_step_interval_ms: number
+  // How far a source may be scrolled in a day, over all its reads.
+  daily_steps?: number
 }
 
 export interface PageSource {
   source_id: string
   page_type: string
   start_url: string
-  spec: ExtractorSpec
+  // null until a spec for this page exists; the reader makes one from the page the first time.
+  spec: ExtractorSpec | null
   budget: PilotBudget
 }
 
@@ -74,6 +77,8 @@ export interface ViewPage {
   version: string
   layout_hash: string
   lens_stale: boolean
+  // Per source, the share of its items the view's rules let through.
+  keep_rate?: Record<string, number>
 }
 
 export interface IngestResult {

@@ -27,7 +27,7 @@ import { MineController, chrome_mine_key, tab_mine_key } from "./mine"
 import { ActivityTracker } from "./activity"
 import { RelayLink } from "./relay_link"
 import { SmokeTester } from "./smoke"
-import { SourceReader } from "./sources"
+import { ReaderPool } from "./readers"
 import { TabManager, type Tab } from "./tabs"
 import { ViewController, view_lens_key } from "./views"
 
@@ -44,7 +44,7 @@ export class Shell implements ViewHost {
   readonly lens_preload: string
   readonly tabs: TabManager
   readonly lenses: LensManager
-  readonly sources: SourceReader
+  readonly readers: ReaderPool
   readonly views: ViewController
   readonly mine: MineController
   readonly chat: ChatController
@@ -86,7 +86,7 @@ export class Shell implements ViewHost {
       approval_needed: (extension_id) => this.ask_approval(extension_id),
       mine: (request) => this.open_chrome_page(request).catch((error) => this.notify(explain(error))),
     })
-    this.sources = new SourceReader(() => this.relay.reading_driver())
+    this.readers = new ReaderPool(() => this.relay.reading_driver(), brain)
     this.lenses = new LensManager(this, { on_ready: (context) => this.on_lens_ready(context), on_event: (context, message) => this.on_lens_event(context, message) })
     this.chat = new ChatController(brain, {
       chat_view: () => this.chat_view_id,
@@ -106,7 +106,7 @@ export class Shell implements ViewHost {
       on_new_lens: (view_id, kind) => this.reload_lens(view_id, kind),
       track: (label, work) => this.activity.track(label, work),
     })
-    this.views = new ViewController(brain, this.lenses, this.sources, {
+    this.views = new ViewController(brain, this.lenses, this.readers, {
       open_original: (url) => this.open_original(url),
       notify: (text, url, tag) => this.notify(text, url, undefined, tag),
       retract: (tag) => this.retract(tag),

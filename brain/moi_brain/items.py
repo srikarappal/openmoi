@@ -15,7 +15,7 @@ ItemKind = Literal["post", "article", "video", "product", "link"]
 EventKind = Literal["open", "seen", "less_like_this"]
 
 ITEM_KINDS = set(get_args(ItemKind))
-DEFAULT_KINDS: dict[str, ItemKind] = {"x": "post", "youtube": "video", "rss": "article", "site": "link"}
+DEFAULT_KINDS: dict[str, ItemKind] = {"x": "post", "youtube": "video", "rss": "article", "site": "link", "page": "post"}
 TRACKING_PARAMS = {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref", "ref_src", "si"}
 HOST_NOISE = {"www", "feeds", "feed", "rss", "m"}
 WEB_SCHEMES = {"http", "https"}
@@ -117,6 +117,15 @@ def host_label(url: str) -> str:
 
 def rss_source_id(feed_url: str) -> str:
     return f"rss:{host_label(feed_url)}"
+
+
+def page_source_id(url: str) -> str:
+    """A page read as a feed: its host without www plus its path, so two pages of one site stay apart."""
+    try:
+        parts = urlparse(url)
+    except ValueError:
+        return "page:page"
+    return f"page:{(parts.hostname or 'page').removeprefix('www.')}{parts.path.rstrip('/')}"
 
 
 def youtube_source_id(channel: str) -> str:

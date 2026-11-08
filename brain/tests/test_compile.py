@@ -245,3 +245,10 @@ def test_sources_for_chrome_never_wait_on_the_model(compiler, services):
     compiled = compiler.compiled("feed")
     assert compiler.all_compiled(use_model=False) == [compiled]
 
+
+def test_any_page_can_be_a_source():
+    sources, warnings = parse_sources("* Page: https://www.instagram.com/\n* Page: https://www.youtube.com/feed/subscriptions, https://news.example.com/latest\n* Page: nothing here", [])
+    assert source_ids(sources) == ["page:instagram.com", "page:youtube.com/feed/subscriptions", "page:news.example.com/latest"]
+    assert warnings == ["No page address found in: Page: nothing here"]
+    assert describe_sources(sources) == "Reading 3 pages."
+

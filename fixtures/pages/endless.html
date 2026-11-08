@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Endless</title>
+<style>body { font: 14px sans-serif; } .stream-entry { height: 120px; border-bottom: 1px solid #ccc; }</style>
+</head>
+<body>
+<main id="feed"></main>
+<script>
+  // A feed that never ends, like a social site: ten posts at a time, more whenever you scroll near the bottom.
+  // Every fourth post is about crypto, so a rule hiding crypto keeps three in four.
+  const feed = document.getElementById("feed")
+  let count = 0
+
+  function add_posts(how_many) {
+    for (let index = 0; index < how_many && count < 400; index++, count++) {
+      const post = document.createElement("div")
+      post.className = "stream-entry"
+      post.dataset.id = `post${count}`
+      const topic = count % 4 === 0 ? " about crypto" : ""
+      post.innerHTML = `<span class="who">@writer${count % 5}</span><p>Endless post ${count}${topic}</p><a href="/pages/endless/${count}">open</a>`
+      feed.append(post)
+    }
+  }
+
+  setTimeout(() => add_posts(10), 200)
+  window.addEventListener("scroll", () => {
+    if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 600) add_posts(10)
+  })
+</script>
+</body>
+</html>

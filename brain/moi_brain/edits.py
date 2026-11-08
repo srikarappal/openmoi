@@ -40,6 +40,8 @@ Reply with one JSON object:
 recent_journal lists what the person opened lately; use it when the request refers to it.
 Files you may edit, all given to you with their current content:
 * views/<view>.md: sections "Sources", "Rules" and "Layout". For these give "section" and the complete new text of that section.
+  Sources are lines such as "* X home timeline", "* YouTube: @handle, @other", "* RSS: <feed address>" or
+  "* Page: <address of any site's feed page>" (Instagram, Facebook, a YouTube home: read as you scroll).
   Rules are plain words, one per line, each line starting with "* ".
   Layout describes the look in plain words, one idea per line. Add what the person asks for as new lines, close to their own words
   (for example "A separate section for each source."). Keep every existing Layout line unless the request names that exact look

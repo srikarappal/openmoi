@@ -184,5 +184,16 @@ describe("ChromeCommands", () => {
     await restarted.close(handle)
     expect(saved.at(-1)).toEqual({ opened: [], chosen: [] })
   })
+
+  it("closes the tabs it opened when openMoi is gone and only lets go of yours", async () => {
+    const { fake, commands } = make_commands()
+    const { handle } = await commands.open({ url: "https://x.com/home", background: true })
+    const yours = fake.add_user_tab("https://mail.example.com/")
+    commands.choose(yours)
+    await commands.close_opened()
+    expect(fake.tab_state.has(Number(handle))).toBe(false)
+    expect(fake.tab_state.has(yours)).toBe(true)
+    expect([commands.opened.size, commands.chosen.size]).toEqual([0, 0])
+  })
 })
 

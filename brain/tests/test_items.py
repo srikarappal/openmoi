@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta, timezone
 import pytest
 
 from moi_brain.items import (
+    page_source_id,
     canonical_url,
     host_label,
     make_item_id,
@@ -151,4 +152,17 @@ def test_item_ids_are_stable_and_source_scoped():
 def test_an_epoch_beyond_the_calendar_is_no_time():
     record = {"url": "https://a.com/1", "title": "t", "published_at": 1e20}
     assert normalize("rss:a", record, datetime.now(UTC)).published_at is None
+
+
+@pytest.mark.parametrize(
+    ("url", "source_id"),
+    [
+        ("https://www.instagram.com/", "page:instagram.com"),
+        ("https://www.youtube.com/feed/subscriptions/", "page:youtube.com/feed/subscriptions"),
+        ("http://127.0.0.1:8899/pages/endless.html", "page:127.0.0.1/pages/endless.html"),
+        ("https://[oops/", "page:page"),
+    ],
+)
+def test_page_source_id(url, source_id):
+    assert page_source_id(url) == source_id
 

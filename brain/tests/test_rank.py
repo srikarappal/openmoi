@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from moi_brain.brain import seen_long_ago
 from moi_brain.compile import Condition, Rule
 from moi_brain.items import normalize
-from moi_brain.rank import age_hours, describe, matches, rank
+from moi_brain.rank import age_hours, describe, kept_share, matches, rank
 
 NOW = datetime(2026, 11, 4, 12, 0, tzinfo=UTC)
 
@@ -177,4 +177,11 @@ def test_a_story_already_shown_keeps_its_copy_when_a_newer_copy_arrives():
     assert [entry.item.native_id for entry in first] == ["h1"]
     later, has_more = rank([shown, newer], [], NOW, {shown.item_id})
     assert later == [] and has_more is False
+
+
+def test_kept_share_is_the_part_of_each_source_the_rules_let_through():
+    items = [make_item("page:a", str(index), topics=["crypto"] if index % 4 == 0 else []) for index in range(8)] + [make_item("x", "x1")]
+    hide_crypto = Rule(when=Condition(field="topic", op="eq", value="crypto"), do="hide")
+    assert kept_share(items, [hide_crypto], NOW) == {"page:a": 0.75, "x": 1.0}
+    assert kept_share([], [hide_crypto], NOW) == {}
 

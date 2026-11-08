@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from moi_brain.config import Paths
 from moi_brain.feeds import CHANNEL_ID, read_takeout
 from moi_brain.files import read_text, write_atomic
-from moi_brain.items import rss_source_id, youtube_source_id
+from moi_brain.items import page_source_id, rss_source_id, youtube_source_id
 from moi_brain.lenses import SITE_PREFIX
 from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import bullets, parse_sections, section_text
@@ -25,7 +25,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "2"
+COMPILER_VERSION = "3"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
@@ -70,10 +70,12 @@ class Rule(BaseModel):
 
 
 class SourceRef(BaseModel):
-    source_id: Literal["x", "youtube", "rss"]
+    source_id: Literal["x", "youtube", "rss", "page"]
     page_type: str | None = None
     channels: list[str] = Field(default_factory=list)
     feeds: list[str] = Field(default_factory=list)
+    # Any site's feed page (Instagram, Facebook, a YouTube home): read in a tab that keeps scrolling as you do.
+    pages: list[str] = Field(default_factory=list)
 
 
 class CompiledView(BaseModel):
@@ -111,8 +113,8 @@ def check_view_id(view_id: str) -> str:
 
 
 def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRef], list[str]]:
-    """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...' or a bare feed URL."""
-    has_x, channels, feeds, warnings = False, [], [], []
+    """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://...' or a bare feed URL."""
+    has_x, channels, feeds, pages, warnings = False, [], [], [], []
     for line in bullets(body):
         label, _, rest = line.partition(":")
         key = label.strip().lower()
@@ -123,6 +125,11 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
             channels += found
             if not found:
                 warnings.append(f"No YouTube channels found in: {line}")
+        elif key == "page":
+            found_pages = URL.findall(rest)
+            pages += found_pages
+            if not found_pages:
+                warnings.append(f"No page address found in: {line}")
         elif X_LINE.match(line):
             has_x = True
         else:
@@ -132,6 +139,8 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
         sources.append(SourceRef(source_id="youtube", channels=list(dict.fromkeys(channels))))
     if feeds:
         sources.append(SourceRef(source_id="rss", feeds=list(dict.fromkeys(feeds))))
+    if pages:
+        sources.append(SourceRef(source_id="page", pages=list(dict.fromkeys(pages))))
     return sources, warnings
 
 
@@ -142,6 +151,7 @@ def source_ids(sources: list[SourceRef]) -> list[str]:
             ids.append("x")
         ids += [youtube_source_id(channel) for channel in source.channels]
         ids += [rss_source_id(feed) for feed in source.feeds]
+        ids += [page_source_id(page) for page in source.pages]
     return list(dict.fromkeys(ids))
 
 
@@ -169,6 +179,8 @@ def describe_sources(sources: list[SourceRef]) -> str:
             parts.append(f"{len(source.channels)} YouTube channel{'s' if len(source.channels) != 1 else ''}")
         if source.feeds:
             parts.append(f"{len(source.feeds)} RSS feed{'s' if len(source.feeds) != 1 else ''}")
+        if source.pages:
+            parts.append(f"{len(source.pages)} page{'s' if len(source.pages) != 1 else ''}")
     if not parts:
         return "No sources yet."
     listed = parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"

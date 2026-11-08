@@ -50,11 +50,8 @@ test("until you allow Chrome nothing is read there; after, X comes through your 
     expect(text).toContain("Post number 0 from maya")
     await expect(needs_chrome).toHaveCount(0)
     expect((await app.brain<Debug>("/debug")).store.items.x).toBeGreaterThanOrEqual(5)
-    const tabs = await eventually(
-      async () => chrome.urls(),
-      (urls) => !urls.some((url) => url.includes("x_home_signed_in")),
-    )
-    expect(tabs.some((url) => url.includes("x_home_signed_in"))).toBe(false)
+    // One reader tab stays open in Chrome while openMoi reads, so scrolling on continues where it stopped.
+    expect(chrome.urls().filter((url) => url.includes("x_home_signed_in"))).toHaveLength(1)
   } finally {
     await close_both(app, chrome)
   }

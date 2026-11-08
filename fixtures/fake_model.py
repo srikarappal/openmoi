@@ -141,8 +141,18 @@ SHOP_SPEC = {
     },
 }
 NOTHING_SPEC = {"item_root": "div.no_such_thing", "fields": {"title": {"select": "a", **FIELD}, "url": {"select": "a", "take": "attr:href"}}}
+ENDLESS_SPEC = {
+    "item_root": "div.stream-entry",
+    "native_id": {"select": ":scope", "take": "attr:data-id"},
+    "fields": {
+        "title": {"select": "p", "take": "text"},
+        "url": {"select": "a", "take": "attr:href", "transform": "absolute_url"},
+        "author_handle": {"select": ".who", "take": "text", "optional": True},
+    },
+    "pagination": {"kind": "scroll", "step_px": 900},
+}
 # Like a real model, the fake one only sees the page's skeleton (and its site), so it recognizes pages by their markup.
-SPECS_BY_MARKER = {'class="athing"': LISTING_SPEC, "s-search-result": SHOP_SPEC}
+SPECS_BY_MARKER = {'class="athing"': LISTING_SPEC, "s-search-result": SHOP_SPEC, 'class="stream-entry"': ENDLESS_SPEC}
 
 
 def lens(payload: dict[str, Any], base_url: str) -> str:

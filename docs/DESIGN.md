@@ -233,7 +233,16 @@ Not a goal for the MVP: being safe to hand to strangers. It is a dogfood build f
 * Three things we write: the openMoi window (TypeScript), the Chrome extension (TypeScript, sharing the page operation code) and the brain (Python). Models run outside them: a local model server for the fast slot, a hosted API for the smart slot.
 * The window drives every page read through a page driver: your Chrome through the relay whenever the extension is connected, openMoi's own hidden views only as a fallback.
 * Once you have paired Chrome, a read waits up to 35 s for it to reconnect (the extension wakes on a 30 s alarm) instead of falling back to openMoi's session, which is signed in nowhere. If a read did fall back and hit a sign in, it runs again in Chrome the moment Chrome connects and its notice is withdrawn with the first items.
-* Infinite scroll: past the last stored item the lens gets the cursor `deeper`; asking for it reads the page sources again one more scroll budget further down (up to 4 budgets, at the same human pace). A read that reaches nothing new ends in "caught up".
+* Infinite scroll with your filter (`readers.ts`, `views.ts`): every page source has one reader tab, kept open in your Chrome (or openMoi's session) where it last stopped:
+
+      you scroll the view -> the lens reports what is on screen -> fewer than 20 filtered items left below the furthest you saw
+        -> raw items needed per source = what refills the view to 30 / the share of that source the rules let through (the brain reports it)
+        -> its reader tab scrolls on at human pace (the source's interval plus up to half again), extracting after every step
+        -> new items -> brain tags, filters and ranks -> appended below -> repeat
+      a refresh starts sources from the top; 3 scrolls with nothing new -> that source ended -> "caught up" once all have
+      daily scroll budget per source (200 steps) used -> stops for today; a tab idle for 10 minutes closes; at most 4 tabs
+      no saved extractor -> one is written from the page skeleton the first time, then kept
+      openMoi quit -> the extension closes its reading tabs after a minute
 * The window calls the brain; the brain never calls the window. Anything that needs a browser (running an extractor, smoke testing a lens) runs on the window's side, which sends the result back in its next request.
 * RSS and YouTube feeds are public feeds meant for machines, so the brain fetches them directly. X is read in your Chrome: a background tab in a collapsed "openMoi" group, closed right after.
 
@@ -276,6 +285,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 | YouTube | Channel RSS feeds; channels listed in the view file by @handle (resolved to a channel id once, cached) or imported from a Takeout `subscriptions.csv` | 1 |
 | X | Handwritten extractor spec for the home timeline, run in a hidden source view in your session | 3 |
 | Any website ("Mine") | Readability for articles; generated extractor spec for listings | 3 |
+| Any site's feed page (`* Page: <url>` in Sources) | A reader tab that keeps scrolling as you do: Instagram, Facebook, a YouTube home, any listing; its extractor is generated from the page the first time | 3 |
 
 ### 9.3 Brain (Python 3.12, sync)
 
@@ -383,7 +393,7 @@ Memory rules:
 
 openMoi reads through the Chrome you already use, so there is nothing to sign in to twice.
 
-* **Extension** (`shell/src/extension`, Manifest V3): runs the same page operations as openMoi's preload (extract, scroll, challenge, skeleton, Readability), injected into a tab only when needed. Background reads open a quiet tab in a collapsed "openMoi" tab group and close it right after; openMoi never closes a tab it did not open. A passive watcher reads source pages you browse yourself (X home) and sends new items as they appear. The toolbar popup shows the connection, a "Mine this page" button and a switch for passive reading.
+* **Extension** (`shell/src/extension`, Manifest V3): runs the same page operations as openMoi's preload (extract, scroll, challenge, skeleton, Readability), injected into a tab only when needed. Background reads use quiet tabs in a collapsed "openMoi" tab group that stay open while openMoi reads on, close when idle and close a minute after openMoi quits; openMoi never closes a tab it did not open. A passive watcher reads source pages you browse yourself (X home) and sends new items as they appear. The toolbar popup shows the connection, a "Mine this page" button and a switch for passive reading.
 * **Brain relay hub** (`relay.py`): a WebSocket server on 127.0.0.1 only. A connection must come from a `chrome-extension://` origin; a new extension waits until you press Allow in openMoi. Calls from the window go out to the extension and wait for its reply; events come back the other way (passive records for known source pages, Mine requests) and are handled on their own worker, so a slow compile never delays a reply.
 * **Pairing:** an origin header is easy to forge for another program on your Mac, so Allow also gives the extension a secret (kept in the extension's storage and in `.moi/relay_trusted.json`, readable only by you). On every connection each side proves it holds the secret for a fresh nonce from the other:
 
@@ -748,8 +758,8 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 
 | Check | Result |
 |---|---|
-| Tests | 393 brain (unit, property, API integration and 25 user journeys; 100% line and branch coverage), 315 shell and extension unit (97% of lines), 25 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
-| Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; the background read tab closes after each read |
+| Tests | 400 brain (unit, property, API integration and 26 user journeys; 100% line and branch coverage), 328 shell and extension unit (97% of lines), 26 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
 | Real feeds | Live Ars Technica and The Verge RSS plus two YouTube handles: 60 items in 1.6 s |
