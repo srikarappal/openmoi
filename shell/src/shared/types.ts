@@ -209,6 +209,8 @@ export interface RelayInfo {
   waiting_for_approval: string | null
   // An extension was approved before, so Chrome is expected back even while it is not connected.
   paired: boolean
+  // The extension holds a secret from an earlier openMoi: it has to Pair again before Allow can work.
+  unrecognized?: string | null
 }
 
 export interface MineRequestEvent {

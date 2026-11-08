@@ -101,4 +101,15 @@ describe("url_shape", () => {
   ])("%s", (value, expected) => {
     expect(url_shape(value)).toBe(expected)
   })
+
+  it("reads words only from text a person sees, keeps whole classes and keeps test id values", () => {
+    const page = `<style>.titleline{color:red}.price-box{}</style><script type="application/ld+json">{"name":"jobs board"}</script>
+      <div class="titleline price-box js-track-click very-long-class-name-that-goes-on-and-on extra" data-cy="title-recipe" data-qa="card-lamp">Lamp</div>`
+    const text = skeleton(body(page))
+    expect(text).toContain('class="titleline price-box js-track-click very-long-class-name-that-goes-on-and-on"')
+    expect(text).toContain('data-cy="title-recipe"')
+    expect(text).toContain('data-qa="card-{t:4}"')
+    expect(text).not.toContain("color")
+  })
 })
+

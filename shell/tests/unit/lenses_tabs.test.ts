@@ -96,11 +96,12 @@ describe("LensManager", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(10_000)
     for (let index = 0; index < 5; index++) lens_event(context.view.webContents, { type: "open", item_id: `i${index}` })
     lens_event(context.view.webContents, { type: "less_like_this", item_id: "i1" })
+    lens_event(context.view.webContents, { type: "less_like_this", item_id: "i1" })
     lens_event(context.view.webContents, { type: "less_like_this", item_id: "i2" })
-    expect(events.on_event.mock.calls.map((call) => call[1].type)).toEqual(["open", "less_like_this"])
+    expect(events.on_event.mock.calls.map((call) => `${call[1].type} ${call[1].item_id}`)).toEqual(["open i0", "less_like_this i1", "less_like_this i2"])
     now.mockReturnValue(10_900)
     lens_event(context.view.webContents, { type: "open", item_id: "i9" })
-    expect(events.on_event).toHaveBeenCalledTimes(3)
+    expect(events.on_event).toHaveBeenCalledTimes(4)
   })
 
   it("closes a lens and forgets it", async () => {

@@ -47,7 +47,7 @@ async function started(fields: Record<string, unknown> = {}) {
 }
 
 function from_ui(window: FakeBrowserWindow) {
-  return { ...ipc_event(window.webContents), senderFrame: { url: UI_URL } }
+  return { ...ipc_event(window.webContents), senderFrame: window.webContents.mainFrame }
 }
 
 async function command(window: FakeBrowserWindow, message: ShellCommand): Promise<void> {
@@ -89,7 +89,7 @@ describe("Shell window", () => {
 
   it("takes commands and answers state only for the UI page itself", async () => {
     const { shell, window } = await started()
-    const page = { ...ipc_event(window.webContents), senderFrame: { url: "https://evil.example/" } }
+    const page = { ...ipc_event(window.webContents), senderFrame: { url: UI_URL } }
     ipcMain.emit("moi:command", page, { type: "open_tab", url: "https://a.example" })
     ipcMain.emit("moi:command", ipc_event(new FakeBrowserWindow().webContents), { type: "open_tab", url: "https://a.example" })
     expect(shell.tabs.all()).toHaveLength(0)
@@ -194,7 +194,12 @@ describe("Shell tabs and commands", () => {
     expect(brain.apply_edit).toHaveBeenCalledWith("p1")
     expect(state_of(shell).chat.find((entry) => entry.proposal)?.status).toBe("applied")
     await command(window, { type: "relay_trust", extension_id: "abcdefghijklmnopabcdefghijklmnop" })
+    expect(brain.relay_trust).not.toHaveBeenCalled()
+    shell.relay.status = { connected: false, waiting_for_approval: "abcdefghijklmnopabcdefghijklmnop", paired: false }
+    shell.notify("A Chrome extension wants to read pages", undefined, { label: "Allow", command: { type: "relay_trust", extension_id: "abcdefghijklmnopabcdefghijklmnop" } })
+    await command(window, { type: "relay_trust", extension_id: "abcdefghijklmnopabcdefghijklmnop" })
     expect(brain.relay_trust).toHaveBeenCalledWith("abcdefghijklmnopabcdefghijklmnop")
+    expect(state_of(shell).notices.some((notice) => notice.action)).toBe(false)
   })
 
   it("opens your openMoi folder for /settings open", async () => {
@@ -213,6 +218,15 @@ describe("Shell and Chrome", () => {
     expect(state_of(shell).chat.at(-1)?.text).toBe("Chrome is connected: openMoi now reads through your own Chrome sessions.")
     inside(shell).on_relay_changed({ connected: false, waiting_for_approval: null, paired: true }, { connected: true, waiting_for_approval: null, paired: true })
     expect(state_of(shell).chat.at(-1)?.text).toBe("Chrome disconnected: openMoi falls back to its own session until it is back.")
+  })
+
+  it("tells you to pair again when Chrome's extension knows an earlier openMoi and clears that once it asks", async () => {
+    const { shell } = await started()
+    inside(shell).on_relay_changed({ connected: false, waiting_for_approval: null, paired: true, unrecognized: "abc" }, { connected: false, waiting_for_approval: null, paired: true })
+    expect(state_of(shell).notices.at(-1)?.text).toContain("press Pair again")
+    expect(state_of(shell).notices.at(-1)?.action).toBeUndefined()
+    inside(shell).on_relay_changed({ connected: false, waiting_for_approval: "abc", paired: true }, { connected: false, waiting_for_approval: null, paired: true, unrecognized: "abc" })
+    expect(state_of(shell).notices.some((notice) => notice.text.includes("Pair again"))).toBe(false)
   })
 
   it("shows the full extension id in the approval notice", async () => {
@@ -374,3 +388,31 @@ describe("Shell Mine toggling", () => {
     expect(disable).toHaveBeenCalledTimes(2)
   })
 })
+
+describe("Shell guards", () => {
+  it("drops a Mine view when you went to another page while it was being made", async () => {
+    const { shell, window } = await started()
+    shell.open_tab("https://shop.example.com/")
+    const [tab] = shell.tabs.all()
+    let finish: (enabled: boolean) => void = () => {}
+    vi.spyOn(shell.mine, "enable").mockReturnValue(new Promise((resolve) => (finish = resolve)))
+    const disable = vi.spyOn(shell.mine, "disable")
+    const toggling = command(window, { type: "toggle_mine" })
+    await new Promise((resolve) => setTimeout(resolve, 1))
+    ;(tab.view.webContents as unknown as { url: string }).url = "https://shop.example.com/other"
+    finish(true)
+    await toggling
+    expect(tab.mine).toBe(false)
+    expect(disable).toHaveBeenCalledWith(`tab:${tab.tab_id}`)
+  })
+
+  it("ignores a frame inside the UI and the UI window once it shows another page", async () => {
+    const { shell, window } = await started()
+    ipcMain.emit("moi:command", { ...ipc_event(window.webContents), senderFrame: { name: "an iframe" } }, { type: "open_tab", url: "https://a.example" })
+    window.webContents.url = "https://dropped.example/"
+    ipcMain.emit("moi:command", from_ui(window), { type: "open_tab", url: "https://a.example" })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(shell.tabs.all()).toHaveLength(0)
+  })
+})
+

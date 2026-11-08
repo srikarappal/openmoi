@@ -62,15 +62,17 @@ export class LensManager {
       if (context.ready) return
       context.ready = true
       this.events.on_ready(context)
-    } else if (this.in_time(context, message.type)) {
+    } else if (this.in_time(context, message)) {
       this.events.on_event(context, message)
     }
   }
 
-  private in_time(context: LensContext, type: LensToHost["type"]): boolean {
-    const interval = ACTION_INTERVAL_MS[type]
+  // Open is paced per lens (a double click opens once); less like this per item, so two items in a row both count.
+  private in_time(context: LensContext, message: LensToHost): boolean {
+    const interval = ACTION_INTERVAL_MS[message.type]
     if (interval === undefined) return true
-    const key = `${context.key}\0${type}`
+    const item = message.type === "less_like_this" ? message.item_id : ""
+    const key = `${context.key}\0${message.type}\0${item}`
     const now = Date.now()
     if (now - (this.last_action.get(key) ?? 0) < interval) return false
     this.last_action.set(key, now)

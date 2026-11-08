@@ -48,7 +48,12 @@ const secrets: SecretStore = {
   save: (secret) => chrome.storage.local.set({ [SECRET_KEY]: secret }),
 }
 
-const commands = new ChromeCommands(chrome)
+const TABS_KEY = "moi_tabs"
+const tab_memory = {
+  load: async () => ((await chrome.storage.session.get(TABS_KEY))[TABS_KEY] as { opened?: number[]; chosen?: number[] } | undefined) ?? {},
+  save: (tabs: { opened: number[]; chosen: number[] }) => chrome.storage.session.set({ [TABS_KEY]: tabs }),
+}
+const commands = new ChromeCommands(chrome, tab_memory)
 const relay = new RelayClient(commands, open_socket, on_relay_change, secrets)
 
 async function ensure_connected(): Promise<void> {
@@ -78,8 +83,9 @@ async function watch_if_passive(tab_id: number, url: string): Promise<void> {
 // Pressing Mine is what lets openMoi read one of your own tabs; it never reads the others.
 export function mine_tab(tab: chrome.tabs.Tab): boolean {
   if (tab.id === undefined || !tab.url) return false
-  commands.chosen.add(tab.id)
-  return relay.send_event({ event: "mine", handle: String(tab.id), url: tab.url, title: tab.title ?? "" })
+  const sent = relay.send_event({ event: "mine", handle: String(tab.id), url: tab.url, title: tab.title ?? "" })
+  if (sent) commands.choose(tab.id)
+  return sent
 }
 
 async function handle_message(message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<unknown> {
@@ -111,7 +117,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === RECONNECT_ALARM) ensure_connected().catch(ignore)
 })
 chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 }).catch(ignore)
-ensure_connected().catch(ignore)
+commands
+  .restore()
+  .then(() => ensure_connected())
+  .catch(ignore)
 
 // A handle for debugging from the service worker console (and for the end to end tests).
 Object.assign(globalThis, { moi_relay: { relay, commands, mine_tab, pair_again } })

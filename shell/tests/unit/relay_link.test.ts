@@ -7,7 +7,7 @@ import type { RelayPoll } from "../../src/shared/types"
 const FALLBACK = { kind: "openmoi" } as PageDriver
 
 function poll_result(fields: Partial<RelayPoll["status"]> = {}, events: RelayPoll["events"] = []): RelayPoll {
-  return { status: { connected: false, waiting_for_approval: null, paired: false, extension_id: null, passive_batches: 0, ...fields }, events }
+  return { status: { connected: false, waiting_for_approval: null, paired: false, unrecognized: null, extension_id: null, passive_batches: 0, ...fields }, events }
 }
 
 function make_link(polls: RelayPoll[]) {
@@ -29,7 +29,7 @@ describe("RelayLink", () => {
     expect(hooks.changed).not.toHaveBeenCalled()
     await link.poll()
     expect(link.driver().kind).toBe("chrome")
-    expect(hooks.changed).toHaveBeenCalledWith({ connected: true, waiting_for_approval: null, paired: false }, { connected: false, waiting_for_approval: null, paired: false })
+    expect(hooks.changed).toHaveBeenCalledWith({ connected: true, waiting_for_approval: null, paired: false, unrecognized: null }, { connected: false, waiting_for_approval: null, paired: false, unrecognized: null })
   })
 
   it("reads through openMoi at once when Chrome was never paired", async () => {
@@ -78,6 +78,15 @@ describe("RelayLink", () => {
     await link.poll()
     await link.poll()
     expect(hooks.approval_needed).toHaveBeenCalledTimes(2)
+  })
+
+  it("does not wait for a Chrome that needs Pair again and says when that changes", async () => {
+    const { link, hooks } = make_link([poll_result({ paired: true, unrecognized: "abc" })])
+    await link.poll()
+    const started = Date.now()
+    expect(await link.reading_driver(5_000)).toBe(FALLBACK)
+    expect(Date.now() - started).toBeLessThan(500)
+    expect(hooks.changed).toHaveBeenCalledTimes(1)
   })
 
   it("hands Mine requests from Chrome to the shell", async () => {

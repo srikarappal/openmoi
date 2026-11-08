@@ -150,7 +150,7 @@ export class ViewController {
     if (this.deepening.has(view_id)) return
     this.deepening.add(view_id)
     try {
-      await this.reading.get(view_id)
+      await this.reading.get(view_id)?.catch(ignore)
       const page = await this.append_next(context)
       const depth = (this.depths.get(view_id) ?? 1) + 1
       if (page.items.length || page.has_more || depth > MAX_DEPTH) return

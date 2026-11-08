@@ -48,9 +48,10 @@ export class RelayLink {
   }
 
   // For reading: a Chrome you paired before gets time to reconnect, since openMoi's own session is not signed in anywhere.
+  // One that is there but needs Pair again will not connect by waiting, so reads go on without it.
   async reading_driver(wait_ms = CHROME_WAIT_MS): Promise<PageDriver> {
     const deadline = Date.now() + wait_ms
-    while (!this.status.connected && (!this.polled || this.status.paired) && Date.now() < deadline) await sleep(WAIT_STEP_MS)
+    while (!this.status.connected && !this.status.unrecognized && (!this.polled || this.status.paired) && Date.now() < deadline) await sleep(WAIT_STEP_MS)
     return this.driver()
   }
 
@@ -65,9 +66,10 @@ export class RelayLink {
     try {
       const { status, events } = await this.brain.relay_poll()
       const previous = this.status
-      this.status = { connected: status.connected, waiting_for_approval: status.waiting_for_approval, paired: status.paired }
+      this.status = { connected: status.connected, waiting_for_approval: status.waiting_for_approval, paired: status.paired, unrecognized: status.unrecognized ?? null }
       this.polled = true
-      if (previous.connected !== this.status.connected || previous.waiting_for_approval !== this.status.waiting_for_approval) {
+      const moved = ["connected", "waiting_for_approval", "unrecognized"] as const
+      if (moved.some((key) => (previous[key] ?? null) !== (this.status[key] ?? null))) {
         this.hooks.changed(this.status, previous)
       }
       // Asked once per request: when it clears (allowed, or the extension left), the next one asks again.

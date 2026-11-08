@@ -3,6 +3,7 @@ import { WebContentsView, type WebContents } from "electron"
 import type { PageOp } from "../shared/types"
 import type { BrainClient } from "./brain"
 import type { ViewHost } from "./host"
+import { sleep } from "../shared/timing"
 import { call_page } from "./page_rpc"
 import { web_preferences } from "./sessions"
 
@@ -16,6 +17,9 @@ export interface PageDriver {
   url(handle: string): Promise<string>
   close(handle: string): Promise<void>
 }
+
+// A page that keeps loading (a stream, a long poll) is read anyway after this long, so it cannot hold up every later read.
+const LOAD_TIMEOUT_MS = 30_000
 
 function is_aborted(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === "ERR_ABORTED"
@@ -65,7 +69,7 @@ export class ElectronDriver implements PageDriver {
     const handle = `view:${this.next_id++}`
     this.pages.set(handle, { contents: view.webContents, view })
     try {
-      await view.webContents.loadURL(url)
+      await Promise.race([view.webContents.loadURL(url), sleep(LOAD_TIMEOUT_MS)])
     } catch (error) {
       // A load cut short by a redirect (a sign in wall, say) still leaves a page to look at; anything else closes the view.
       if (!is_aborted(error)) {

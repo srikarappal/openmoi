@@ -125,14 +125,16 @@ describe("ViewController one read at a time", () => {
     sources.read.mockImplementation(async () => {
       running += 1
       most = Math.max(most, running)
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      await new Promise((resolve) => setTimeout(resolve, 250))
       running -= 1
       return { status: "read", count: 10 * sources.read.mock.calls.length, driver: "chrome" } as SourceOutcome
     })
     await views.refresh(context, false)
-    await Promise.all([views.on_event(context, { type: "more", cursor: "deeper" }), views.refresh(context, true), views.on_event(context, { type: "more", cursor: "deeper" })])
+    const deeper = views.on_event(context, { type: "more", cursor: "deeper" })
+    await vi.waitFor(() => expect(sources.read).toHaveBeenCalledTimes(2))
+    await Promise.all([deeper, views.refresh(context, true), views.on_event(context, { type: "more", cursor: "deeper" })])
     expect(most).toBe(1)
-    expect(sources.read.mock.calls.map((call) => (call as unknown[])[3])).toEqual([1, 1, 2])
+    expect(sources.read.mock.calls.map((call) => (call as unknown[])[3])).toEqual([1, 2, 1])
   })
 
   it("reading further down waits for the first read and skips going deeper when it brought new items", async () => {
@@ -223,3 +225,14 @@ describe("ViewController rendering", () => {
     expect(brain.events.mock.calls).toEqual([[[{ view_id: "feed", item_id: "a", event_kind: "seen" }]]])
   })
 })
+
+describe("ViewController after a failed read", () => {
+  it("still reads further down when the read before it failed", async () => {
+    const { views, context, sources } = make_views([])
+    sources.read.mockRejectedValueOnce(new Error("brain restarting")).mockResolvedValue({ status: "read", count: 30, driver: "chrome" } as SourceOutcome)
+    await views.refresh(context, false).catch(() => undefined)
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(sources.read).toHaveBeenLastCalledWith(X_SOURCE, true, expect.any(Function), 2)
+  })
+})
+

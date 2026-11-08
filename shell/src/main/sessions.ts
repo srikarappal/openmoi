@@ -1,6 +1,6 @@
 // The two browser sessions: your web session (shared by tabs and source views) and the locked down lens session.
 import { session, type WebPreferences } from "electron"
-import { lens_request_allowed } from "../shared/lens_doc"
+import { image_key, lens_request_allowed } from "../shared/lens_doc"
 
 // Per lens web contents: the item images it may load and what it tried to load besides (the smoke test fails on that).
 const lens_images = new Map<number, Set<string>>()
@@ -8,7 +8,10 @@ const lens_blocked = new Map<number, string[]>()
 
 export function allow_lens_images(contents_id: number, urls: string[]): void {
   const allowed = lens_images.get(contents_id) ?? new Set<string>()
-  for (const url of urls) allowed.add(url)
+  for (const url of urls) {
+    const key = image_key(url)
+    if (key) allowed.add(key)
+  }
   lens_images.set(contents_id, allowed)
 }
 
@@ -19,6 +22,14 @@ export function blocked_lens_requests(contents_id: number): string[] {
 export function forget_lens(contents_id: number): void {
   lens_images.delete(contents_id)
   lens_blocked.delete(contents_id)
+}
+
+// An item image that redirects (a CDN moving it) may load where it lands; nothing else gains a way out.
+function follow_redirect(details: { url: string; redirectURL: string; webContentsId?: number }): void {
+  const allowed = lens_images.get(details.webContentsId ?? -1)
+  const from = image_key(details.url)
+  const to = image_key(details.redirectURL)
+  if (allowed && from && to && allowed.has(from)) allowed.add(to)
 }
 
 function lens_request(details: { url: string; resourceType: string; webContentsId?: number }): boolean {
@@ -38,6 +49,7 @@ export function configure_sessions(): void {
   web.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "fullscreen"))
   const lens = session.fromPartition(LENS_PARTITION)
   lens.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !lens_request(details) }))
+  lens.webRequest.onBeforeRedirect((details) => follow_redirect(details))
   lens.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
 }
 

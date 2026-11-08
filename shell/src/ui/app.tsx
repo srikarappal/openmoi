@@ -63,7 +63,7 @@ function TopBar({ state }: { state: ShellState }) {
         ))}
       </nav>
       <span className={state.relay.connected ? "relay on" : "relay"} title="openMoi reads pages through your Chrome when the extension is connected">
-        {state.relay.connected ? "Chrome connected" : state.relay.waiting_for_approval ? "Chrome waiting" : "Chrome not connected"}
+        {state.relay.connected ? "Chrome connected" : state.relay.waiting_for_approval ? "Chrome waiting" : state.relay.unrecognized ? "Chrome: pair again" : "Chrome not connected"}
       </span>
       <form className="address" onSubmit={submit}>
         <input value={address} placeholder="Type a URL or search" onChange={(event) => set_address(event.target.value)} />
@@ -148,7 +148,7 @@ function Chat({ state }: { state: ShellState }) {
   const messages = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (messages.current) messages.current.scrollTop = messages.current.scrollHeight
-  }, [state.chat.length, state.thinking])
+  }, [state.chat.at(-1)?.entry_id, state.thinking])
   const submit = (event: FormEvent) => {
     event.preventDefault()
     if (!text.trim()) return

@@ -85,7 +85,7 @@ def test_web_pages_cannot_connect(hub):
     page = FakeExtension(hub.port, "evil.example", origin_scheme="https")
     with pytest.raises(ConnectionClosed):
         page.recv()
-    assert hub.status() == {"connected": False, "extension_id": None, "waiting_for_approval": None, "paired": False}
+    assert hub.status() == {"connected": False, "extension_id": None, "waiting_for_approval": None, "unrecognized": None, "paired": False}
 
 
 def test_a_new_extension_waits_for_approval_then_gets_the_passive_config(hub, tmp_path):
@@ -98,7 +98,7 @@ def test_a_new_extension_waits_for_approval_then_gets_the_passive_config(hub, tm
     welcome = extension.recv()
     assert (welcome["type"], welcome["passive"]) == ("welcome", passive_config()["passive"])
     assert extension.hub_is_genuine(welcome)
-    assert hub.status() == {"connected": True, "extension_id": EXTENSION_ID, "waiting_for_approval": None, "paired": True}
+    assert hub.status() == {"connected": True, "extension_id": EXTENSION_ID, "waiting_for_approval": None, "unrecognized": None, "paired": True}
     saved = json.loads((tmp_path / "trusted.json").read_text())
     assert saved == {EXTENSION_ID: welcome["secret"]}
     assert (tmp_path / "trusted.json").stat().st_mode & 0o777 == 0o600
@@ -342,4 +342,30 @@ def test_with_the_paired_extension_gone_a_reset_extension_can_ask_again(hub):
     wait_for(is_disconnected, hub)
     reset = FakeExtension(hub.port)
     assert reset.recv()["type"] == "approval_needed"
+
+
+def test_a_second_allow_for_a_connected_extension_keeps_its_secret(hub):
+    paired = trusted_extension(hub)
+    secret = hub.trusted[EXTENSION_ID]
+    hub.trust(EXTENSION_ID)
+    assert hub.trusted[EXTENSION_ID] == secret
+    paired.close()
+    wait_for(is_disconnected, hub)
+    again = FakeExtension(hub.port, secret=paired.secret)
+    assert again.recv()["type"] == "welcome"
+
+
+def test_an_extension_paired_with_an_earlier_openmoi_is_told_to_pair_again_not_offered_allow(hub):
+    hub.trusted[EXTENSION_ID] = "ab" * 32
+    stale = FakeExtension(hub.port, secret="cd" * 32)
+    assert stale.recv()["type"] == "approval_needed"
+    assert hub.status()["unrecognized"] == EXTENSION_ID
+    assert hub.status()["waiting_for_approval"] is None
+    stale.close()
+    reset = FakeExtension(hub.port)
+    assert reset.recv()["type"] == "approval_needed"
+    assert (hub.status()["unrecognized"], hub.status()["waiting_for_approval"]) == (None, EXTENSION_ID)
+    hub.trust(EXTENSION_ID)
+    assert reset.recv()["type"] == "welcome"
+    assert hub.status()["unrecognized"] is None
 

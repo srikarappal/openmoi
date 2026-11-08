@@ -21,7 +21,20 @@ export function lens_data_url(html: string): string {
 // (say an "image" whose query carries your items to someone's server) is refused.
 export function lens_request_allowed(url: string, resource_type: string, item_images: ReadonlySet<string> | undefined): boolean {
   if (url.startsWith("data:")) return true
-  return url.startsWith("https://") && (resource_type === "image" || resource_type === "media") && Boolean(item_images?.has(url))
+  const key = image_key(url)
+  return url.startsWith("https://") && (resource_type === "image" || resource_type === "media") && key !== null && Boolean(item_images?.has(key))
+}
+
+// An image address the way Chromium requests it (spaces and accents encoded, no fragment), so the brain's raw
+// address and the request compare equal.
+export function image_key(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    parsed.hash = ""
+    return parsed.href
+  } catch {
+    return null
+  }
 }
 
 // The image addresses in items a lens is about to show: each item's image and the images of a reader article.
@@ -36,7 +49,7 @@ export function item_images(items: ViewItem[]): string[] {
       continue
     }
   }
-  return found
+  return found.map(image_key).filter((key): key is string => key !== null)
 }
 
 function is_id(value: unknown): value is string {

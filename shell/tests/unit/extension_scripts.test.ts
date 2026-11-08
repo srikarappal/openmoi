@@ -6,6 +6,7 @@ type Listener = (...args: unknown[]) => unknown
 // Just enough of the chrome.* APIs the extension's scripts use, recording what they did.
 class FakeChrome {
   data: Record<string, unknown> = {}
+  session_data: Record<string, unknown> = {}
   readonly badges: string[] = []
   readonly alarms: Array<[string, unknown]> = []
   readonly scripts: Array<{ tabId: number; func?: string; files?: string[]; args?: unknown[] }> = []
@@ -34,6 +35,12 @@ class FakeChrome {
       },
     },
     onChanged: this.on("storage"),
+    session: {
+      get: async (key: string) => (key in this.session_data ? { [key]: this.session_data[key] } : {}),
+      set: async (items: Record<string, unknown>) => {
+        Object.assign(this.session_data, items)
+      },
+    },
   }
   readonly action = { setBadgeText: async ({ text }: { text: string }) => this.badges.push(text) }
   readonly runtime = {

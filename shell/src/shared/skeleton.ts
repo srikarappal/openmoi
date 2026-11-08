@@ -3,7 +3,10 @@
 const DROPPED_TAGS = new Set(["script", "style", "noscript", "svg", "iframe", "link", "meta", "template", "canvas", "video", "audio", "source", "object", "embed", "head"])
 const KEPT_ATTRIBUTES = new Set(["role", "itemprop", "itemtype", "itemscope", "datetime", "type"])
 const TEXT_ATTRIBUTES = new Set(["aria-label", "aria-description", "aria-valuetext", "title", "alt", "placeholder", "value"])
-const STRUCTURAL_DATA = new Set(["data-testid", "data-component-type", "data-type", "data-role", "data-kind", "data-layout", "data-module", "data-section"])
+const STRUCTURAL_DATA = new Set([
+  "data-testid", "data-test", "data-test-id", "data-cy", "data-qa", "data-e2e", "data-component-type", "data-type", "data-role",
+  "data-kind", "data-layout", "data-module", "data-section",
+])
 // Path words that describe a site's structure rather than its content; every other segment is masked.
 const URL_WORDS = new Set([
   "a", "article", "articles", "blog", "c", "categories", "category", "comments", "dp", "en", "gp", "item", "items", "job", "jobs",
@@ -26,6 +29,8 @@ const MARKUP_WORDS = new Set([
   "thumbnail", "time", "timeline", "timestamp", "title", "toolbar", "top", "tweet", "type", "user", "username", "video", "view",
   "views", "visible", "wrap", "wrapper",
   "true", "false", "none", "auto", "on", "off", "yes", "no", "polite", "assertive", "step", "location",
+  "news", "jobs", "job", "article", "articles", "stories", "videos", "products", "listings", "entries", "comments", "track", "click",
+  "js", "wrapper", "titleline", "athing", "subtext", "hnuser", "age", "sitestr",
 ])
 const PAGE_ORIGIN = "https://page.invalid"
 const MAX_CLASSES = 4
@@ -56,7 +61,7 @@ function keep_token(token: string, page_words: Set<string>, strict: boolean): bo
 }
 
 function masked_value(value: string, page_words: Set<string>, strict: boolean): string {
-  return value.slice(0, MAX_VALUE).replace(/[A-Za-z0-9]+/g, (token) => {
+  return value.replace(/[A-Za-z0-9]+/g, (token) => {
     if (/^\d+$/.test(token)) return "9"
     return keep_token(token, page_words, strict) ? token : `{t:${token.length}}`
   })
@@ -83,12 +88,13 @@ export function url_shape(value: string): string {
   }
 }
 
+// Class lists keep whole classes (never a class cut in two, which would name one the page does not have).
 function attribute_value(name: string, value: string, page_words: Set<string>): string | null {
-  if (name === "class") return masked_value(value.split(/\s+/).filter(Boolean).slice(0, MAX_CLASSES).join(" "), page_words, false)
+  if (name === "class") return value.split(/\s+/).filter(Boolean).slice(0, MAX_CLASSES).map((single) => masked_value(single, page_words, false)).join(" ")
   if (name === "href" || name === "src") return url_shape(value)
   if (TEXT_ATTRIBUTES.has(name)) return `{t:${value.trim().length}}`
-  if (STRUCTURAL_DATA.has(name)) return masked_value(value, page_words, false)
-  if (name === "id" || name.startsWith("data-") || name.startsWith("aria-")) return masked_value(value, page_words, true)
+  if (STRUCTURAL_DATA.has(name)) return masked_value(value.slice(0, MAX_VALUE), page_words, false)
+  if (name === "id" || name.startsWith("data-") || name.startsWith("aria-")) return masked_value(value.slice(0, MAX_VALUE), page_words, true)
   if (KEPT_ATTRIBUTES.has(name)) return value.slice(0, MAX_VALUE)
   return null
 }
@@ -152,9 +158,27 @@ function write_children(children: Node[], depth: number, lines: string[], page_w
   if (skipped) lines.push(`${" ".repeat(depth)}<!-- ${skipped} more like the above -->`)
 }
 
+// The words a person sees on the page: text inside scripts, styles and the other dropped tags does not count.
+function visible_words(root: Element): Set<string> {
+  const words = new Set<string>()
+  const walker = root.ownerDocument.createTreeWalker(root, 4)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (has_dropped_ancestor(node, root)) continue
+    for (const word of words_of(node.textContent ?? "")) words.add(word)
+  }
+  return words
+}
+
+function has_dropped_ancestor(node: Node, root: Element): boolean {
+  for (let parent = node.parentElement; parent && parent !== root.parentElement; parent = parent.parentElement) {
+    if (DROPPED_TAGS.has(parent.tagName.toLowerCase())) return true
+  }
+  return false
+}
+
 export function skeleton(root: Element): string {
   const lines: string[] = []
-  write_node(root, 0, lines, new Set(words_of(root.textContent ?? "")))
+  write_node(root, 0, lines, visible_words(root))
   const text = lines.join("\n")
   return text.length > MAX_SKELETON_CHARS ? `${text.slice(0, MAX_SKELETON_CHARS)}\n<!-- skeleton cut at ${MAX_SKELETON_CHARS} characters -->` : text
 }

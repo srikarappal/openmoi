@@ -73,13 +73,16 @@ test("after a restart the feed you were reading is still there", async () => {
   }
 })
 
-test("after openMoi forgets a pairing, Chrome refuses it until you pair again and allow it", async () => {
+test("after openMoi forgets a pairing, the app says to pair again, then Allow pairs Chrome anew", async () => {
   const app = await Harness.launch(world, { files: { ".moi/relay_trusted.json": JSON.stringify({ [unpacked_extension_id()]: "aa".repeat(32) }) } })
   const browser = await ChromeWithExtension.launch(world, app.relay_port, "bb".repeat(32))
   try {
     await eventually(() => relay_state(browser), (value) => value === "unrecognized", 30_000)
-    await expect(app.chrome.locator(".relay")).toHaveText("Chrome waiting")
+    await expect(app.chrome.locator(".relay")).toHaveText("Chrome: pair again", { timeout: 10_000 })
+    await expect(app.chrome.locator(".notice", { hasText: "press Pair again" })).toHaveCount(1)
+    await expect(app.chrome.locator(".notice button", { hasText: "Allow" })).toHaveCount(0)
     await browser.worker.evaluate(() => (globalThis as unknown as { moi_relay: { pair_again(): Promise<void> } }).moi_relay.pair_again())
+    await expect(app.chrome.locator(".notice", { hasText: "press Pair again" })).toHaveCount(0, { timeout: 10_000 })
     await app.chrome.locator(".notice", { hasText: "wants to read pages for openMoi" }).locator("button", { hasText: "Allow" }).click({ timeout: 30_000 })
     await expect(app.chrome.locator(".relay.on")).toHaveText("Chrome connected", { timeout: 30_000 })
     expect(await relay_state(browser)).toBe("connected")

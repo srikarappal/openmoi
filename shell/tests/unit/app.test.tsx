@@ -101,6 +101,8 @@ describe("the openMoi window", () => {
     expect(last_sent()).toEqual({ type: "refresh" })
     await show({ relay: { connected: false, waiting_for_approval: "abc", paired: false } })
     expect(query(".relay")?.textContent).toBe("Chrome waiting")
+    await show({ relay: { connected: false, waiting_for_approval: null, paired: true, unrecognized: "abc" } })
+    expect(query(".relay")?.textContent).toBe("Chrome: pair again")
     await show({ relay: { connected: true, waiting_for_approval: null, paired: true } })
     expect(query(".relay.on")?.textContent).toBe("Chrome connected")
   })
@@ -228,6 +230,11 @@ describe("the chat", () => {
     const list = query(".messages") as HTMLDivElement
     Object.defineProperty(list, "scrollHeight", { configurable: true, value: 900 })
     await show({ chat: [{ entry_id: 1, role: "you", text: "one" }, { entry_id: 2, role: "moi", text: "two" }, { entry_id: 3, role: "moi", text: "three" }] })
+    expect(list.scrollTop).toBe(900)
+    const full = Array.from({ length: 60 }, (_, index) => ({ entry_id: 100 + index, role: "moi" as const, text: `line ${index}` }))
+    await show({ chat: full })
+    list.scrollTop = 0
+    await show({ chat: [...full.slice(1), { entry_id: 200, role: "moi", text: "New look for feed is live" }] })
     expect(list.scrollTop).toBe(900)
   })
 })

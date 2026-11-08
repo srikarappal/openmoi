@@ -39,13 +39,41 @@ function tab_id_of(handle: unknown): number {
   return tab_id
 }
 
+// Where the extension keeps which tabs are openMoi's and which you chose, so a service worker restart (which
+// drops everything in memory) neither leaves openMoi's tabs open for good nor loses your Mine choices.
+export interface TabMemory {
+  load(): Promise<{ opened?: number[]; chosen?: number[] }>
+  save(tabs: { opened: number[]; chosen: number[] }): Promise<void>
+}
+
+function ignore(): void {}
+
 export class ChromeCommands {
   // Tabs openMoi opened itself; only these may ever be closed by openMoi.
   readonly opened = new Set<number>()
   readonly chosen = new Set<number>()
   private group_id: number | null = null
 
-  constructor(private readonly api: ChromeApi) {}
+  constructor(
+    private readonly api: ChromeApi,
+    private readonly memory?: TabMemory,
+  ) {}
+
+  async restore(): Promise<void> {
+    const saved = (await this.memory?.load()) ?? {}
+    for (const tab_id of saved.opened ?? []) this.opened.add(tab_id)
+    for (const tab_id of saved.chosen ?? []) this.chosen.add(tab_id)
+  }
+
+  // You pressed Mine on this tab of yours: openMoi may read it until it closes or the Mine page goes.
+  choose(tab_id: number): void {
+    this.chosen.add(tab_id)
+    this.remember()
+  }
+
+  private remember(): void {
+    this.memory?.save({ opened: [...this.opened], chosen: [...this.chosen] }).catch(ignore)
+  }
 
   run_command(op: string, args: Record<string, unknown>): Promise<unknown> {
     switch (op) {
@@ -72,6 +100,7 @@ export class ChromeCommands {
       return { handle: String(tab.id) }
     }
     this.opened.add(tab.id)
+    this.remember()
     await this.group(tab.id)
     try {
       await this.loaded(tab.id)
@@ -109,11 +138,15 @@ export class ChromeCommands {
   forget(tab_id: number): void {
     this.opened.delete(tab_id)
     this.chosen.delete(tab_id)
+    this.remember()
   }
 
+  // openMoi's own tab closes; one of yours is only let go of, so openMoi can no longer read it.
   async close(handle: unknown): Promise<null> {
     const tab_id = tab_id_of(handle)
     if (this.opened.delete(tab_id)) await this.api.tabs.remove(tab_id)
+    else this.chosen.delete(tab_id)
+    this.remember()
     return null
   }
 

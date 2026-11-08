@@ -166,4 +166,23 @@ describe("ChromeCommands", () => {
     commands.forget(mail)
     await expect(commands.run_command("url", { handle: String(mail) })).rejects.toThrow("is not one openMoi opened")
   })
+
+  it("keeps its tabs across a service worker restart and lets go of a chosen tab when its Mine page closes", async () => {
+    const saved: Array<{ opened: number[]; chosen: number[] }> = []
+    const memory = { load: async () => saved.at(-1) ?? {}, save: async (tabs: { opened: number[]; chosen: number[] }) => void saved.push(tabs) }
+    const fake = new FakeChrome()
+    const first = new ChromeCommands(fake as unknown as ChromeApi, memory)
+    const { handle } = await first.open({ url: "https://x.com/home", background: true })
+    const yours = fake.add_user_tab("https://shop.example.com/")
+    first.choose(yours)
+    const restarted = new ChromeCommands(fake as unknown as ChromeApi, memory)
+    await restarted.restore()
+    expect([...restarted.opened, ...restarted.chosen]).toEqual([Number(handle), yours])
+    await restarted.close(String(yours))
+    expect(fake.tab_state.has(yours)).toBe(true)
+    expect(restarted.chosen.has(yours)).toBe(false)
+    await restarted.close(handle)
+    expect(saved.at(-1)).toEqual({ opened: [], chosen: [] })
+  })
 })
+

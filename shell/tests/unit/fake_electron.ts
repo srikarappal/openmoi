@@ -1,10 +1,12 @@
 // A small stand in for the parts of Electron the main process and preloads use, so they run under vitest.
 // Tests mock "electron" with this module and inspect the fakes it hands out.
 import { EventEmitter } from "node:events"
+import { pathToFileURL } from "node:url"
 
 type OpenHandler = (details: { url: string }) => { action: string }
 type PermissionHandler = (contents: unknown, permission: string, callback: (allowed: boolean) => void) => void
 type RequestHandler = (details: { url: string; resourceType: string }, callback: (response: { cancel: boolean }) => void) => void
+type RedirectHandler = (details: { url: string; redirectURL: string; webContentsId?: number }) => void
 
 let next_contents_id = 1
 
@@ -20,6 +22,7 @@ export class FakeWebContents extends EventEmitter {
   scripts: string[] = []
   script_result: unknown = []
   open_handler: OpenHandler | null = null
+  readonly mainFrame = { name: "main frame" }
   // Lets a test play the page: called with everything the main process sends to this web contents.
   on_send: ((channel: string, message: unknown) => void) | null = null
 
@@ -132,6 +135,7 @@ export class FakeBrowserWindow extends EventEmitter {
 
   async loadFile(file: string): Promise<void> {
     this.webContents.loads.push(file)
+    this.webContents.url = pathToFileURL(file).href
   }
 
   getContentSize(): [number, number] {
@@ -167,9 +171,13 @@ export class FakeSession {
   user_agent = "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) openmoi_shell/0.1.0 Chrome/140.0.0.0 Electron/45.2.3 Safari/537.36"
   permission_handler: PermissionHandler | null = null
   request_handler: RequestHandler | null = null
+  redirect_handler: RedirectHandler | null = null
   readonly webRequest = {
     onBeforeRequest: (handler: RequestHandler): void => {
       this.request_handler = handler
+    },
+    onBeforeRedirect: (handler: RedirectHandler): void => {
+      this.redirect_handler = handler
     },
   }
 

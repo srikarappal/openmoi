@@ -161,3 +161,39 @@ describe("ElectronDriver loads", () => {
     expect(second.webContents.isDestroyed()).toBe(true)
   })
 })
+
+describe("lens images", () => {
+  beforeEach(() => reset_electron())
+
+  it("match the way Chromium requests them and follow an allowed image's redirect only", () => {
+    configure_sessions()
+    const lens = session.fromPartition(LENS_PARTITION)
+    allow_lens_images(9, ["https://cdn.example/my photo.jpg", "https://cdn.example/Café.jpg#top"])
+    const decisions: boolean[] = []
+    ask_lens(lens, decisions, "https://cdn.example/my%20photo.jpg", "image", 9)
+    ask_lens(lens, decisions, "https://cdn.example/Caf%C3%A9.jpg", "image", 9)
+    lens.redirect_handler?.({ url: "https://cdn.example/my%20photo.jpg", redirectURL: "https://images.cdn.example/1.jpg", webContentsId: 9 })
+    lens.redirect_handler?.({ url: "https://collector.example/a", redirectURL: "https://collector.example/b", webContentsId: 9 })
+    ask_lens(lens, decisions, "https://images.cdn.example/1.jpg", "image", 9)
+    ask_lens(lens, decisions, "https://collector.example/b", "image", 9)
+    expect(decisions).toEqual([false, false, false, true])
+  })
+})
+
+describe("ElectronDriver slow pages", () => {
+  it("reads a page that never finishes loading after thirty seconds instead of waiting forever", async () => {
+    vi.useFakeTimers()
+    try {
+      const driver = new ElectronDriver(make_host())
+      FakeWebContentsView.created = []
+      const opening = driver.open("https://stream.example/live", true)
+      const [view] = FakeWebContentsView.created
+      view.webContents.loadURL = () => new Promise<void>(() => {})
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(await opening).toMatch(/^view:/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+

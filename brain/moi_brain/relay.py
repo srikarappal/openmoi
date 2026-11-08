@@ -83,6 +83,8 @@ class RelayHub:
         # The connection waiting for you to allow it: (connection, extension id, its nonce for the hub's proof).
         self.candidate: tuple[ServerConnection, str, str] | None = None
         self.allowed_at: dict[str, float] = {}
+        # An extension that offered a proof the hub cannot check: paired with an earlier openMoi, it needs Pair again.
+        self.unrecognized: str | None = None
         self.pending: dict[str, tuple[ServerConnection, PendingCall]] = {}
         self.server: Server | None = None
 
@@ -108,6 +110,7 @@ class RelayHub:
                 "connected": self.connection is not None,
                 "extension_id": self.extension_id,
                 "waiting_for_approval": self.candidate[1] if self.candidate else None,
+                "unrecognized": self.unrecognized,
                 "paired": bool(self.trusted),
             }
 
@@ -144,12 +147,21 @@ class RelayHub:
             # The paired extension is connected with its secret right now, so one without it is not that extension.
             connection.close(code=1008, reason="that extension is already connected")
             return
+        if isinstance(offered, str) and offered:
+            # It holds a secret from an earlier pairing that this openMoi does not know: allowing it here could never
+            # work, since it keeps the secret it has. It has to forget it first (Pair again in the extension).
+            with self.lock:
+                self.unrecognized = extension_id
+            self.send(connection, {"type": "approval_needed", "extension_id": extension_id})
+            return
         allowed_at = self.allowed_at.pop(extension_id, None)
         if secret and allowed_at is not None and time.monotonic() - allowed_at < APPROVAL_WINDOW_SECONDS:
             self.activate(connection, extension_id, nonce, secret, issued=True)
             return
         with self.lock:
             self.candidate = (connection, extension_id, nonce)
+            if self.unrecognized == extension_id:
+                self.unrecognized = None
         self.send(connection, {"type": "approval_needed", "extension_id": extension_id})
 
     def activate(self, connection: ServerConnection, extension_id: str, nonce: str, secret: str, issued: bool) -> None:
@@ -161,6 +173,8 @@ class RelayHub:
             self.connection = connection
             self.extension_id = extension_id
             self.candidate = None
+            if self.unrecognized == extension_id:
+                self.unrecognized = None
         if previous is not None and previous is not connection:
             self.fail_calls(previous, "Chrome reconnected before answering")
             previous.close()
@@ -246,14 +260,19 @@ class RelayHub:
         return call.result
 
     def trust(self, extension_id: str) -> None:
-        """You allowed an extension: it gets a new secret and if it is waiting right now it becomes the connected one."""
-        secret = secrets.token_hex(32)
-        self.trusted[extension_id] = secret
-        write_atomic(self.trust_file, json.dumps(self.trusted, indent=2, sort_keys=True), private=True)
+        """You allowed an extension. One waiting right now gets a new secret and becomes the connected one.
+        Otherwise (it is between connections) its next connection is the one you allowed. A second click on a
+        connected extension changes nothing, so the secret it holds keeps working."""
         with self.lock:
             candidate = self.candidate if self.candidate and self.candidate[1] == extension_id else None
             if candidate:
                 self.candidate = None
+            connected = self.connection is not None and self.extension_id == extension_id
+        if connected and not candidate:
+            return
+        secret = secrets.token_hex(32) if candidate or extension_id not in self.trusted else self.trusted[extension_id]
+        self.trusted[extension_id] = secret
+        write_atomic(self.trust_file, json.dumps(self.trusted, indent=2, sort_keys=True), private=True)
         if candidate:
             self.activate(candidate[0], extension_id, candidate[2], secret, issued=True)
         else:

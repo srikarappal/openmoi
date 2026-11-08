@@ -36,6 +36,7 @@ function ignore(): void {}
 const TOP_BAR_HEIGHT = 48
 const SIDE_PANEL_WIDTH = 340
 const MAX_NOTICES = 6
+const UNRECOGNIZED_TAG = "relay:unrecognized"
 
 export class Shell implements ViewHost {
   readonly window: BrowserWindow
@@ -131,8 +132,9 @@ export class Shell implements ViewHost {
     ipcMain.handle("moi:get_state", (event) => (this.from_ui(event) ? this.state() : null))
   }
 
-  private from_ui(event: { sender: unknown; senderFrame?: { url: string } | null }): boolean {
-    return event.sender === this.window.webContents && event.senderFrame?.url === this.ui_url
+  // The UI's own main frame: never a frame inside it and never another page that ended up in the window.
+  private from_ui(event: { sender: unknown; senderFrame?: unknown }): boolean {
+    return event.sender === this.window.webContents && event.senderFrame === this.window.webContents.mainFrame && this.window.webContents.getURL() === this.ui_url
   }
 
   private get ui_url(): string {
@@ -245,6 +247,15 @@ export class Shell implements ViewHost {
   }
 
   private on_relay_changed(status: RelayInfo, previous: RelayInfo): void {
+    if (status.connected || status.waiting_for_approval) this.retract(UNRECOGNIZED_TAG)
+    else if (status.unrecognized && status.unrecognized !== previous.unrecognized) {
+      this.notify(
+        "Chrome's openMoi extension was paired with an earlier openMoi. In Chrome, open the openMoi extension's menu and press Pair again; then allow it here.",
+        undefined,
+        undefined,
+        UNRECOGNIZED_TAG,
+      )
+    }
     if (status.connected && !previous.connected) {
       this.notices = this.notices.filter((notice) => notice.action?.command.type !== "relay_trust")
       this.chat.say("Chrome is connected: openMoi now reads through your own Chrome sessions.")
@@ -303,8 +314,10 @@ export class Shell implements ViewHost {
     const key = tab_mine_key(tab.tab_id)
     this.chat.say(`Making your version of ${site_domain(url)}.`)
     const enabled = await this.mine.enable({ key, driver: this.electron, handle: this.electron.adopt(tab.view.webContents), url })
-    if (!this.tabs.get(tab.tab_id)) {
+    if (!this.tabs.get(tab.tab_id) || tab.view.webContents.getURL() !== url) {
+      // Closed, or you went to another page meanwhile: a Mine view of the old page would not match it.
       this.mine.disable(key)
+      if (this.tabs.get(tab.tab_id)) this.push_state()
       return
     }
     tab.mine = enabled
@@ -415,6 +428,10 @@ export class Shell implements ViewHost {
         await this.close_chrome_page(command.page_id)
         return
       case "relay_trust":
+        // Only the extension asking right now and only once: a second click must not change its secret.
+        if (this.relay.status.waiting_for_approval !== command.extension_id) return
+        this.notices = this.notices.filter((notice) => notice.action?.command.type !== "relay_trust")
+        this.push_state()
         await this.relay.trust(command.extension_id)
         return
       case "open_notice": {
