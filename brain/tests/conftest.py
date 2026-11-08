@@ -48,6 +48,14 @@ def utc_clock() -> Iterator[None]:
     set_time_zone(previous)
 
 
+@pytest.fixture
+def pacific_clock(utc_clock: None) -> Iterator[None]:
+    """A Pacific clock for tests about your local day."""
+    set_time_zone("America/Los_Angeles")
+    yield
+    set_time_zone("UTC")
+
+
 @pytest.fixture(scope="session")
 def services() -> Iterator[FakeServices]:
     running = FakeServices().start()

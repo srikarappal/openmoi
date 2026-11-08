@@ -43,28 +43,49 @@ def bullets(body: str) -> list[str]:
     return found or lines
 
 
+def blank_comment(match: re.Match[str]) -> str:
+    """A comment as just its line breaks, so line numbers stay the same."""
+    return "\n" * match.group().count("\n")
+
+
+def is_section_heading(line: str) -> bool:
+    match = HEADING.match(line)
+    return bool(match) and match.group(1) == "##"
+
+
 def heading_index(lines: list[str], heading: str) -> int | None:
+    """The last '## heading' line, the copy parse_sections reads when a heading appears twice."""
+    found = None
     for index, line in enumerate(lines):
         match = HEADING.match(line)
         if match and match.group(1) == "##" and match.group(2).lower() == heading.lower():
-            return index
-    return None
+            found = index
+    return found
 
 
 def replace_section(text: str, heading: str, body: str) -> str:
-    """Replace the body under '## heading' (case insensitive), or append the section at the end."""
+    """Replace the body under '## heading' (case insensitive), or append the section at the end.
+
+    Headings inside comments are not sections and a '# ' line inside a section is part of its text,
+    the same way parse_sections reads the file."""
     lines = text.rstrip().splitlines()
-    start = heading_index(lines, heading)
+    visible = COMMENT.sub(blank_comment, text.rstrip()).splitlines()
+    start = heading_index(visible, heading)
     body_lines = body.strip().splitlines()
     if start is None:
         return "\n".join([*lines, "", f"## {heading}", *body_lines]) + "\n"
-    end = next((index for index in range(start + 1, len(lines)) if HEADING.match(lines[index])), len(lines))
+    end = next((index for index in range(start + 1, len(visible)) if is_section_heading(visible[index])), len(lines))
     tail = ["", *lines[end:]] if end < len(lines) else []
     return "\n".join([*lines[: start + 1], *body_lines, *tail]) + "\n"
 
 
 def replace_body(text: str, body: str) -> str:
-    """Keep the title line of a file and replace everything under it."""
+    """Keep the title line of a file and replace everything under it.
+
+    Without a title, a body that starts with a heading gets a blank first line, so it is not read as the title."""
     lines = text.splitlines()
     title = lines[0] if lines and HEADING.match(lines[0]) else None
-    return "\n".join([title, "", body.strip()] if title else [body.strip()]) + "\n"
+    if title:
+        return "\n".join([title, "", body.strip()]) + "\n"
+    first_line = body.strip().splitlines()[0] if body.strip() else ""
+    return ("\n" if HEADING.match(first_line) else "") + body.strip() + "\n"

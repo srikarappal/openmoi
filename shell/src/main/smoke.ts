@@ -1,10 +1,10 @@
 // The lens smoke test: render synthetic items in a hidden window and report the first thing that went wrong.
 import { BrowserWindow, ipcMain, type IpcMainEvent } from "electron"
 import { synthetic_view_items } from "../shared/fixtures"
-import { lens_data_url } from "../shared/lens_doc"
+import { item_images, lens_data_url } from "../shared/lens_doc"
 import { sleep, with_timeout } from "../shared/timing"
 import type { LensKind } from "../shared/types"
-import { lens_preferences } from "./sessions"
+import { allow_lens_images, blocked_lens_requests, forget_lens, lens_preferences } from "./sessions"
 
 const READY_TIMEOUT_MS = 5_000
 const RENDER_SETTLE_MS = 600
@@ -48,6 +48,8 @@ export class SmokeTester {
   async problem(html: string, kind: LensKind): Promise<string | null> {
     const window = new BrowserWindow({ show: false, width: 1100, height: 800, webPreferences: lens_preferences(this.lens_preload) })
     const contents = window.webContents
+    contents.on("will-navigate", (event) => event.preventDefault())
+    contents.setWindowOpenHandler(() => ({ action: "deny" }))
     const errors: string[] = []
     contents.on("console-message", (event) => {
       if (event.level === "error") errors.push(event.message)
@@ -58,16 +60,20 @@ export class SmokeTester {
       await contents.loadURL(lens_data_url(html))
       if (!(await ready.promise)) return errors[0] ? `script error: ${errors[0]}` : "the lens never called moi.ready()"
       const items = synthetic_view_items(kind)
+      allow_lens_images(contents.id, item_images(items))
       contents.send("moi:lens", { type: "render", items, cursor: null })
       await sleep(RENDER_SETTLE_MS)
       const shown = new Set(await with_timeout<string[]>(contents.executeJavaScript(RENDERED_IDS), INSPECT_TIMEOUT_MS, "rendering"))
       if (errors.length) return `script error: ${errors[0]}`
+      const [stray] = blocked_lens_requests(contents.id)
+      if (stray) return `the lens tried to load ${stray.slice(0, 120)}, which is not an item image`
       const missing = items.filter((view_item) => !shown.has(view_item.item.item_id)).length
       return missing ? `${missing} of ${items.length} items were not rendered with data-item-id` : null
     } catch (error) {
       return error instanceof Error ? error.message : String(error)
     } finally {
       ready.finish(false)
+      forget_lens(contents.id)
       window.destroy()
     }
   }

@@ -115,3 +115,33 @@ def test_ensure_home_seeds_starters_but_never_overwrites_your_files(paths):
     assert (paths.memory / "dislikes.md").exists()
     assert [path.name for path in paths.views.glob("*.md")] == ["feed.md"]
 
+
+def test_the_api_needs_the_token_and_its_own_host(brain):
+    with pytest.raises(ValueError, match="needs a token"):
+        create_app(brain, "")
+    app = create_app(brain, TOKEN, {"127.0.0.1:8799"})
+    local = TestClient(app, base_url="http://127.0.0.1:8799")
+    assert local.get("/health", headers={"x-moi-token": TOKEN}).status_code == 200
+    assert local.get("/health", headers={"x-moi-token": "nope"}).status_code == 401
+    assert local.get("/health").status_code == 401
+    rebound = TestClient(app, base_url="http://evil.example:8799")
+    assert rebound.get("/health", headers={"x-moi-token": TOKEN}).status_code == 421
+
+
+def test_main_makes_a_token_when_none_is_set_and_env_files_cannot_blank_it(started, tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("MOI_TOKEN")
+    (tmp_path / "home").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "home" / ".env").write_text("MOI_TOKEN=\n")
+    entry.main()
+    app = started.calls[0]["app"]
+    assert len(app.state.token) == 32
+    assert f"MOI_TOKEN for this run: {app.state.token}" in capsys.readouterr().err
+    assert app.state.allowed_hosts == {"127.0.0.1:8799", "localhost:8799"}
+
+
+def test_main_keeps_the_shell_token_over_an_env_file(started, tmp_path):
+    (tmp_path / "home").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "home" / ".env").write_text("MOI_TOKEN=from_a_file\n")
+    entry.main()
+    assert started.calls[0]["app"].state.token == TOKEN
+

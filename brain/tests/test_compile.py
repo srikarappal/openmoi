@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from moi_brain.compile import BadInput, Compiler, Condition, Rule, SourceRef, check_view_id, describe_sources, parse_sources, usable_rules
+from moi_brain.compile import BadInput, Compiler, Condition, Rule, SourceRef, check_view_id, describe_sources, parse_sources, source_ids, usable_rules
 from moi_brain.config import Paths, Settings, Slot
 from moi_brain.llm import Gateway
 from moi_brain.memory import Memory
@@ -188,3 +188,13 @@ def test_usable_rules_fill_boost_weight_and_drop_countless_limits():
     limit = Rule(when=Condition(field="source_id", op="eq", value="x"), do="limit")
     hide = Rule(when=Condition(field="topic", op="eq", value="crypto"), do="hide")
     assert usable_rules([boost, limit, hide]) == [boost.model_copy(update={"weight": 3.0}), hide]
+
+
+def test_hyphenated_site_views_and_handles_ending_a_sentence():
+    assert check_view_id("site_my-blog.com") == "site_my-blog.com"
+    assert check_view_id("site_xn--bcher-kva.example") == "site_xn--bcher-kva.example"
+    with pytest.raises(BadInput):
+        check_view_id("site_a/b")
+    sources, _ = parse_sources("* YouTube: @veritasium, @3blue1brown.\n* RSS: https://example.com/feed.xml.", [])
+    assert source_ids(sources) == ["youtube:veritasium", "youtube:3blue1brown", "rss:example"]
+

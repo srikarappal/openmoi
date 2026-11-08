@@ -5,13 +5,15 @@ import html
 import json
 import re
 from calendar import timegm
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import feedparser
 import httpx
+
+from moi_brain.files import read_json, write_atomic
 
 YOUTUBE_BASE = "https://www.youtube.com"
 USER_AGENT = "openMoi/0.1 (feed reader)"
@@ -85,7 +87,12 @@ def nested(node: Any, key: str) -> Iterator[Any]:
 def published_from_age(label: str, now: datetime) -> str | None:
     """'3 days ago' becomes a time about three days before now."""
     match = RELATIVE_AGE.search(label)
-    return (now - timedelta(seconds=int(match.group(1)) * AGE_SECONDS[match.group(2)])).isoformat() if match else None
+    if not match:
+        return None
+    try:
+        return (now - timedelta(seconds=int(match.group(1)) * AGE_SECONDS[match.group(2)])).isoformat()
+    except OverflowError:
+        return None
 
 
 def page_video(video_id: str, title: str, age: str, image_url: str | None, author: str | None, now: datetime) -> dict[str, Any]:
@@ -130,10 +137,21 @@ def channel_page_videos(page: str, now: datetime) -> list[dict[str, Any]]:
         data = json.loads(match.group(1))
     except ValueError:
         return []
-    author = next((meta.get("title") for meta in nested(data, "channelMetadataRenderer")), None)
-    videos = [lockup_video(lockup, author, now) for lockup in nested(data, "lockupViewModel")]
-    videos += [renderer_video(renderer, author, now) for renderer in nested(data, "videoRenderer")]
+    author = next((meta.get("title") for meta in nested(data, "channelMetadataRenderer") if isinstance(meta, dict)), None)
+    author = author if isinstance(author, str) else None
+    videos = [video_from(lockup_video, lockup, author, now) for lockup in nested(data, "lockupViewModel")]
+    videos += [video_from(renderer_video, renderer, author, now) for renderer in nested(data, "videoRenderer")]
     return list({video["native_id"]: video for video in videos if video}.values())
+
+
+def video_from(builder: Callable[[dict[str, Any], str | None, datetime], dict[str, Any] | None], node: Any, author: str | None, now: datetime) -> dict[str, Any] | None:
+    """One video, or None when the page has something of another shape under that key."""
+    if not isinstance(node, dict):
+        return None
+    try:
+        return builder(node, author, now)
+    except (AttributeError, TypeError, IndexError, KeyError):
+        return None
 
 
 def read_takeout(path: Path) -> list[str]:
@@ -152,7 +170,7 @@ class FeedFetcher:
         self.channel_cache = channel_cache
         self.youtube_base = youtube_base.rstrip("/")
         self.validators: dict[str, dict[str, str]] = {}
-        self.channels: dict[str, str] = json.loads(channel_cache.read_text()) if channel_cache.exists() else {}
+        self.channels: dict[str, str] = read_json(channel_cache, {})
 
     def fetch_rss(self, feed_url: str) -> list[dict[str, Any]]:
         return self.read_entries(feed_url, "article")
@@ -191,30 +209,36 @@ class FeedFetcher:
         if not match:
             raise FeedError(f"YouTube channel @{key} has no channel id on its page")
         self.channels[key] = match.group(1)
-        self.channel_cache.write_text(json.dumps(self.channels, indent=2))
+        write_atomic(self.channel_cache, json.dumps(self.channels, indent=2))
         return match.group(1)
 
     def read_entries(self, feed_url: str, kind: str) -> list[dict[str, Any]]:
+        """Entries of a feed; a page that is not a feed (say a site's HTML after it moved) is an error, not an empty feed.
+
+        Cache validators are kept only after a good parse, so a broken feed is not hidden behind a 304 next time."""
         known = self.validators.get(feed_url, {})
         headers = {"if-none-match": known.get("etag"), "if-modified-since": known.get("last_modified")}
-        body = self.get(feed_url, {key: value for key, value in headers.items() if value})
-        if body is None:
+        response = self.fetch(feed_url, {key: value for key, value in headers.items() if value})
+        if response.status_code == 304:
             return []
-        parsed = feedparser.parse(body)
-        if parsed.bozo and not parsed.entries:
+        parsed = feedparser.parse(response.content)
+        if not parsed.entries and (parsed.bozo or not parsed.version):
             raise FeedError(f"{feed_url} is not a readable feed")
+        validators = {"etag": response.headers.get("etag"), "last_modified": response.headers.get("last-modified")}
+        self.validators[feed_url] = {key: value for key, value in validators.items() if value}
         return [entry_record(entry, kind) for entry in parsed.entries]
 
     def get(self, url: str, headers: dict[str, str]) -> bytes | None:
         """Body of a 200 response, None for 304 Not Modified, FeedError otherwise."""
+        response = self.fetch(url, headers)
+        return None if response.status_code == 304 else response.content
+
+    def fetch(self, url: str, headers: dict[str, str]) -> httpx.Response:
+        """A 200 or 304 response; anything else, or no answer, is a FeedError."""
         try:
             response = self.http.get(url, headers={"user-agent": USER_AGENT, **headers})
         except httpx.HTTPError as error:
             raise FeedError(f"{url}: {error}") from error
-        if response.status_code == 304:
-            return None
-        if response.status_code != 200:
+        if response.status_code not in (200, 304):
             raise FeedError(f"{url} returned {response.status_code}")
-        validators = {"etag": response.headers.get("etag"), "last_modified": response.headers.get("last-modified")}
-        self.validators[url] = {key: value for key, value in validators.items() if value}
-        return response.content
+        return response

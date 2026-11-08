@@ -215,3 +215,21 @@ def test_page_entries_without_ids_are_skipped():
     [video] = channel_page_videos(page, datetime.now(UTC))
     assert (video["native_id"], video["title"], video["image_url"], video["published_at"], video["author_name"]) == ("VIDEO00009Z", "Bare video", None, None, None)
 
+
+def moved_site(request: httpx.Request) -> httpx.Response:
+    """A feed address that now serves the site's HTML, with an ETag and an empty but valid feed next to it."""
+    if request.url.path == "/empty.xml":
+        return httpx.Response(200, text='<?xml version="1.0"?><rss version="2.0"><channel><title>quiet</title></channel></rss>')
+    if request.headers.get("if-none-match") == '"html1"':
+        return httpx.Response(304)
+    return httpx.Response(200, text="<html><head><title>We moved</title></head><body><p>Hello</p></body></html>", headers={"etag": '"html1"'})
+
+
+def test_a_page_that_is_not_a_feed_stays_an_error_and_an_empty_feed_is_fine(tmp_path):
+    with httpx.Client(transport=httpx.MockTransport(moved_site)) as http:
+        fetcher = FeedFetcher(http, tmp_path / "channels.json")
+        for attempt in range(2):
+            with pytest.raises(FeedError, match="is not a readable feed"):
+                fetcher.fetch_rss("https://moved.example/feed.xml")
+        assert fetcher.fetch_rss("https://moved.example/empty.xml") == []
+

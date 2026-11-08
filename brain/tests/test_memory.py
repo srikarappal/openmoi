@@ -47,3 +47,13 @@ def test_journal_window_is_fourteen_days_and_capped(tmp_path):
     assert len(lines) == 60
     assert lines[-1].endswith("item 69 (https://a.com/69)")
     assert not any("Too old" in line for line in lines)
+
+
+def test_the_journal_follows_your_clock(tmp_path, pacific_clock):
+    paths = Paths(home=tmp_path, assets=REPO_DIR)
+    ensure_home(paths)
+    evening_utc = datetime(2026, 11, 8, 2, 0, tzinfo=UTC)
+    Memory(paths).append_journal(evening_utc, "opened: something")
+    assert (paths.journal / "20261107.md").read_text().endswith("* 18:00 opened: something\n")
+    assert Memory(paths).journal_lines(evening_utc) == ["* 18:00 opened: something"]
+

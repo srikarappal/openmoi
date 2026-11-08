@@ -95,7 +95,8 @@ class Overview(BaseModel):
     relay: dict[str, Any]
 
 
-FeedReader = tuple[str, Callable[[], list[dict[str, Any]]]]
+# (source id, the feed or channel it reads, the reader): two feeds on one site share a source id but not a reader.
+FeedReader = tuple[str, str, Callable[[], list[dict[str, Any]]]]
 MAX_RELAY_EVENTS = 50
 NEW_VIEW = "# {title}\n\n## Sources\n\n## Rules\n\n## Layout\n"
 
@@ -104,6 +105,21 @@ def url_prefix(url: str) -> str:
     """The part of a page URL a passive source matches on: no query, no fragment."""
     parts = urlparse(url)
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
+
+
+def one_per_url(entries: list[tuple[Item, datetime | None]], seen_before: datetime) -> tuple[list[Item], set[str]]:
+    """One item per URL for a view (the first source that brought it), plus the ids you saw before seen_before.
+
+    Those still count toward daily limits but are not shown again."""
+    by_url: dict[str, tuple[Item, datetime | None]] = {}
+    for item, seen_at in sorted(entries, key=fetched_first):
+        by_url.setdefault(item.url, (item, seen_at))
+    kept = list(by_url.values())
+    return [item for item, _ in kept], {item.item_id for item, seen_at in kept if seen_at and seen_at < seen_before}
+
+
+def fetched_first(entry: tuple[Item, datetime | None]) -> tuple[datetime, str]:
+    return entry[0].fetched_at, entry[0].item_id
 
 
 class Brain:
@@ -135,8 +151,8 @@ class Brain:
         self.passive_batches = 0
         self.lock = threading.Lock()
         self.refreshing: set[str] = set()
-        self.source_status: dict[str, str] = {}
-        self.fetched_at: dict[str, datetime] = {}
+        self.source_status: dict[tuple[str, str], str] = {}
+        self.fetched_at: dict[tuple[str, str], datetime] = {}
 
     def start_refresh(self, view_id: str, force: bool = False) -> list[PageSource]:
         """Refresh feed sources in a background thread; returns the page sources the shell should read."""
@@ -153,19 +169,20 @@ class Brain:
         """Drops expired items, then reads every feed source not read in the last few minutes."""
         try:
             self.store.expire(self.clock())
-            for source_id, reader in self.feed_readers(compiled):
-                last = self.fetched_at.get(source_id)
+            for source_id, location, reader in self.feed_readers(compiled):
+                key = (source_id, location)
+                last = self.fetched_at.get(key)
                 if not force and last and self.clock() - last < FEED_INTERVAL:
                     continue
                 try:
                     self.store_records(source_id, reader())
-                    self.source_status[source_id] = "ok"
+                    self.source_status[key] = "ok"
                 except FeedError as error:
-                    self.source_status[source_id] = str(error)
+                    self.source_status[key] = str(error)
                 except Exception as error:
                     print(f"refresh of {source_id} failed: {error!r}", file=sys.stderr)
-                    self.source_status[source_id] = f"could not be stored: {error}"
-                self.fetched_at[source_id] = self.clock()
+                    self.source_status[key] = f"could not be stored: {error}"
+                self.fetched_at[key] = self.clock()
         finally:
             with self.lock:
                 self.refreshing.discard(view_id)
@@ -173,8 +190,8 @@ class Brain:
     def feed_readers(self, compiled: CompiledView) -> list[FeedReader]:
         readers: list[FeedReader] = []
         for source in compiled.sources:
-            readers += [(youtube_source_id(channel), partial(self.fetcher.fetch_youtube, channel)) for channel in source.channels]
-            readers += [(rss_source_id(feed), partial(self.fetcher.fetch_rss, feed)) for feed in source.feeds]
+            readers += [(youtube_source_id(channel), channel, partial(self.fetcher.fetch_youtube, channel)) for channel in source.channels]
+            readers += [(rss_source_id(feed), feed, partial(self.fetcher.fetch_rss, feed)) for feed in source.feeds]
         return readers
 
     def page_sources(self, compiled: CompiledView) -> list[PageSource]:
@@ -211,8 +228,10 @@ class Brain:
             self.passive_batches += 1
 
     def take_relay_events(self) -> list[MineRequest]:
-        events = list(self.relay_events)
-        self.relay_events.clear()
+        """Pops the waiting Mine requests one by one, so one that arrives meanwhile is never lost."""
+        events = []
+        while self.relay_events:
+            events.append(self.relay_events.popleft())
         return events
 
     def relay_status(self) -> dict[str, Any]:
@@ -230,17 +249,18 @@ class Brain:
         fresh = [item for item in items if item.item_id not in known]
         if tag_now:
             fresh = self.tagger.tag(fresh, self.watch_list())
-        self.store.upsert_items(fresh)
+        stored = {item.item_id: item for item in self.store.upsert_items([*known.values(), *fresh])}
         if not tag_now:
-            self.tagger.enqueue(fresh)
-        fresh_by_id = {item.item_id: item for item in fresh}
-        return [known.get(item.item_id) or fresh_by_id[item.item_id] for item in items]
+            self.tagger.enqueue(list(stored.values()))
+        same_url = self.store.items_by_url(source_id, [item.url for item in fresh if item.item_id not in stored])
+        found = [known.get(item.item_id) or stored.get(item.item_id) or same_url.get(item.url) for item in items]
+        return [item for item in found if item]
 
     def watch_list(self) -> list[str]:
         return watch_list(self.compiler.all_compiled())
 
     def ingest(self, source_id: str, records: list[dict[str, Any]], page_url: str | None = None) -> list[Item]:
-        self.source_status[source_id] = "ok"
+        self.source_status[(source_id, source_id)] = "ok"
         return self.store_records(source_id, records, page_url)
 
     def ingest_page(self, view_id: str, source_id: str, records: list[dict[str, Any]], page_url: str | None) -> tuple[list[Item], list[ViewItem]]:
@@ -275,14 +295,14 @@ class Brain:
         compiled = self.compiler.compiled(view_id)
         self.tagger.ensure_current(self.watch_list(), self.clock())
         now = self.clock()
-        items = self.store.items_for_sources(compiled.source_ids(), now - VIEW_WINDOW, now - SEEN_KEEP)
+        items, long_seen = one_per_url(self.store.items_with_seen(compiled.source_ids(), now - VIEW_WINDOW), now - SEEN_KEEP)
         if rule_topics(compiled.rules) and self.tagger.healthy:
             items = [item for item in items if item.tagged]
-        ranked, has_more = rank(items, compiled.rules, self.clock(), set(exclude_ids), limit, order)
+        ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order)
         with self.lock:
             refreshing = view_id in self.refreshing or self.tagger.busy
         source_ids = set(compiled.source_ids())
-        problems = [f"{source_id}: {status}" for source_id, status in self.source_status.items() if source_id in source_ids and status != "ok"]
+        problems = [f"{source_id}: {status}" for source_id, status in self.status_by_source().items() if source_id in source_ids and status != "ok"]
         if not self.tagger.healthy:
             problems.append(self.tagger.status)
         return ViewPage(
@@ -359,12 +379,20 @@ class Brain:
     def lens_html(self, view_id: str, kind: str) -> str:
         return self.lenses.html(lens_key(check_view_id(view_id), kind))
 
+    def status_by_source(self) -> dict[str, str]:
+        """One status per source id; when several feeds share it, a problem with any of them wins over ok."""
+        merged: dict[str, str] = {}
+        for (source_id, _), status in list(self.source_status.items()):
+            if status != "ok" or source_id not in merged:
+                merged[source_id] = status
+        return merged
+
     def debug(self) -> dict[str, Any]:
         with self.lock:
             refreshing = sorted(self.refreshing)
         return {
             "store": self.store.stats(),
-            "sources": dict(self.source_status),
+            "sources": self.status_by_source(),
             "tagging": self.tagger.status,
             "relay": self.relay_status(),
             "refreshing": refreshing,

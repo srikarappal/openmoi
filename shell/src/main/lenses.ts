@@ -1,9 +1,12 @@
 // Lens views: each shows one view (or one Mine page) through sandboxed generated HTML.
 import { ipcMain, WebContentsView } from "electron"
-import { lens_data_url, parse_lens_message } from "../shared/lens_doc"
+import { item_images, lens_data_url, parse_lens_message } from "../shared/lens_doc"
 import type { HostToLens, Item, LensToHost } from "../shared/types"
 import type { ViewHost } from "./host"
-import { lens_preferences } from "./sessions"
+import { allow_lens_images, forget_lens, lens_preferences } from "./sessions"
+
+// A lens may open an item or ask for less like it at most this often: a click, not a script looping over items.
+const ACTION_INTERVAL_MS: Partial<Record<LensToHost["type"], number>> = { open: 800, less_like_this: 2_000 }
 
 export class LensContext {
   readonly rendered = new Map<string, Item>()
@@ -19,6 +22,7 @@ export class LensContext {
   send(message: HostToLens): void {
     if (message.type === "render") this.rendered.clear()
     for (const view_item of message.items) this.rendered.set(view_item.item.item_id, view_item.item)
+    allow_lens_images(this.view.webContents.id, item_images(message.items))
     this.view.webContents.send("moi:lens", message)
   }
 
@@ -40,6 +44,7 @@ export interface LensEvents {
 export class LensManager {
   private readonly contexts = new Map<string, LensContext>()
   private readonly by_contents = new Map<number, LensContext>()
+  private readonly last_action = new Map<string, number>()
 
   constructor(
     private readonly host: ViewHost,
@@ -57,9 +62,19 @@ export class LensManager {
       if (context.ready) return
       context.ready = true
       this.events.on_ready(context)
-    } else {
+    } else if (this.in_time(context, message.type)) {
       this.events.on_event(context, message)
     }
+  }
+
+  private in_time(context: LensContext, type: LensToHost["type"]): boolean {
+    const interval = ACTION_INTERVAL_MS[type]
+    if (interval === undefined) return true
+    const key = `${context.key}\0${type}`
+    const now = Date.now()
+    if (now - (this.last_action.get(key) ?? 0) < interval) return false
+    this.last_action.set(key, now)
+    return true
   }
 
   get(key: string): LensContext | undefined {
@@ -92,6 +107,7 @@ export class LensManager {
     if (!context) return
     this.contexts.delete(key)
     this.by_contents.delete(context.view.webContents.id)
+    forget_lens(context.view.webContents.id)
     this.host.detach(context.view)
     context.view.webContents.close()
   }

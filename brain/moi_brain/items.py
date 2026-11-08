@@ -18,6 +18,7 @@ ITEM_KINDS = set(get_args(ItemKind))
 DEFAULT_KINDS: dict[str, ItemKind] = {"x": "post", "youtube": "video", "rss": "article", "site": "link"}
 TRACKING_PARAMS = {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref", "ref_src", "si"}
 HOST_NOISE = {"www", "feeds", "feed", "rss", "m"}
+WEB_SCHEMES = {"http", "https"}
 SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov"}
 WHITESPACE = re.compile(r"\s+")
 MAX_TEXT = 4000
@@ -69,6 +70,19 @@ def canonical_url(url: str, base_url: str | None = None) -> str:
     return urlunparse(parts._replace(query=urlencode(query), fragment=""))
 
 
+def web_url(raw: str, base_url: str | None, keep_query: bool = False) -> str | None:
+    """An absolute http(s) link (cleaned of tracking unless keep_query), or None for anything else or anything unparsable."""
+    if not raw:
+        return None
+    try:
+        url = urljoin(base_url, raw) if base_url else raw
+        if urlparse(url).scheme.lower() not in WEB_SCHEMES:
+            return None
+        return url if keep_query else canonical_url(url)
+    except ValueError:
+        return None
+
+
 def is_local_host(hostname: str) -> bool:
     if hostname == "localhost":
         return True
@@ -80,12 +94,17 @@ def is_local_host(hostname: str) -> bool:
 
 
 def host_label(url: str) -> str:
-    """The memorable part of a host: feeds.arstechnica.com becomes arstechnica.
+    """The memorable part of a host: feeds.arstechnica.com becomes arstechnica, alice.substack.com alice.substack.
 
+    Noise like www and feeds goes, a meaningful subdomain stays, so two blogs on one platform get two names.
     Feeds on a bare IP or localhost are named after their file instead: /rss/tech.xml becomes tech.
+    A URL too broken to parse is just "feed".
     """
-    parts = urlparse(url)
-    hostname = parts.hostname or ""
+    try:
+        parts = urlparse(url)
+        hostname = parts.hostname or ""
+    except ValueError:
+        return "feed"
     if is_local_host(hostname):
         return PurePosixPath(parts.path).stem or "feed"
     labels = [label for label in hostname.split(".") if label and label not in HOST_NOISE]
@@ -93,7 +112,7 @@ def host_label(url: str) -> str:
         labels = labels[:-1]
     if len(labels) > 1 and labels[-1] in SECOND_LEVEL:
         labels = labels[:-1]
-    return labels[-1] if labels else "feed"
+    return ".".join(labels) if labels else "feed"
 
 
 def rss_source_id(feed_url: str) -> str:
@@ -124,12 +143,18 @@ def parse_time(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         moment = value
     elif isinstance(value, (int, float)):
-        moment = datetime.fromtimestamp(value, UTC)
+        try:
+            moment = datetime.fromtimestamp(value, UTC)
+        except (OverflowError, OSError, ValueError):
+            return None
     else:
         moment = parse_time_text(str(value).strip())
     if moment is None:
         return None
-    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
+    try:
+        return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
+    except OverflowError:
+        return None
 
 
 def parse_time_text(text: str) -> datetime | None:
@@ -139,7 +164,7 @@ def parse_time_text(text: str) -> datetime | None:
         pass
     try:
         return parsedate_to_datetime(text)
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError, IndexError, OverflowError):
         return None
 
 
@@ -151,16 +176,19 @@ def clean_text(value: Any, limit: int = MAX_TEXT) -> str | None:
 
 
 def normalize(source_id: str, record: dict[str, Any], now: datetime, base_url: str | None = None) -> Item | None:
-    """Turn one raw record into an Item; records without a URL or any words are dropped."""
+    """Turn one raw record into an Item. Records without words, or without a web link, are dropped:
+    a feed's javascript:, data: or file: link never becomes something you can click."""
     raw_url = clean_text(record.get("url"), 2000)
     title = clean_text(record.get("title"), 500)
     text = clean_text(record.get("text"))
     if not raw_url or not (title or text):
         return None
-    url = canonical_url(raw_url, base_url)
+    url = web_url(raw_url, base_url)
+    if url is None:
+        return None
     native_id = clean_text(record.get("native_id"), 500) or url
     kind = record.get("kind")
-    image = clean_text(record.get("image_url"), 2000)
+    image = web_url(clean_text(record.get("image_url"), 2000) or "", base_url, keep_query=True)
     handle = clean_text(record.get("author_handle"), 200)
     extra = {key.removeprefix("extra."): str(value) for key, value in record.items() if key.startswith("extra.") and value not in (None, "")}
     return Item(
@@ -173,7 +201,7 @@ def normalize(source_id: str, record: dict[str, Any], now: datetime, base_url: s
         text=text,
         author_name=clean_text(record.get("author_name"), 200),
         author_handle=handle.lstrip("@/").lower() if handle else None,
-        image_url=urljoin(base_url, image) if image and base_url else image,
+        image_url=image,
         media_kind=clean_text(record.get("media_kind"), 40) or ("image" if image else None),
         published_at=parse_time(record.get("published_at")),
         fetched_at=now,

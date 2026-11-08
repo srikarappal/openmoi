@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from moi_brain.compile import BadInput
 from moi_brain.config import Paths
+from moi_brain.files import write_atomic
 from moi_brain.items import Item
 from moi_brain.lenses import SITE_PREFIX
 from moi_brain.llm import Gateway
@@ -19,7 +20,8 @@ from moi_brain.memory import TOPIC_FILES
 
 VIEW_SECTIONS = ("Sources", "Rules", "Layout")
 MAX_PROPOSALS = 50
-MAX_EDIT_TEXT = 6000
+# Memory files come back whole on every edit, so the cap leaves room for years of likes and dislikes.
+MAX_EDIT_TEXT = 60_000
 LensAction = Literal["rollback"]
 EditScope = Literal["any", "memory", "rules", "sources", "layout", "view"]
 SCOPE_SECTIONS = {"rules": "Rules", "sources": "Sources", "layout": "Layout"}
@@ -181,8 +183,7 @@ class Editor:
             if (path.read_text() if path.exists() else "") != change.old_text:
                 raise StaleProposal(f"{change.file} changed since this was proposed; ask again.")
         for path, change in targets:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(change.new_text)
+            write_atomic(path, change.new_text)
         return proposal
 
     def discard(self, proposal_id: str) -> None:

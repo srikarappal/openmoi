@@ -1,6 +1,6 @@
 // Ordinary web tabs in your session. Links that open new windows become new tabs.
 import { WebContentsView } from "electron"
-import { normalize_address } from "../shared/address"
+import { is_web_url, normalize_address } from "../shared/address"
 import type { TabInfo } from "../shared/types"
 import { ignore_navigation_error, type ViewHost } from "./host"
 import { web_preferences } from "./sessions"
@@ -32,7 +32,7 @@ export class TabManager {
     this.tabs.set(tab.tab_id, tab)
     this.host.attach(view)
     view.webContents.setWindowOpenHandler(({ url }) => {
-      this.hooks.opened(this.open(url))
+      if (is_web_url(url)) this.hooks.opened(this.open(url))
       return { action: "deny" }
     })
     view.webContents.on("page-title-updated", () => this.hooks.changed())

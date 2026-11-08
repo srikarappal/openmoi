@@ -31,7 +31,9 @@ def test_canonical_url_resolves_relative_links():
     [
         ("https://feeds.arstechnica.com/arstechnica/index", "arstechnica"),
         ("https://www.theverge.com/rss/index.xml", "theverge"),
-        ("https://news.ycombinator.com/rss", "ycombinator"),
+        ("https://news.ycombinator.com/rss", "news.ycombinator"),
+        ("https://alice.substack.com/feed", "alice.substack"),
+        ("https://bob.substack.com/feed", "bob.substack"),
         ("https://feeds.bbci.co.uk/news/rss.xml", "bbci"),
         ("https://example.org", "example"),
         ("http://127.0.0.1:8899/rss/tech.xml", "tech"),

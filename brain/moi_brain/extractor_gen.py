@@ -43,7 +43,9 @@ class ExtractorDraft(BaseModel):
 
 
 def extractor_messages(url: str, skeleton: str, last_error: str | None) -> list[dict[str, str]]:
-    payload = {"url": url, "skeleton": skeleton, "last_error": last_error}
+    """Only the site's domain goes with the skeleton: the path or query of a page you opened (a search, a profile,
+    a sign in link) is yours and the hosted model writing selectors does not need it."""
+    payload = {"site": page_domain(url), "skeleton": skeleton, "last_error": last_error}
     return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": json.dumps(payload)}]
 
 

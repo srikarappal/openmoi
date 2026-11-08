@@ -128,6 +128,7 @@ describe("ChromeCommands", () => {
   it("injects the page operations once, then runs them", async () => {
     const { fake, commands } = make_commands()
     const tab_id = fake.add_user_tab("https://news.ycombinator.com/")
+    commands.chosen.add(tab_id)
     expect(await commands.run_command("run", { handle: String(tab_id), op: "extract", args: { spec: 1 } })).toEqual({ ran: "extract", with: { spec: 1 } })
     await commands.run_command("run", { handle: String(tab_id), op: "skeleton" })
     expect(fake.calls.filter((call) => call.startsWith("inject"))).toEqual([`inject content.js into ${tab_id}`])
@@ -147,9 +148,22 @@ describe("ChromeCommands", () => {
   it("reports a tab's url and rejects bad handles and unknown operations", async () => {
     const { fake, commands } = make_commands()
     const tab_id = fake.add_user_tab("https://shop.example.com/s?k=lamp")
+    commands.chosen.add(tab_id)
     expect(await commands.run_command("url", { handle: String(tab_id) })).toBe("https://shop.example.com/s?k=lamp")
     await expect(commands.run_command("url", { handle: "not a tab" })).rejects.toThrow("bad tab handle")
+    commands.chosen.add(999)
     await expect(commands.run_command("run", { handle: "999", op: "info" })).rejects.toThrow("No tab with id")
     await expect(commands.run_command("delete_history", {})).rejects.toThrow("unknown relay op delete_history")
+  })
+
+  it("never reads or reports a tab of yours you did not choose with Mine", async () => {
+    const { fake, commands } = make_commands()
+    const mail = fake.add_user_tab("https://mail.example.com/inbox")
+    await expect(commands.run_command("run", { handle: String(mail), op: "extract", args: {} })).rejects.toThrow(`tab ${mail} is not one openMoi opened or you chose with Mine`)
+    await expect(commands.run_command("url", { handle: String(mail) })).rejects.toThrow("is not one openMoi opened")
+    expect(fake.calls.filter((call) => call.startsWith("inject"))).toEqual([])
+    commands.chosen.add(mail)
+    commands.forget(mail)
+    await expect(commands.run_command("url", { handle: String(mail) })).rejects.toThrow("is not one openMoi opened")
   })
 })

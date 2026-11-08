@@ -1,12 +1,13 @@
 // The extension's service worker: keeps the relay connected, answers openMoi's calls and forwards what you browse.
 import type { ExtractorSpec } from "../shared/types"
 import { ChromeCommands } from "./commands"
-import { RelayClient, type RelayState, type SocketLike } from "./relay_client"
+import { RelayClient, type RelayState, type SecretStore, type SocketLike } from "./relay_client"
 
 const DEFAULT_RELAY_URL = "ws://127.0.0.1:47321/relay"
 const RECONNECT_ALARM = "moi_reconnect"
 const RECONNECT_MS = 3_000
-const BADGES: Record<RelayState, string> = { connected: "", waiting_for_approval: "?", offline: "off" }
+const BADGES: Record<RelayState, string> = { connected: "", waiting_for_approval: "?", offline: "off", unrecognized: "!" }
+const SECRET_KEY = "relay_secret"
 
 interface Settings {
   relay_url: string
@@ -38,8 +39,17 @@ function on_relay_change(state: RelayState): void {
   if (state === "offline") setTimeout(() => ensure_connected().catch(ignore), RECONNECT_MS)
 }
 
+// The pairing secret openMoi gave this browser, in extension storage that pages and other extensions cannot read.
+const secrets: SecretStore = {
+  load: async () => {
+    const stored = await chrome.storage.local.get(SECRET_KEY)
+    return typeof stored[SECRET_KEY] === "string" ? stored[SECRET_KEY] : null
+  },
+  save: (secret) => chrome.storage.local.set({ [SECRET_KEY]: secret }),
+}
+
 const commands = new ChromeCommands(chrome)
-const relay = new RelayClient(commands, open_socket, on_relay_change)
+const relay = new RelayClient(commands, open_socket, on_relay_change, secrets)
 
 async function ensure_connected(): Promise<void> {
   relay.connect((await settings()).relay_url)
@@ -50,6 +60,13 @@ async function reconnect(): Promise<void> {
   await ensure_connected()
 }
 
+// You reset openMoi (or it lost its files): forget the old secret so the next connection asks to be allowed again.
+async function pair_again(): Promise<void> {
+  await chrome.storage.local.remove(SECRET_KEY)
+  relay.state = "offline"
+  await reconnect()
+}
+
 // A source page you opened yourself (not one openMoi opened) gets the passive watcher.
 async function watch_if_passive(tab_id: number, url: string): Promise<void> {
   const source = relay.passive_source_for(url)
@@ -58,14 +75,20 @@ async function watch_if_passive(tab_id: number, url: string): Promise<void> {
   await chrome.scripting.executeScript({ target: { tabId: tab_id }, func: start_watch, args: [source.source_id, source.url_prefix, source.spec] })
 }
 
+// Pressing Mine is what lets openMoi read one of your own tabs; it never reads the others.
 export function mine_tab(tab: chrome.tabs.Tab): boolean {
   if (tab.id === undefined || !tab.url) return false
+  commands.chosen.add(tab.id)
   return relay.send_event({ event: "mine", handle: String(tab.id), url: tab.url, title: tab.title ?? "" })
 }
 
 async function handle_message(message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<unknown> {
   if (message.type === "status") return { state: relay.state, ...(await settings()) }
   if (message.type === "mine") return { sent: mine_tab(await chrome.tabs.get(Number(message.tab_id))) }
+  if (message.type === "pair_again") {
+    await pair_again()
+    return { state: relay.state }
+  }
   const tab_id = sender.tab?.id
   if (message.type === "passive_records" && tab_id !== undefined && !commands.opened.has(tab_id)) {
     return { sent: relay.send_event({ event: "passive_records", source_id: message.source_id, page_url: message.page_url, records: message.records }) }
@@ -80,6 +103,7 @@ chrome.runtime.onMessage.addListener((message, sender, send_response) => {
 chrome.tabs.onUpdated.addListener((tab_id, change, tab) => {
   if (change.status === "complete" && tab.url) watch_if_passive(tab_id, tab.url).catch(ignore)
 })
+chrome.tabs.onRemoved.addListener((tab_id) => commands.forget(tab_id))
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.relay_url) reconnect().catch(ignore)
 })

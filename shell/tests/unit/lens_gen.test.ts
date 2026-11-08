@@ -2,15 +2,12 @@ import { describe, expect, it, vi } from "vitest"
 import { BrainError, type BrainClient } from "../../src/main/brain"
 import { LensGenerator, view_label } from "../../src/main/lens_gen"
 import type { SmokeTester } from "../../src/main/smoke"
+import { Tracked } from "./tracked"
 
 function make_generator(problems: Array<string | null>, generate = vi.fn(async () => "<html>lens</html>")) {
   const brain = { generate_lens: generate, accept_lens: vi.fn(async () => 3) }
   const smoke = { problem: vi.fn(async () => problems.shift() ?? null) }
-  const labels: string[] = []
-  const track = <T>(label: string, work: () => Promise<T>): Promise<T> => {
-    labels.push(label)
-    return work()
-  }
+  const { labels, track } = new Tracked()
   const hooks = { say: vi.fn(), on_new_lens: vi.fn(async () => {}), track, labels }
   const generator = new LensGenerator(brain as unknown as BrainClient, smoke as unknown as SmokeTester, hooks)
   return { generator, brain, smoke, hooks }

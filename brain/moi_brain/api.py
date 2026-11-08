@@ -1,5 +1,6 @@
 """HTTP API the shell calls. Thin on purpose: every handler delegates to the Brain."""
 
+import hmac
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
@@ -27,9 +28,13 @@ def get_brain(request: Request) -> Brain:
 
 
 def check_token(request: Request, x_moi_token: Annotated[str | None, Header()] = None) -> None:
-    expected = request.app.state.token
-    if expected and x_moi_token != expected:
+    """Every request carries the shell's token, compared in constant time and names this server as its host,
+    so a web page that rebinds a domain name to 127.0.0.1 is turned away too."""
+    if not hmac.compare_digest((x_moi_token or "").encode(), request.app.state.token.encode()):
         raise HTTPException(status_code=401, detail="bad token")
+    allowed_hosts = request.app.state.allowed_hosts
+    if allowed_hosts and request.headers.get("host") not in allowed_hosts:
+        raise HTTPException(status_code=421, detail="wrong host")
 
 
 BrainDep = Annotated[Brain, Depends(get_brain)]
@@ -263,10 +268,13 @@ def bad_input(request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(error), "kind": "input"})
 
 
-def create_app(brain: Brain, token: str | None = None) -> FastAPI:
+def create_app(brain: Brain, token: str, allowed_hosts: set[str] | None = None) -> FastAPI:
+    if not token:
+        raise ValueError("the brain needs a token; the shell sets MOI_TOKEN")
     app = FastAPI(title="moi_brain", dependencies=[Depends(check_token)])
     app.state.brain = brain
     app.state.token = token
+    app.state.allowed_hosts = allowed_hosts
     app.include_router(router)
     app.add_exception_handler(PrivacyBlocked, privacy_error)
     app.add_exception_handler(LlmError, llm_error)

@@ -46,16 +46,29 @@ describe("skeleton", () => {
 
   it("masks data and aria values that look like words", () => {
     const text = skeleton(body(`<div id="story-how-solar-panels-got-cheap" data-testid="cellInnerDiv" data-asin="B0001" data-rank="12" data-title="Desk lamp deluxe" aria-label="Like post by Maya" aria-expanded="false" role="button"></div><p id="main"></p><p id="901"></p>`))
-    expect(text).toContain('id="{t:32}"')
+    expect(text).toContain('id="story-{t:3}-{t:5}-{t:6}-{t:3}-{t:5}"')
     expect(text).toContain('id="main"')
     expect(text).toContain('id="9"')
     expect(text).toContain('data-testid="cellInnerDiv"')
     expect(text).toContain('data-asin="{t:5}"')
     expect(text).toContain('data-rank="9"')
-    expect(text).toContain('data-title="{t:16}"')
+    expect(text).toContain('data-title="{t:4} {t:4} {t:6}"')
     expect(text).toContain('aria-label="{t:17}"')
     expect(text).toContain('aria-expanded="false"')
     expect(text).toContain('role="button"')
+  })
+
+  it("masks names, handles and topics hiding in ids, classes and test ids, but keeps markup names", () => {
+    const page = `<article class="athing user-maya_k topic-oncology" data-testid="UserAvatar-Container-maya_k" data-screen-name="mayak" data-user-id="123456789">
+      <span class="hnuser">@maya_k</span><p id="divorcecase" data-query="pregnancy" aria-roledescription="custody note">Maya on oncology</p>
+      <div class="css-175oi2r r-1habvwh"></div></article>`
+    const text = skeleton(body(page))
+    for (const leaked of ["maya", "oncology", "mayak", "divorcecase", "pregnancy", "custody", "123456789"]) expect(text).not.toContain(leaked)
+    expect(text).toContain('class="athing user-{t:4}_k topic-{t:8}"')
+    expect(text).toContain('data-testid="UserAvatar-Container-{t:4}_k"')
+    expect(text).toContain('class="hnuser"')
+    expect(text).toContain('data-user-id="9"')
+    expect(text).toContain('class="css-175oi2r r-1habvwh"')
   })
 
   it("cuts long runs of similar siblings to three and a count", () => {

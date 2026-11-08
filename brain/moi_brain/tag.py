@@ -19,6 +19,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from moi_brain.compile import CompiledView, Rule
+from moi_brain.files import read_json, write_atomic
 from moi_brain.items import Item
 from moi_brain.llm import Gateway, LlmError
 from moi_brain.store import Store
@@ -83,7 +84,7 @@ class Tagger:
         self.condition = threading.Condition()
         self.pending: deque[str] = deque()
         self.working = False
-        self.tagged_topics: list[str] = json.loads(state_file.read_text()) if state_file.exists() else list(BASE_TOPICS)
+        self.tagged_topics: list[str] = read_json(state_file, list(BASE_TOPICS))
         threading.Thread(target=self.work, daemon=True).start()
 
     @property
@@ -122,14 +123,15 @@ class Tagger:
                     self.working = False
 
     def tag(self, items: list[Item], topics: list[str]) -> list[Item]:
-        """Items with topics set and tagged true; a batch the model could not tag comes back unchanged."""
+        """Items with topics set and tagged true. Once a batch fails the rest come back unchanged at once, for the
+        worker to retry, instead of each batch waiting out its own timeout on a model that is not answering."""
         tagged: list[Item] = []
-        for batch in batched(items, BATCH_SIZE):
-            topics_by_id = self.tag_batch(list(batch), topics)
+        batches = [list(batch) for batch in batched(items, BATCH_SIZE)]
+        for position, batch in enumerate(batches):
+            topics_by_id = self.tag_batch(batch, topics)
             if topics_by_id is None:
-                tagged += batch
-            else:
-                tagged += [item.model_copy(update={"topics": topics_by_id.get(item.item_id, []), "tagged": True}) for item in batch]
+                return tagged + [item for rest in batches[position:] for item in rest]
+            tagged += [item.model_copy(update={"topics": topics_by_id.get(item.item_id, []), "tagged": True}) for item in batch]
         return tagged
 
     def tag_batch(self, batch: list[Item], topics: list[str]) -> dict[str, list[str]] | None:
@@ -149,13 +151,16 @@ class Tagger:
         }
 
     def ensure_current(self, topics: list[str], now: datetime) -> None:
-        """Recent items go back through the worker when rules watch new topics, or when an outage left them untagged."""
+        """Recent items go back through the worker when rules watch a topic the last tags did not cover, or when an outage
+        left them untagged. The saved list follows the rules both ways, so a topic removed and added back is tagged again."""
         with self.condition:
-            new_topics = not set(topics) <= set(self.tagged_topics)
-            if new_topics:
+            added = bool(set(topics) - set(self.tagged_topics))
+            changed = set(topics) != set(self.tagged_topics)
+            if changed:
                 self.tagged_topics = topics
-        if new_topics:
-            self.state_file.write_text(json.dumps(topics))
+        if changed:
+            write_atomic(self.state_file, json.dumps(topics))
+        if added:
             self.enqueue(self.store.recent_items(now - RETAG_WINDOW)[:MAX_RETAG])
         else:
             self.catch_up(now)

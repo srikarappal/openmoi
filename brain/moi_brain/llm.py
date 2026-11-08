@@ -43,6 +43,14 @@ def json_object_text(content: str) -> str:
     return text[start : end + 1] if start != -1 and end > start else text
 
 
+def readable_line(line: str) -> dict[str, Any] | None:
+    """One log line, or None for a line cut short by a crash."""
+    try:
+        return json.loads(line)
+    except ValueError:
+        return None
+
+
 class Gateway:
     def __init__(self, settings: Settings, log_path: Path, http: httpx.Client):
         self.settings = settings
@@ -149,4 +157,4 @@ class Gateway:
             return []
         with self.log_lock, self.log_path.open(encoding="utf-8") as handle:
             lines = deque(handle, maxlen=limit)
-        return [json.loads(line) for line in lines]
+        return [call for call in (readable_line(line) for line in lines) if call is not None]

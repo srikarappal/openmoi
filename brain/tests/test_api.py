@@ -2,11 +2,12 @@
 
 from datetime import datetime, timedelta
 
+import httpx
 from conftest import TOKEN, wait_until_refreshed
 from fastapi.testclient import TestClient
 
 from moi_brain.api import create_app
-from moi_brain.brain import SEEN_KEEP, utc_now
+from moi_brain.brain import SEEN_KEEP, Brain, utc_now
 
 X_RECORDS = [
     {"native_id": "1000", "url": "https://x.com/maya/status/1000", "author_name": "Maya R", "author_handle": "maya", "text": "Post number 0 from maya"},
@@ -86,8 +87,10 @@ def test_ingest_normalizes_page_records_into_the_view(client):
     assert items[0]["kind"] == "post"
     page = client.post("/view/feed", json={}).json()
     assert set(page_ids(page)) == {"1000", "1001"}
-    again = client.post("/ingest", json={"source_id": "x", "records": X_RECORDS}).json()["items"]
+    again = client.post("/ingest", json={"source_id": "x", "records": X_RECORDS, "page_url": "https://x.com/home"}).json()["items"]
     assert len(again) == 2
+    without_page = client.post("/ingest", json={"source_id": "x", "records": X_RECORDS}).json()["items"]
+    assert [item["native_id"] for item in without_page] == ["1000"]
     assert len(client.post("/view/feed", json={}).json()["items"]) == 2
 
 
@@ -169,4 +172,25 @@ def test_one_source_that_breaks_while_storing_does_not_stop_the_others(client, b
     page = wait_until_refreshed(client)
     assert page["refreshing"] is False
     assert len([warning for warning in page["warnings"] if "could not be stored: bad record" in warning]) >= 3
+
+
+def verge_feeds(request: httpx.Request) -> httpx.Response:
+    """Two feeds on www.theverge.com, each with one story."""
+    name = "reviews" if "reviews" in request.url.path else "news"
+    feed = (
+        f'<rss version="2.0"><channel><title>Verge</title><item><guid>{name}1</guid><title>{name} story</title>'
+        f"<link>https://www.theverge.com/{name}/1</link></item></channel></rss>"
+    )
+    return httpx.Response(200, text=feed, headers={"content-type": "application/rss+xml"})
+
+
+def test_two_feeds_on_one_site_are_both_read_on_a_normal_refresh(paths, settings):
+    (paths.views / "feed.md").write_text("# Feed\n\n## Sources\n* RSS: https://www.theverge.com/rss/index.xml, https://www.theverge.com/rss/reviews/index.xml\n")
+    brain = Brain(paths, settings, http=httpx.Client(transport=httpx.MockTransport(verge_feeds)))
+    try:
+        brain.refresh_feeds("feed", brain.compiler.compiled("feed"), False)
+        assert sorted(entry.item.title for entry in brain.view_page("feed", []).items) == ["news story", "reviews story"]
+        assert brain.status_by_source() == {"rss:theverge": "ok"}
+    finally:
+        brain.http.close()
 

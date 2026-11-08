@@ -10,6 +10,15 @@ export function normalize_address(text: string): string {
   return `${SEARCH_URL}${encodeURIComponent(trimmed)}`
 }
 
+// Links from feeds and pages open only when they are web addresses; a file:, data: or javascript: link never does.
+export function is_web_url(url: string): boolean {
+  try {
+    return ["http:", "https:"].includes(new URL(url).protocol)
+  } catch {
+    return false
+  }
+}
+
 export function site_domain(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, "")

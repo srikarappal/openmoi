@@ -9,21 +9,23 @@ import json
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from moi_brain.config import Paths
 from moi_brain.feeds import CHANNEL_ID, read_takeout
+from moi_brain.files import write_atomic
 from moi_brain.items import rss_source_id, youtube_source_id
 from moi_brain.lenses import SITE_PREFIX
 from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import bullets, parse_sections, section_text
 from moi_brain.memory import Memory
 
-VIEW_ID = re.compile(r"^[\w.]+$")
+VIEW_ID = re.compile(r"^[\w.-]+$")
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
-HANDLE = re.compile(r"@[\w.-]+")
+HANDLE = re.compile(r"@[\w.-]*\w")
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
 DEFAULT_BOOST = 3.0
 RETRY_AFTER_SECONDS = 60.0
@@ -171,14 +173,24 @@ def describe_sources(sources: list[SourceRef]) -> str:
     return f"Reading {listed}."
 
 
+def cached_view(cache: Path) -> CompiledView | None:
+    try:
+        return CompiledView.model_validate_json(cache.read_text())
+    except (OSError, ValueError):
+        return None
+
+
 class Compiler:
-    """Caches compiled views by the hash of every file they read; a failed rules compile retries after a minute."""
+    """Caches compiled views by the hash of every file they read; a failed rules compile retries after a minute.
+
+    Each view has its own lock, so a slow model compiling one view never holds up the others."""
 
     def __init__(self, paths: Paths, gateway: Gateway, memory: Memory):
         self.paths = paths
         self.gateway = gateway
         self.memory = memory
-        self.lock = threading.Lock()
+        self.locks_lock = threading.Lock()
+        self.locks: dict[str, threading.Lock] = {}
         self.failures: dict[str, tuple[str, float, CompiledView]] = {}
 
     def view_ids(self) -> list[str]:
@@ -194,7 +206,12 @@ class Compiler:
         return [info for info in infos if info.view_id == "feed"] + [info for info in infos if info.view_id != "feed"]
 
     def all_compiled(self) -> list[CompiledView]:
-        return [self.compiled(view_id) for view_id in self.view_ids()]
+        """Every view; one that another thread is compiling right now comes as last compiled instead of waiting."""
+        return [self.compiled(view_id, wait=False) for view_id in self.view_ids()]
+
+    def view_lock(self, view_id: str) -> threading.Lock:
+        with self.locks_lock:
+            return self.locks.setdefault(view_id, threading.Lock())
 
     def view_text(self, view_id: str) -> str:
         path = self.paths.views / f"{check_view_id(view_id)}.md"
@@ -205,13 +222,19 @@ class Compiler:
         parts = [view_text, takeout, self.memory.likes(), self.memory.dislikes()]
         return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
-    def compiled(self, view_id: str) -> CompiledView:
-        """The compiled view, recompiling only when one of its input files changed."""
+    def compiled(self, view_id: str, wait: bool = True) -> CompiledView:
+        """The compiled view, recompiling only when one of its input files changed.
+
+        A cache file that is damaged (a crash mid write, an older format) counts as missing and is rebuilt.
+        Without wait, a view busy compiling elsewhere comes back as last compiled, or with its rules still to come."""
         view_text = self.view_text(view_id)
         file_hash = self.input_hash(view_text)
         cache = self.paths.compiled / f"{view_id}.json"
-        with self.lock:
-            previous = CompiledView.model_validate_json(cache.read_text()) if cache.exists() else None
+        lock = self.view_lock(view_id)
+        if not lock.acquire(blocking=wait):
+            return cached_view(cache) or self.compile(view_id, view_text, file_hash, None, use_model=False)[0]
+        try:
+            previous = cached_view(cache)
             if previous and previous.file_hash == file_hash:
                 return previous
             failure = self.failures.get(view_id)
@@ -219,16 +242,22 @@ class Compiler:
                 return failure[2]
             compiled, succeeded = self.compile(view_id, view_text, file_hash, previous)
             if succeeded:
-                cache.write_text(compiled.model_dump_json(indent=2))
+                write_atomic(cache, compiled.model_dump_json(indent=2))
                 self.failures.pop(view_id, None)
             else:
                 self.failures[view_id] = (file_hash, time.monotonic(), compiled)
-        return compiled
+            return compiled
+        finally:
+            lock.release()
 
-    def compile(self, view_id: str, view_text: str, file_hash: str, previous: CompiledView | None) -> tuple[CompiledView, bool]:
+    def compile(
+        self, view_id: str, view_text: str, file_hash: str, previous: CompiledView | None, use_model: bool = True
+    ) -> tuple[CompiledView, bool]:
         title, sections = parse_sections(view_text)
         sources, warnings = parse_sources(section_text(sections, "sources"), read_takeout(self.paths.takeout))
         try:
+            if not use_model:
+                raise LlmError("still compiling")
             rules, rules_summary = self.compile_rules(section_text(sections, "rules"), sources)
             succeeded = True
         except LlmError as error:

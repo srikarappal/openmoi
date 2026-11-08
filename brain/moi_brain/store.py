@@ -8,16 +8,22 @@ from pathlib import Path
 from moi_brain.items import Event, Item
 
 ITEM_TTL = timedelta(days=30)
+ITEM_COLUMNS = "item_id, source_id, url, published_at, fetched_at, seen_at, item_json"
+# An item is one URL per source, so the same article in two sources is stored for both (a view shows it once).
+# listed_at is the last time a source still listed it; items expire a month after that, not after first being seen.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     item_id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL,
-    url TEXT NOT NULL UNIQUE,
+    url TEXT NOT NULL,
     published_at TEXT,
     fetched_at TEXT NOT NULL,
+    listed_at TEXT,
     seen_at TEXT,
-    item_json TEXT NOT NULL
+    item_json TEXT NOT NULL,
+    UNIQUE (source_id, url)
 );
+CREATE INDEX IF NOT EXISTS items_by_url ON items (url);
 CREATE INDEX IF NOT EXISTS items_by_source ON items (source_id, published_at);
 CREATE TABLE IF NOT EXISTS events (
     event_id INTEGER PRIMARY KEY,
@@ -43,41 +49,75 @@ class Store:
     def __init__(self, db_path: Path):
         self.connection = sqlite3.connect(db_path, check_same_thread=False)
         self.lock = threading.Lock()
-        with self.lock:
+        with self.lock, self.connection:
             self.connection.execute("PRAGMA journal_mode=WAL")
             self.connection.executescript(SCHEMA)
+            self.migrate()
+
+    def migrate(self) -> None:
+        """Databases from before listed_at kept one row per URL across all sources; rebuild them in the new shape."""
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(items)")}
+        if "listed_at" in columns:
+            return
+        self.connection.execute("ALTER TABLE items RENAME TO items_before_listed_at")
+        self.connection.executescript(SCHEMA)
+        self.connection.execute(
+            f"INSERT INTO items ({ITEM_COLUMNS}, listed_at) SELECT {ITEM_COLUMNS}, fetched_at FROM items_before_listed_at"
+        )
+        self.connection.execute("DROP TABLE items_before_listed_at")
+        self.connection.executescript(SCHEMA)
 
     def upsert_items(self, items: list[Item]) -> list[Item]:
-        """Insert items that are new by id and by URL; returns only the new ones."""
+        """Insert items new to their source; returns only those. Items a source lists again count as listed now."""
         new_items = []
         with self.lock, self.connection:
             for item in items:
+                fetched = iso(item.fetched_at)
                 cursor = self.connection.execute(
-                    "INSERT OR IGNORE INTO items (item_id, source_id, url, published_at, fetched_at, item_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (item.item_id, item.source_id, item.url, iso(item.published_at), iso(item.fetched_at), item.model_dump_json()),
+                    "INSERT OR IGNORE INTO items (item_id, source_id, url, published_at, fetched_at, listed_at, item_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (item.item_id, item.source_id, item.url, iso(item.published_at), fetched, fetched, item.model_dump_json()),
                 )
                 if cursor.rowcount:
                     new_items.append(item)
+                else:
+                    self.connection.execute(
+                        "UPDATE items SET listed_at = ? WHERE item_id = ? OR (source_id = ? AND url = ?)",
+                        (fetched, item.item_id, item.source_id, item.url),
+                    )
         return new_items
 
-    def items_for_sources(self, source_ids: list[str], since: datetime, seen_since: datetime) -> list[Item]:
-        """Items from these sources published (or fetched) after since, unless you saw them before seen_since."""
+    def items_by_url(self, source_id: str, urls: list[str]) -> dict[str, Item]:
+        """Stored items of one source by URL, for records whose id changed but whose URL is known."""
+        if not urls:
+            return {}
+        marks = ", ".join("?" for _ in urls)
+        with self.lock:
+            rows = self.connection.execute(f"SELECT item_json FROM items WHERE source_id = ? AND url IN ({marks})", (source_id, *urls)).fetchall()
+        items = [Item.model_validate_json(row[0]) for row in rows]
+        return {item.url: item for item in items}
+
+    def items_for_sources(self, source_ids: list[str], since: datetime) -> list[Item]:
+        """Items from these sources published (or fetched) after since, seen or not."""
+        return [item for item, _ in self.items_with_seen(source_ids, since)]
+
+    def items_with_seen(self, source_ids: list[str], since: datetime) -> list[tuple[Item, datetime | None]]:
+        """Items from these sources published (or fetched) after since, each with when you saw it."""
         if not source_ids:
             return []
         marks = ", ".join("?" for _ in source_ids)
-        query = (
-            f"SELECT item_json FROM items WHERE source_id IN ({marks}) "
-            "AND (seen_at IS NULL OR seen_at >= ?) AND COALESCE(published_at, fetched_at) >= ?"
-        )
+        query = f"SELECT item_json, seen_at FROM items WHERE source_id IN ({marks}) AND COALESCE(published_at, fetched_at) >= ?"
         with self.lock:
-            rows = self.connection.execute(query, (*source_ids, iso(seen_since), iso(since))).fetchall()
-        return [Item.model_validate_json(row[0]) for row in rows]
+            rows = self.connection.execute(query, (*source_ids, iso(since))).fetchall()
+        return [(Item.model_validate_json(item_json), datetime.fromisoformat(seen_at) if seen_at else None) for item_json, seen_at in rows]
 
     def recent_items(self, since: datetime) -> list[Item]:
+        """Unseen items after since, newest first, so a capped retag covers what you are about to read."""
         with self.lock:
             rows = self.connection.execute(
-                "SELECT item_json FROM items WHERE seen_at IS NULL AND COALESCE(published_at, fetched_at) >= ?", (iso(since),)
+                "SELECT item_json FROM items WHERE seen_at IS NULL AND COALESCE(published_at, fetched_at) >= ? "
+                "ORDER BY COALESCE(published_at, fetched_at) DESC",
+                (iso(since),),
             ).fetchall()
         return [Item.model_validate_json(row[0]) for row in rows]
 
@@ -103,22 +143,22 @@ class Store:
                     self.connection.execute("UPDATE items SET item_json = ? WHERE item_id = ?", (item.model_dump_json(), item_id))
 
     def add_events(self, events: list[Event], now: datetime) -> None:
-        """Record events; a seen event also marks its item as seen everywhere."""
+        """Record events; a seen event marks its item and the same URL from other sources, as seen everywhere."""
         with self.lock, self.connection:
             self.connection.executemany(
                 "INSERT INTO events (ts, view_id, item_id, event_kind) VALUES (?, ?, ?, ?)",
                 [(iso(now), event.view_id, event.item_id, event.event_kind) for event in events],
             )
             self.connection.executemany(
-                "UPDATE items SET seen_at = ? WHERE item_id = ? AND seen_at IS NULL",
+                "UPDATE items SET seen_at = ? WHERE url = (SELECT url FROM items WHERE item_id = ?) AND seen_at IS NULL",
                 [(iso(now), event.item_id) for event in events if event.event_kind == "seen" and event.item_id],
             )
 
     def expire(self, now: datetime) -> int:
-        """Drop items older than the TTL unless you opened them."""
+        """Drop items no source has listed for a month, unless you opened them."""
         with self.lock, self.connection:
             cursor = self.connection.execute(
-                "DELETE FROM items WHERE fetched_at < ? AND item_id NOT IN "
+                "DELETE FROM items WHERE COALESCE(listed_at, fetched_at) < ? AND item_id NOT IN "
                 "(SELECT item_id FROM events WHERE event_kind = 'open' AND item_id IS NOT NULL)",
                 (iso(now - ITEM_TTL),),
             )

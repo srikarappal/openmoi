@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { normalize_address, site_domain } from "../../src/shared/address"
 import { looks_like_challenge } from "../../src/shared/challenge"
-import { LENS_CSP, lens_data_url, lens_request_allowed, parse_lens_message, wrap_lens } from "../../src/shared/lens_doc"
+import { LENS_CSP, item_images, lens_data_url, lens_request_allowed, parse_lens_message, wrap_lens } from "../../src/shared/lens_doc"
 import { PendingRequests } from "../../src/shared/pending"
 import { Throttle, sleep, wait_for } from "../../src/shared/timing"
 
@@ -89,7 +89,21 @@ describe("lens documents", () => {
   })
 
   it("wraps a fragment into a full document", () => {
-    expect(wrap_lens("<p>hi</p>")).toMatch(/^<!doctype html><html><head><meta http-equiv="Content-Security-Policy"/)
+    expect(wrap_lens("<p>hi</p>")).toMatch(/^<!doctype html><meta http-equiv="Content-Security-Policy"[^>]*><p>hi<\/p>$/)
+  })
+
+  it("puts the CSP before a script placed ahead of head and is not fooled by a header tag", () => {
+    for (const html of ["<!DOCTYPE html><script>early()</script><html><head></head></html>", "<header><script>x()</script></header>"]) {
+      const wrapped = wrap_lens(html)
+      expect(wrapped.startsWith(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${LENS_CSP}">`)).toBe(true)
+      expect(wrapped.match(/<!doctype/gi)).toHaveLength(1)
+    }
+  })
+
+  it("lists the item images a lens may load, reader images included", () => {
+    const article = { item: { item_id: "a", image_url: "https://i/a.jpg", extra: { blocks: JSON.stringify([{ type: "img", src: "https://i/b.jpg" }, { type: "p", text: "x" }]) } } }
+    const broken = { item: { item_id: "b", image_url: null, extra: { blocks: "not json" } } }
+    expect(item_images([article, broken] as never)).toEqual(["https://i/a.jpg", "https://i/b.jpg"])
   })
 
   it("encodes as a base64 data url", () => {
@@ -98,16 +112,21 @@ describe("lens documents", () => {
     expect(Buffer.from(url.split(",")[1], "base64").toString("utf-8")).toContain("<p>é</p>")
   })
 
+  const SENT = new Set(["https://pbs.twimg.com/a.jpg", "https://cdn.example/v.mp4", "http://insecure.example/a.jpg"])
+
   it.each([
     ["data:text/html;base64,AA", "mainFrame", true],
     ["https://pbs.twimg.com/a.jpg", "image", true],
     ["https://cdn.example/v.mp4", "media", true],
+    ["https://pbs.twimg.com/a.jpg?d=your_items", "image", false],
+    ["https://collector.example/p.gif", "image", false],
     ["http://insecure.example/a.jpg", "image", false],
     ["https://evil.example/collect", "xhr", false],
     ["https://evil.example/script.js", "script", false],
     ["https://evil.example/frame", "subFrame", false],
   ])("lens request %s as %s", (url, resource_type, allowed) => {
-    expect(lens_request_allowed(url, resource_type)).toBe(allowed)
+    expect(lens_request_allowed(url, resource_type, SENT)).toBe(allowed)
+    if (!url.startsWith("data:")) expect(lens_request_allowed(url, resource_type, undefined)).toBe(false)
   })
 })
 

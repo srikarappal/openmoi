@@ -1,11 +1,13 @@
 """The relay hub over real WebSockets: who may connect, calls and replies, events."""
 
+import json
 import threading
 import time
 
 import pytest
-from helpers import EXTENSION_ID, FakeExtension
+from helpers import EXTENSION_ID, FakeExtension, pair
 from websockets.exceptions import ConnectionClosed
+from websockets.sync.client import connect
 
 from moi_brain.relay import RelayError, RelayHub
 
@@ -40,9 +42,12 @@ def hub(tmp_path, events):
 
 
 def trusted_extension(hub: RelayHub, extension_id: str = EXTENSION_ID) -> FakeExtension:
-    hub.trust(extension_id)
-    extension = FakeExtension(hub.port, extension_id)
-    assert extension.recv()["type"] == "welcome"
+    """The paired extension connecting again with its secret."""
+    if extension_id not in hub.trusted:
+        return pair(hub, hub.port, extension_id)
+    extension = FakeExtension(hub.port, extension_id, secret=hub.trusted[extension_id])
+    welcome = extension.recv()
+    assert welcome["type"] == "welcome" and "secret" not in welcome and extension.hub_is_genuine(welcome)
     return extension
 
 
@@ -90,20 +95,60 @@ def test_a_new_extension_waits_for_approval_then_gets_the_passive_config(hub, tm
     with pytest.raises(RelayError, match="not connected"):
         hub.call("open", {})
     hub.trust(EXTENSION_ID)
-    assert extension.recv() == {"type": "welcome", **passive_config()}
+    welcome = extension.recv()
+    assert (welcome["type"], welcome["passive"]) == ("welcome", passive_config()["passive"])
+    assert extension.hub_is_genuine(welcome)
     assert hub.status() == {"connected": True, "extension_id": EXTENSION_ID, "waiting_for_approval": None, "paired": True}
-    assert EXTENSION_ID in (tmp_path / "trusted.json").read_text()
+    saved = json.loads((tmp_path / "trusted.json").read_text())
+    assert saved == {EXTENSION_ID: welcome["secret"]}
+    assert (tmp_path / "trusted.json").stat().st_mode & 0o777 == 0o600
 
 
 def test_an_approved_extension_is_welcomed_at_once_next_time(hub, tmp_path, events):
-    hub.trust(EXTENSION_ID)
+    paired = pair(hub, hub.port)
+    paired.close()
     again = RelayHub(tmp_path / "trusted.json", events, passive_config)
     port = again.start(0)
     try:
-        assert FakeExtension(port).recv()["type"] == "welcome"
+        extension = FakeExtension(port, secret=paired.secret)
+        welcome = extension.recv()
+        assert welcome["type"] == "welcome" and "secret" not in welcome and extension.hub_is_genuine(welcome)
         assert again.connected
     finally:
         again.stop()
+
+
+def test_a_program_posing_as_the_paired_extension_gets_no_calls(hub):
+    paired = trusted_extension(hub)
+    paired.answer_calls(second_answer)
+    impostor = FakeExtension(hub.port)
+    assert impostor.recv()["type"] == "approval_needed"
+    guesser = FakeExtension(hub.port, secret="00" * 32)
+    assert guesser.recv()["type"] == "approval_needed"
+    assert hub.call("url", {}) == "second"
+    assert hub.status()["extension_id"] == EXTENSION_ID
+
+
+def test_the_welcome_proves_the_hub_knows_the_secret(hub):
+    paired = trusted_extension(hub)
+    forged = {"type": "welcome", "proof": "0" * 64, "passive": []}
+    assert not paired.hub_is_genuine(forged)
+    assert not FakeExtension(hub.port, secret=None).hub_is_genuine({"type": "welcome", "proof": "x"})
+
+
+def test_a_hello_without_a_proper_nonce_is_refused(hub):
+    with connect(f"ws://127.0.0.1:{hub.port}/relay", origin=f"chrome-extension://{EXTENSION_ID}", legacy=True) as raw:
+        assert json.loads(raw.recv(timeout=5))["type"] == "challenge"
+        raw.send(json.dumps({"type": "hello", "nonce": "short"}))
+        with pytest.raises(ConnectionClosed):
+            raw.recv(timeout=5)
+
+
+def test_a_trust_file_from_before_secrets_pairs_nobody(tmp_path, events):
+    (tmp_path / "old.json").write_text(json.dumps([EXTENSION_ID]))
+    assert RelayHub(tmp_path / "old.json", events, passive_config).trusted == {}
+    (tmp_path / "broken.json").write_text("{half")
+    assert RelayHub(tmp_path / "broken.json", events, passive_config).trusted == {}
 
 
 def test_calls_reach_chrome_and_come_back(hub):

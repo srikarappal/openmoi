@@ -42,6 +42,7 @@ function tab_id_of(handle: unknown): number {
 export class ChromeCommands {
   // Tabs openMoi opened itself; only these may ever be closed by openMoi.
   readonly opened = new Set<number>()
+  readonly chosen = new Set<number>()
   private group_id: number | null = null
 
   constructor(private readonly api: ChromeApi) {}
@@ -82,7 +83,7 @@ export class ChromeCommands {
   }
 
   async run({ handle, op, args = {} }: RunArgs): Promise<unknown> {
-    const tab_id = tab_id_of(handle)
+    const tab_id = this.allowed(handle)
     await this.inject(tab_id)
     const [frame] = await this.api.scripting.executeScript({ target: { tabId: tab_id }, func: call_page_op, args: [op, args] })
     return frame?.result ?? null
@@ -95,7 +96,19 @@ export class ChromeCommands {
   }
 
   async url(handle: unknown): Promise<string> {
-    return (await this.api.tabs.get(tab_id_of(handle))).url ?? ""
+    return (await this.api.tabs.get(this.allowed(handle))).url ?? ""
+  }
+
+  // Only tabs openMoi opened for reading, or tabs you chose with Mine; your other tabs are not openMoi's to read.
+  private allowed(handle: unknown): number {
+    const tab_id = tab_id_of(handle)
+    if (!this.opened.has(tab_id) && !this.chosen.has(tab_id)) throw new Error(`tab ${tab_id} is not one openMoi opened or you chose with Mine`)
+    return tab_id
+  }
+
+  forget(tab_id: number): void {
+    this.opened.delete(tab_id)
+    this.chosen.delete(tab_id)
   }
 
   async close(handle: unknown): Promise<null> {

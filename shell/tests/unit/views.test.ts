@@ -4,6 +4,7 @@ import type { LensContext, LensManager } from "../../src/main/lenses"
 import type { SourceOutcome, SourceReader } from "../../src/main/sources"
 import { ViewController, view_lens_key } from "../../src/main/views"
 import type { PageSource, ViewPage } from "../../src/shared/types"
+import { Tracked } from "./tracked"
 
 const X_SOURCE = { source_id: "x", start_url: "https://x.com/home" } as PageSource
 const PAGE = { view_id: "feed", items: [], has_more: false, refreshing: false, warnings: [], version: "v1", summary: "", lens_stale: false, layout_hash: "h" } as unknown as ViewPage
@@ -17,11 +18,7 @@ function make_views(outcomes: SourceOutcome[], pages: ViewPage[] = []) {
   }
   const sources = { read: vi.fn(async () => outcomes.shift() ?? ({ status: "skipped" } as SourceOutcome)) }
   const lenses = { get: (key: string) => (key === context.key ? context : undefined) }
-  const labels: string[] = []
-  const track = <T>(label: string, work: () => Promise<T>): Promise<T> => {
-    labels.push(label)
-    return work()
-  }
+  const { labels, track } = new Tracked()
   const hooks = { open_original: vi.fn(), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), track, labels }
   const views = new ViewController(brain as unknown as BrainClient, lenses as unknown as LensManager, sources as unknown as SourceReader, hooks)
   return { views, context, sources, hooks }

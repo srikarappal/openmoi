@@ -207,7 +207,8 @@ export class ChromeWithExtension {
     private readonly profile: string,
   ) {}
 
-  static async launch(world: FakeWorld, relay_port: number): Promise<ChromeWithExtension> {
+  // With a secret the extension starts out paired, as if you had allowed it in an earlier session.
+  static async launch(world: FakeWorld, relay_port: number, secret?: string): Promise<ChromeWithExtension> {
     const profile = mkdtempSync(path.join(tmpdir(), "moi_chrome_"))
     const context = await chromium.launchPersistentContext(profile, {
       channel: "chromium",
@@ -216,7 +217,10 @@ export class ChromeWithExtension {
     })
     await context.addCookies([{ name: "moi_session", value: "1", url: world.base_url }])
     const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"))
-    await worker.evaluate((url) => chrome.storage.local.set({ relay_url: url }), `ws://127.0.0.1:${relay_port}/relay`)
+    await worker.evaluate(
+      ([url, paired]) => chrome.storage.local.set((paired ? { relay_url: url, relay_secret: paired } : { relay_url: url }) as Record<string, string>),
+      [`ws://127.0.0.1:${relay_port}/relay`, secret ?? ""],
+    )
     return new ChromeWithExtension(context, worker, profile)
   }
 

@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from moi_brain.files import write_atomic
+
 SITE_PREFIX = "site_"
 LENS_KINDS = ("feed", "article", "listing")
 
@@ -17,7 +19,8 @@ class LensPointer(BaseModel):
 
 
 def lens_key(view_id: str, kind: str) -> str:
-    return view_id if kind == "feed" else f"{view_id}_{kind}"
+    """The folder of a view's lens; "@" cannot appear in a view id, so feed_article and feed@article never meet."""
+    return view_id if kind == "feed" else f"{view_id}@{kind}"
 
 
 class LensStore:
@@ -26,8 +29,10 @@ class LensStore:
         self.lenses_dir = lenses_dir
 
     def pointer(self, key: str) -> LensPointer:
-        path = self.lenses_dir / key / "current.json"
-        return LensPointer.model_validate_json(path.read_text()) if path.exists() else LensPointer()
+        try:
+            return LensPointer.model_validate_json((self.lenses_dir / key / "current.json").read_text())
+        except (OSError, ValueError):
+            return LensPointer()
 
     def html(self, key: str) -> str:
         version = self.pointer(key).version
@@ -42,7 +47,7 @@ class LensStore:
         folder = self.lenses_dir / key
         folder.mkdir(parents=True, exist_ok=True)
         version = max(self.versions(key), default=0) + 1
-        (folder / f"v{version}.html").write_text(html)
+        write_atomic(folder / f"v{version}.html", html)
         self.write_pointer(key, LensPointer(version=version, layout_hash=layout_hash))
         return version
 
@@ -59,6 +64,4 @@ class LensStore:
         return bool(layout.strip()) and self.pointer(key).layout_hash != layout_hash
 
     def write_pointer(self, key: str, pointer: LensPointer) -> None:
-        folder = self.lenses_dir / key
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / "current.json").write_text(json.dumps(pointer.model_dump(), indent=2))
+        write_atomic(self.lenses_dir / key / "current.json", json.dumps(pointer.model_dump(), indent=2))

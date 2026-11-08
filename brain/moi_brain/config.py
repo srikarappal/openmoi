@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
+from moi_brain.files import write_atomic
+
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 REPO_DIR = Path(__file__).resolve().parents[2]
 
@@ -238,7 +240,7 @@ def load_settings(paths: Paths) -> Settings:
 
 def save_settings(paths: Paths, settings: Settings) -> None:
     paths.settings_file.parent.mkdir(parents=True, exist_ok=True)
-    paths.settings_file.write_text(settings.model_dump_json(indent=2))
+    write_atomic(paths.settings_file, settings.model_dump_json(indent=2))
 
 
 def load_env_file(path: Path) -> list[str]:

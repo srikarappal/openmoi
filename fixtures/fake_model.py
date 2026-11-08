@@ -8,7 +8,6 @@ import html
 import json
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 SYNONYMS = {
     "politics": ("politic", "election", "senate", "congress"),
@@ -142,7 +141,8 @@ SHOP_SPEC = {
     },
 }
 NOTHING_SPEC = {"item_root": "div.no_such_thing", "fields": {"title": {"select": "a", **FIELD}, "url": {"select": "a", "take": "attr:href"}}}
-SPECS_BY_PAGE = {"/pages/listing.html": LISTING_SPEC, "/pages/shop.html": SHOP_SPEC}
+# Like a real model, the fake one only sees the page's skeleton (and its site), so it recognizes pages by their markup.
+SPECS_BY_MARKER = {'class="athing"': LISTING_SPEC, "s-search-result": SHOP_SPEC}
 
 
 def lens(payload: dict[str, Any], base_url: str) -> str:
@@ -157,7 +157,8 @@ def lens(payload: dict[str, Any], base_url: str) -> str:
 
 def extractor(payload: dict[str, Any], base_url: str) -> str:
     request = request_of(payload)
-    return json.dumps(SPECS_BY_PAGE.get(urlparse(request["url"]).path, NOTHING_SPEC))
+    skeleton = request["skeleton"]
+    return json.dumps(next((spec for marker, spec in SPECS_BY_MARKER.items() if marker in skeleton), NOTHING_SPEC))
 
 
 HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "extractor": extractor}

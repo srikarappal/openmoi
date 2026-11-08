@@ -110,7 +110,8 @@ def rank(
     """A page of view items with reasons, plus whether more remain beyond it.
 
     Order "recency" scores by a 24 h half life; order "page" keeps the given order. Boosts add on top of either.
-    Excluded ids (already rendered) still count toward daily limits.
+    Excluded ids (already shown or seen) use up daily limits first: what you already read that day counts before
+    anything newer competes for what is left.
     """
     scored: list[Scored] = []
     for position, item in enumerate(items):
@@ -120,6 +121,8 @@ def rank(
         base = 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS) if order == "recency" else 1 - position / (len(items) + 1)
         scored.append((base + sum(rule.weight for rule in boosts), item, boosts))
     scored.sort(key=itemgetter(0), reverse=True)
-    remaining = [entry for entry in apply_limits(scored, rules, now) if entry[1].item_id not in exclude_ids]
+    already = [entry for entry in scored if entry[1].item_id in exclude_ids]
+    candidates = [entry for entry in scored if entry[1].item_id not in exclude_ids]
+    remaining = [entry for entry in apply_limits([*already, *candidates], rules, now) if entry[1].item_id not in exclude_ids]
     page = [ViewItem(item=item, reasons=reasons(item, boosts, now)) for _, item, boosts in remaining[:limit]]
     return page, len(remaining) > limit

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { BrainError, type BrainClient } from "../../src/main/brain"
 import { ChatController, explain } from "../../src/main/chat"
 import type { ModelInfo, Overview, Proposal } from "../../src/shared/types"
+import { Tracked } from "./tracked"
 
 function proposal(fields: Partial<Proposal> = {}): Proposal {
   return { proposal_id: "p1", view_id: "feed", changes: [{ file: "views/feed.md", diff: "+* No shorts." }], lens_action: null, reply: "Added a rule.", ...fields }
@@ -24,11 +25,7 @@ const OVERVIEW: Overview = {
 }
 
 function make_chat(brain: Partial<BrainClient>) {
-  const labels: string[] = []
-  const track = <T>(label: string, work: () => Promise<T>): Promise<T> => {
-    labels.push(label)
-    return work()
-  }
+  const { labels, track } = new Tracked()
   const hooks = {
     chat_view: () => "feed",
     on_applied: vi.fn(async () => {}),

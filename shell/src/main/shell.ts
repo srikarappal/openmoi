@@ -1,7 +1,8 @@
 // The window: chrome UI on top and on the right, one content area showing a lens or a web tab.
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { BrowserWindow, ipcMain, shell as desktop, type WebContentsView } from "electron"
-import { site_domain } from "../shared/address"
+import { is_web_url, site_domain } from "../shared/address"
 import type {
   ActiveTarget,
   ChromePageInfo,
@@ -120,10 +121,22 @@ export class Shell implements ViewHost {
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
     })
     this.window.on("resize", () => this.layout())
+    // The chrome UI never navigates (a link dropped on it would otherwise take the shell bridge with it),
+    // and only the UI page itself may send commands or read the state.
+    this.window.webContents.on("will-navigate", (event) => event.preventDefault())
+    this.window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     ipcMain.on("moi:command", (event, command: ShellCommand) => {
-      if (event.sender === this.window.webContents) this.run(command).catch((error) => this.notify(String(error)))
+      if (this.from_ui(event)) this.run(command).catch((error) => this.notify(String(error)))
     })
-    ipcMain.handle("moi:get_state", () => this.state())
+    ipcMain.handle("moi:get_state", (event) => (this.from_ui(event) ? this.state() : null))
+  }
+
+  private from_ui(event: { sender: unknown; senderFrame?: { url: string } | null }): boolean {
+    return event.sender === this.window.webContents && event.senderFrame?.url === this.ui_url
+  }
+
+  private get ui_url(): string {
+    return pathToFileURL(path.join(this.dist_dir, "ui", "index.html")).href
   }
 
   async start(): Promise<void> {
@@ -212,6 +225,10 @@ export class Shell implements ViewHost {
 
   // Originals open where your sessions are: your Chrome when connected, an openMoi tab otherwise.
   private open_original(url: string): void {
+    if (!is_web_url(url)) {
+      this.notify(`openMoi only opens web links, not ${url.slice(0, 40)}`)
+      return
+    }
     if (!this.relay.status.connected) {
       this.open_tab(url)
       return
@@ -239,7 +256,7 @@ export class Shell implements ViewHost {
   }
 
   private ask_approval(extension_id: string): void {
-    this.notify(`A Chrome extension (${extension_id.slice(0, 8)}) wants to read pages for openMoi in your Chrome.`, undefined, {
+    this.notify(`A Chrome extension wants to read pages for openMoi in your Chrome. Allow it only if this is the openMoi extension you installed (id ${extension_id}).`, undefined, {
       label: "Allow",
       command: { type: "relay_trust", extension_id },
     })
@@ -274,7 +291,7 @@ export class Shell implements ViewHost {
     this.mine.disable(tab_mine_key(tab.tab_id))
   }
 
-  // Making a Mine view can take minutes; a tab closed meanwhile drops it, and one you left stays in the background.
+  // Making a Mine view can take minutes; a tab closed meanwhile drops it and one you left stays in the background.
   private async toggle_mine(tab: Tab): Promise<void> {
     if (tab.mine) {
       this.set_mine_off(tab)

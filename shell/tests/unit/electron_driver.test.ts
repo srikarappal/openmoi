@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { FakeWebContents, FakeWebContentsView, ipc_event, ipcMain, reset_electron } from "./fake_electron"
+import { FakeSession, FakeWebContents, FakeWebContentsView, ipc_event, ipcMain, reset_electron } from "./fake_electron"
 import type { ViewHost } from "../../src/main/host"
 
 vi.mock("electron", async () => await import("./fake_electron"))
 
 const { ElectronDriver } = await import("../../src/main/drivers")
 const { call_page } = await import("../../src/main/page_rpc")
-const { configure_sessions, lens_preferences, web_preferences, LENS_PARTITION, WEB_PARTITION } = await import("../../src/main/sessions")
+const { allow_lens_images, blocked_lens_requests, configure_sessions, forget_lens, lens_preferences, web_preferences, LENS_PARTITION, WEB_PARTITION } = await import("../../src/main/sessions")
 const { session } = await import("./fake_electron")
 
 function make_host(): ViewHost & { behind: unknown[]; detached: unknown[] } {
@@ -63,7 +63,7 @@ describe("ElectronDriver", () => {
     await driver.close(handle)
   })
 
-  it("adopts a tab's page without closing it, and refuses pages that were destroyed", async () => {
+  it("adopts a tab's page without closing it and refuses pages that were destroyed", async () => {
     const driver = new ElectronDriver(make_host())
     const contents = new FakeWebContents()
     const handle = driver.adopt(contents as never)
@@ -89,6 +89,11 @@ describe("call_page", () => {
   })
 })
 
+// Asks the lens session whether a lens web contents may load url, recording whether it was cancelled.
+function ask_lens(lens: FakeSession, decisions: boolean[], url: string, resourceType: string, webContentsId: number): void {
+  lens.request_handler?.({ url, resourceType, webContentsId } as never, (response) => decisions.push(response.cancel))
+}
+
 describe("sessions", () => {
   beforeEach(() => reset_electron())
 
@@ -103,9 +108,18 @@ describe("sessions", () => {
     lens.permission_handler?.(null, "fullscreen", (allowed) => answers.push(allowed))
     expect(answers).toEqual([true, false, false])
     const decisions: boolean[] = []
-    lens.request_handler?.({ url: "https://pbs.twimg.com/media/a.jpg", resourceType: "image" }, (response) => decisions.push(response.cancel))
-    lens.request_handler?.({ url: "https://evil.example/steal?data=1", resourceType: "xhr" }, (response) => decisions.push(response.cancel))
-    expect(decisions).toEqual([false, true])
+    const image = "https://pbs.twimg.com/media/a.jpg"
+    allow_lens_images(7, [image])
+    ask_lens(lens, decisions, image, "image", 7)
+    ask_lens(lens, decisions, image, "image", 8)
+    ask_lens(lens, decisions, "https://collector.example/p.gif?d=items", "image", 7)
+    ask_lens(lens, decisions, "https://evil.example/steal?data=1", "xhr", 7)
+    expect(decisions).toEqual([false, true, true, true])
+    expect(blocked_lens_requests(7)).toEqual(["https://collector.example/p.gif?d=items", "https://evil.example/steal?data=1"])
+    forget_lens(7)
+    expect(blocked_lens_requests(7)).toEqual([])
+    ask_lens(lens, decisions, image, "image", 7)
+    expect(decisions.at(-1)).toBe(true)
   })
 
   it("keeps lenses and pages sandboxed and isolated", () => {

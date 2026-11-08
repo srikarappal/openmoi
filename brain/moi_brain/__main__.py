@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import secrets
 import sys
 
 import uvicorn
@@ -18,6 +19,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     paths = load_paths()
+    token = os.environ.get("MOI_TOKEN") or new_token()
     for env_file in (paths.assets / ".env", paths.home / ".env"):
         load_env_file(env_file)
     try:
@@ -30,7 +32,15 @@ def main() -> None:
         brain.relay.start(int(os.environ.get("MOI_RELAY_PORT", DEFAULT_PORT)))
     except OSError as error:
         print(f"Chrome relay not started: {error}", file=sys.stderr)
-    uvicorn.run(create_app(brain, os.environ.get("MOI_TOKEN")), host="127.0.0.1", port=args.port, log_level="warning")
+    hosts = {f"127.0.0.1:{args.port}", f"localhost:{args.port}"}
+    uvicorn.run(create_app(brain, token, hosts), host="127.0.0.1", port=args.port, log_level="warning")
+
+
+def new_token() -> str:
+    """Run by hand without the shell: a token for this run, printed so you can send it as the x-moi-token header."""
+    token = secrets.token_hex(16)
+    print(f"MOI_TOKEN for this run: {token}", file=sys.stderr)
+    return token
 
 
 if __name__ == "__main__":

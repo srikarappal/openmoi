@@ -1,8 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-import pytest
-from conftest import set_time_zone
-
+from moi_brain.brain import one_per_url
 from moi_brain.compile import Condition, Rule
 from moi_brain.items import normalize
 from moi_brain.rank import age_hours, describe, matches, rank
@@ -62,13 +60,6 @@ def test_limit_counts_per_published_day():
     items = [make_item("x", "today", 1), make_item("x", "today2", 2), make_item("x", "yesterday", 30)]
     page, _ = rank(items, [rule("limit", "source_id", "eq", "x", count_per_day=1)], NOW)
     assert ids(page) == ["today", "yesterday"]
-
-
-@pytest.fixture
-def pacific_clock(utc_clock):
-    set_time_zone("America/Los_Angeles")
-    yield
-    set_time_zone("UTC")
 
 
 def test_an_item_one_limit_drops_does_not_use_up_another_limit():
@@ -151,3 +142,22 @@ def test_age_uses_fetch_time_when_unpublished_and_never_negative():
 def test_describe():
     assert describe(Condition(field="author_handle", op="eq", value="maya")) == "author maya"
     assert describe(Condition(field="topic", op="in", value=["a", "b"])) == "topic a, b"
+
+
+def test_one_per_url_keeps_the_first_source_and_marks_items_seen_long_ago():
+    early = make_item("rss:a", "1", url="https://same.example/x").model_copy(update={"fetched_at": NOW - timedelta(hours=5)})
+    late_copy = make_item("rss:b", "2", url="https://same.example/x")
+    long_seen, recently_seen = make_item("x", "3"), make_item("x", "4")
+    entries = [(late_copy, None), (early, None), (long_seen, NOW - timedelta(hours=13)), (recently_seen, NOW - timedelta(hours=1))]
+    items, hidden = one_per_url(entries, NOW - timedelta(hours=12))
+    assert {item.native_id for item in items} == {"1", "3", "4"}
+    assert hidden == {long_seen.item_id}
+
+
+def test_items_seen_long_ago_still_use_up_the_daily_limit():
+    seen_this_morning = [make_item("x", "a", 9), make_item("x", "b", 8)]
+    later = [make_item("x", "c", 1)]
+    items, hidden = one_per_url([(item, NOW - timedelta(hours=13)) for item in seen_this_morning] + [(item, None) for item in later], NOW - timedelta(hours=12))
+    page, _ = rank(items, [rule("limit", "source_id", "eq", "x", count_per_day=2)], NOW, hidden)
+    assert ids(page) == []
+

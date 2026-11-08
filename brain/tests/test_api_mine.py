@@ -57,7 +57,7 @@ def test_rollback_after_a_generated_lens_returns_to_the_default(client, paths):
 def test_extractor_lookup_generate_and_accept(client, services):
     url = f"{services.base_url}/pages/shop.html?k=desk+lamp"
     assert client.get("/extractor", params={"url": url}).json() == {"spec": None}
-    spec = client.post("/extractor/generate", json={"url": url, "skeleton": "<div>{t:12}</div>"}).json()["spec"]
+    spec = client.post("/extractor/generate", json={"url": url, "skeleton": '<div data-component-type="s-search-result">{t:12}</div>'}).json()["spec"]
     assert spec["domain"] == "127.0.0.1"
     assert spec["path_pattern"] == "/pages/shop.html*"
     assert spec["item_root"] == "[data-component-type='s-search-result']"

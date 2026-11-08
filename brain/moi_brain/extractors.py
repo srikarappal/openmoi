@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
+from moi_brain.files import write_atomic
+
 UNSAFE_NAME = re.compile(r"[^\w.]+")
 
 
@@ -72,6 +74,13 @@ def spec_file_name(spec: ExtractorSpec) -> str:
     return f"{key}.v{spec.version}.json"
 
 
+def readable_spec(path: Path) -> ExtractorSpec | None:
+    try:
+        return ExtractorSpec.model_validate_json(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
 class ExtractorStore:
     """Handwritten specs ship with the app; generated specs live in .moi/extractors with numbered versions."""
 
@@ -80,8 +89,9 @@ class ExtractorStore:
         self.generated_dir = generated_dir
 
     def specs(self) -> list[ExtractorSpec]:
+        """Every readable spec; a damaged generated file is skipped (the page's spec is made again when needed)."""
         paths = [*sorted(self.builtin_dir.glob("*.json")), *sorted(self.generated_dir.glob("*.json"))]
-        return [ExtractorSpec.model_validate_json(path.read_text()) for path in paths]
+        return [spec for spec in (readable_spec(path) for path in paths) if spec]
 
     def for_page_type(self, domain: str, page_type: str) -> ExtractorSpec | None:
         return newest([spec for spec in self.specs() if spec.domain == domain and spec.page_type == page_type])
@@ -94,5 +104,5 @@ class ExtractorStore:
         same_key = [known for known in self.specs() if (known.domain, known.path_pattern) == (spec.domain, spec.path_pattern)]
         current = newest(same_key)
         saved = spec.model_copy(update={"version": current.version + 1 if current else 1})
-        (self.generated_dir / spec_file_name(saved)).write_text(saved.model_dump_json(indent=2))
+        write_atomic(self.generated_dir / spec_file_name(saved), saved.model_dump_json(indent=2))
         return saved

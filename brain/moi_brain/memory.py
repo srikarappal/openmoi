@@ -29,6 +29,7 @@ class Memory:
         return self.topic_text("dislikes.md")
 
     def journal_lines(self, now: datetime) -> list[str]:
+        now = now.astimezone()
         lines: list[str] = []
         for days_back in range(JOURNAL_DAYS - 1, -1, -1):
             path = self.paths.journal / journal_name(now - timedelta(days=days_back))
@@ -37,6 +38,8 @@ class Memory:
         return lines[-MAX_JOURNAL_LINES:]
 
     def append_journal(self, now: datetime, line: str) -> None:
+        """One line in today's journal, named and timed on your clock: an item opened at 18:00 lands in today's file."""
+        now = now.astimezone()
         path = self.paths.journal / journal_name(now)
         if not path.exists():
             path.write_text(f"# {now:%Y%m%d}\n\n")

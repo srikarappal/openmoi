@@ -174,3 +174,32 @@ def test_catch_up_leaves_tagged_items_alone(tagger, services):
     tagger.ensure_current(TOPICS, NOW)
     wait_idle(tagger)
     assert len(services.model_calls("tag")) == calls
+
+
+def test_a_failed_batch_stops_the_rest_instead_of_waiting_on_each(tagger, services):
+    items = [make_item(str(index), "Election night") for index in range(25)]
+    services.queue_model_reply("tag", None)
+    tagged = tagger.tag(items, ["politics"])
+    assert [item.item_id for item in tagged] == [item.item_id for item in items]
+    assert not any(item.tagged for item in tagged)
+    assert len(services.model_calls("tag")) == 1
+
+
+def test_a_topic_removed_and_added_back_is_tagged_again(tagger, tmp_path, services):
+    item = make_item("1", "New laptop chip")
+    tagger.store.upsert_items([item])
+    with_ai = [*BASE_TOPICS, "ai"]
+    tagger.ensure_current(with_ai, NOW)
+    wait_idle(tagger)
+    tagger.ensure_current(list(BASE_TOPICS), NOW)
+    assert json.loads((tmp_path / "tagged.json").read_text()) == list(BASE_TOPICS)
+    calls = len(services.model_calls("tag"))
+    tagger.ensure_current(with_ai, NOW)
+    wait_idle(tagger)
+    assert len(services.model_calls("tag")) > calls
+
+
+def test_a_damaged_topic_file_starts_from_the_base_topics(tagger, tmp_path):
+    (tmp_path / "damaged.json").write_text("")
+    assert Tagger(tagger.store, tagger.gateway, tmp_path / "damaged.json", TopicList(TOPICS)).tagged_topics == list(BASE_TOPICS)
+

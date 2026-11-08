@@ -11,8 +11,22 @@ const URL_WORDS = new Set([
   "search", "shop", "status", "store", "stories", "story", "t", "tag", "tags", "thread", "threads", "topic", "topics", "u",
   "user", "users", "video", "videos", "watch", "wiki",
 ])
-const IDENTIFIER = /^[\w:./-]{0,60}$/
-const STRUCTURAL_TOKEN = /^[A-Za-z_-]{1,20}$/
+// Words that name parts of a page rather than anything about you; attribute tokens made of these are always kept.
+const MARKUP_WORDS = new Set([
+  "a", "action", "actions", "active", "add", "app", "article", "aside", "author", "avatar", "badge", "banner", "bar", "block", "body",
+  "bottom", "box", "btn", "button", "buy", "caption", "card", "cart", "cell", "col", "column", "comment", "comments", "component",
+  "container", "content", "count", "cover", "date", "description", "detail", "details", "dialog", "display", "entry", "feed", "field",
+  "figure", "first", "footer", "form", "grid", "group", "handle", "head", "header", "heading", "hidden", "icon", "image", "img", "index",
+  "info", "inline", "inner", "input", "item", "items", "label", "large", "last", "layout", "left", "like", "likes", "line", "link",
+  "links", "list", "listing", "logo", "main", "media", "medium", "menu", "message", "meta", "module", "more", "name", "nav", "next",
+  "normal", "offer", "offscreen", "outer", "overlay", "page", "pagination", "panel", "photo", "picture", "player", "post", "posts",
+  "prev", "price", "primary", "product", "profile", "promo", "rating", "reply", "result", "results", "retweet", "review", "reviews",
+  "right", "row", "score", "screen", "search", "secondary", "section", "share", "side", "sidebar", "site", "size", "small", "social",
+  "source", "span", "star", "stars", "status", "story", "subtitle", "summary", "tab", "tabs", "tag", "tags", "text", "thumb",
+  "thumbnail", "time", "timeline", "timestamp", "title", "toolbar", "top", "tweet", "type", "user", "username", "video", "view",
+  "views", "visible", "wrap", "wrapper",
+  "true", "false", "none", "auto", "on", "off", "yes", "no", "polite", "assertive", "step", "location",
+])
 const PAGE_ORIGIN = "https://page.invalid"
 const MAX_CLASSES = 4
 const MAX_REPEATS = 3
@@ -23,10 +37,29 @@ function text_length(node: Node): number {
   return (node.textContent ?? "").replace(/\s+/g, " ").trim().length
 }
 
-// Numbers become 9, short structural words stay, anything else could be content and is masked.
-function value_shape(value: string): string {
-  if (/^\d+$/.test(value)) return "9"
-  return STRUCTURAL_TOKEN.test(value) ? value : `{t:${value.trim().length}}`
+// Lowercase words of a value or text: split at anything that is not a letter or digit and at camelCase humps.
+export function words_of(value: string): string[] {
+  return value
+    .split(/[^A-Za-z0-9]+/)
+    .flatMap((part) => part.split(/(?<=[a-z])(?=[A-Z])/))
+    .filter(Boolean)
+    .map((word) => word.toLowerCase())
+}
+
+// Markup words and two letter bits stay. Elsewhere a token could be about you: in strict values (ids, data values)
+// it is masked, in class names and test ids only when it also shows in the page's text (a handle, a name, a topic)
+// or carries a long number. Numbers on their own become 9.
+function keep_token(token: string, page_words: Set<string>, strict: boolean): boolean {
+  const words = words_of(token)
+  if (words.every((word) => word.length <= 2 || MARKUP_WORDS.has(word))) return true
+  return !strict && !/\d{4,}/.test(token) && words.every((word) => !page_words.has(word))
+}
+
+function masked_value(value: string, page_words: Set<string>, strict: boolean): string {
+  return value.slice(0, MAX_VALUE).replace(/[A-Za-z0-9]+/g, (token) => {
+    if (/^\d+$/.test(token)) return "9"
+    return keep_token(token, page_words, strict) ? token : `{t:${token.length}}`
+  })
 }
 
 function segment_shape(segment: string): string {
@@ -50,21 +83,20 @@ export function url_shape(value: string): string {
   }
 }
 
-function attribute_value(name: string, value: string): string | null {
-  if (name === "class") return value.split(/\s+/).filter(Boolean).slice(0, MAX_CLASSES).join(" ")
+function attribute_value(name: string, value: string, page_words: Set<string>): string | null {
+  if (name === "class") return masked_value(value.split(/\s+/).filter(Boolean).slice(0, MAX_CLASSES).join(" "), page_words, false)
   if (name === "href" || name === "src") return url_shape(value)
-  if (name === "id") return value_shape(value)
   if (TEXT_ATTRIBUTES.has(name)) return `{t:${value.trim().length}}`
-  if (STRUCTURAL_DATA.has(name) || name.startsWith("aria-")) return IDENTIFIER.test(value) ? value : `{t:${value.trim().length}}`
-  if (name.startsWith("data-")) return value_shape(value)
+  if (STRUCTURAL_DATA.has(name)) return masked_value(value, page_words, false)
+  if (name === "id" || name.startsWith("data-") || name.startsWith("aria-")) return masked_value(value, page_words, true)
   if (KEPT_ATTRIBUTES.has(name)) return value.slice(0, MAX_VALUE)
   return null
 }
 
-function attributes(element: Element): string {
+function attributes(element: Element, page_words: Set<string>): string {
   const parts: string[] = []
   for (const attribute of Array.from(element.attributes)) {
-    const value = attribute_value(attribute.name.toLowerCase(), attribute.value)
+    const value = attribute_value(attribute.name.toLowerCase(), attribute.value, page_words)
     if (value !== null) parts.push(` ${attribute.name.toLowerCase()}="${value.replaceAll('"', "'")}"`)
   }
   return parts.join("")
@@ -82,7 +114,7 @@ function signature(node: Node): string {
   return `${element.tagName}.${element.getAttribute("class") ?? ""}`
 }
 
-function write_node(node: Node, depth: number, lines: string[]): void {
+function write_node(node: Node, depth: number, lines: string[], page_words: Set<string>): void {
   const indent = " ".repeat(depth)
   if (node.nodeType === 3) {
     lines.push(`${indent}{t:${text_length(node)}}`)
@@ -90,19 +122,19 @@ function write_node(node: Node, depth: number, lines: string[]): void {
   }
   const element = node as Element
   const tag = element.tagName.toLowerCase()
-  const open = `<${tag}${attributes(element)}>`
+  const open = `<${tag}${attributes(element, page_words)}>`
   const children = kept_children(element)
   if (!children.length) lines.push(`${indent}${open}`)
   else if (children.length === 1 && children[0].nodeType === 3) lines.push(`${indent}${open}{t:${text_length(children[0])}}</${tag}>`)
   else {
     lines.push(`${indent}${open}`)
-    write_children(children, depth + 1, lines)
+    write_children(children, depth + 1, lines, page_words)
     lines.push(`${indent}</${tag}>`)
   }
 }
 
 // Long runs of siblings that look alike are cut to three examples and a count.
-function write_children(children: Node[], depth: number, lines: string[]): void {
+function write_children(children: Node[], depth: number, lines: string[], page_words: Set<string>): void {
   let previous = ""
   let run = 0
   let skipped = 0
@@ -115,14 +147,14 @@ function write_children(children: Node[], depth: number, lines: string[]): void 
     run = current === previous ? run + 1 : 1
     previous = current
     if (run > MAX_REPEATS) skipped += 1
-    else write_node(child, depth, lines)
+    else write_node(child, depth, lines, page_words)
   }
   if (skipped) lines.push(`${" ".repeat(depth)}<!-- ${skipped} more like the above -->`)
 }
 
 export function skeleton(root: Element): string {
   const lines: string[] = []
-  write_node(root, 0, lines)
+  write_node(root, 0, lines, new Set(words_of(root.textContent ?? "")))
   const text = lines.join("\n")
   return text.length > MAX_SKELETON_CHARS ? `${text.slice(0, MAX_SKELETON_CHARS)}\n<!-- skeleton cut at ${MAX_SKELETON_CHARS} characters -->` : text
 }

@@ -65,7 +65,8 @@ def test_spec_file_name_is_safe():
 
 def test_lens_key():
     assert lens_key("feed", "feed") == "feed"
-    assert lens_key("site_amazon.com", "listing") == "site_amazon.com_listing"
+    assert lens_key("site_amazon.com", "listing") == "site_amazon.com@listing"
+    assert lens_key("feed", "article") != lens_key("feed_article", "feed")
 
 
 def test_lens_store_versions_and_rollback(tmp_path):

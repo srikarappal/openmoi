@@ -1,26 +1,42 @@
 // Everything about turning untrusted lens HTML into a safe document and trusting nothing it sends back.
-import type { LensToHost } from "./types"
+import type { LensToHost, ViewItem } from "./types"
 
 export const LENS_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data:; font-src data:; media-src https:"
 const MAX_IDS_PER_MESSAGE = 200
 const MAX_ID_LENGTH = 200
 
-// Puts the CSP first in head so it applies before any lens script runs.
+// Puts the CSP before anything else in the document, right after the doctype, so it applies before any lens
+// script runs; the parser files it into head wherever the lens's own html and head tags come.
 export function wrap_lens(html: string): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${LENS_CSP}">`
-  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (head) => `${head}${meta}`)
-  return `<!doctype html><html><head>${meta}</head><body>${html}</body></html>`
+  return `<!doctype html>${meta}${html.replace(/^\s*<!doctype[^>]*>/i, "")}`
 }
 
 export function lens_data_url(html: string): string {
   return `data:text/html;charset=utf-8;base64,${Buffer.from(wrap_lens(html), "utf-8").toString("base64")}`
 }
 
-// The lens session only loads its own document and https images.
-export function lens_request_allowed(url: string, resource_type: string): boolean {
+// The lens session only loads its own document and the https images of items it was sent; any other address
+// (say an "image" whose query carries your items to someone's server) is refused.
+export function lens_request_allowed(url: string, resource_type: string, item_images: ReadonlySet<string> | undefined): boolean {
   if (url.startsWith("data:")) return true
-  return url.startsWith("https://") && (resource_type === "image" || resource_type === "media")
+  return url.startsWith("https://") && (resource_type === "image" || resource_type === "media") && Boolean(item_images?.has(url))
+}
+
+// The image addresses in items a lens is about to show: each item's image and the images of a reader article.
+export function item_images(items: ViewItem[]): string[] {
+  const found: string[] = []
+  for (const { item } of items) {
+    if (item.image_url) found.push(item.image_url)
+    try {
+      const blocks: unknown = JSON.parse(item.extra?.blocks ?? "[]")
+      if (Array.isArray(blocks)) for (const block of blocks) if (typeof block?.src === "string") found.push(block.src)
+    } catch {
+      continue
+    }
+  }
+  return found
 }
 
 function is_id(value: unknown): value is string {

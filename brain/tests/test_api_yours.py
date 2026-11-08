@@ -108,7 +108,7 @@ def test_a_refresh_drops_expired_items_you_never_opened(client, brain):
     [item] = client.post("/ingest", json={"source_id": "x", "records": [stale]}).json()["items"]
     forty_days_ago = (brain.clock() - timedelta(days=40)).isoformat()
     with brain.store.lock, brain.store.connection:
-        brain.store.connection.execute("UPDATE items SET fetched_at = ? WHERE item_id = ?", (forty_days_ago, item["item_id"]))
+        brain.store.connection.execute("UPDATE items SET fetched_at = ?, listed_at = ? WHERE item_id = ?", (forty_days_ago, forty_days_ago, item["item_id"]))
     refreshed_page(client)
     assert brain.store.get_item(item["item_id"]) is None
 

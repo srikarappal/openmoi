@@ -61,9 +61,10 @@ test("until you allow Chrome nothing is read there; after, X comes through your 
 })
 
 test("after a restart openMoi waits for the Chrome you paired, so X never asks for a sign in", async () => {
-  const app = await Harness.launch(world, { x_page: "x_home_signed_in.html", files: { ".moi/relay_trusted.json": JSON.stringify([unpacked_extension_id()]) } })
+  const secret = "5e".repeat(32)
+  const app = await Harness.launch(world, { x_page: "x_home_signed_in.html", files: { ".moi/relay_trusted.json": JSON.stringify({ [unpacked_extension_id()]: secret }) } })
   await sleep(3_000)
-  const chrome = await ChromeWithExtension.launch(world, app.relay_port)
+  const chrome = await ChromeWithExtension.launch(world, app.relay_port, secret)
   try {
     const seen = new Set<string>()
     await eventually(

@@ -68,8 +68,10 @@ def test_generate_spec_takes_domain_and_pattern_from_the_url(tmp_path):
     spec = generate_spec(hosted_gateway(tmp_path, recorder), "https://www.example.com/search/lamps?page=2", "<ul>skeleton</ul>", None)
     assert (spec.domain, spec.path_pattern, spec.page_type, spec.version) == ("example.com", "/search/lamps*", "listing", 1)
     assert spec.item_root == "li.result"
-    payload = json.loads(json.loads(recorder.requests[0].content)["messages"][1]["content"])
-    assert payload == {"url": "https://www.example.com/search/lamps?page=2", "skeleton": "<ul>skeleton</ul>", "last_error": None}
+    sent = recorder.requests[0].content.decode()
+    payload = json.loads(json.loads(sent)["messages"][1]["content"])
+    assert payload == {"site": "example.com", "skeleton": "<ul>skeleton</ul>", "last_error": None}
+    assert "lamps" not in sent and "page=2" not in sent
 
 
 def test_generate_spec_needs_url_and_title(tmp_path):

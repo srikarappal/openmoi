@@ -3,6 +3,7 @@ const STATUS_TEXT: Record<string, string> = {
   connected: "Connected to openMoi",
   waiting_for_approval: "Allow this extension in the openMoi app",
   offline: "openMoi is not running",
+  unrecognized: "The openMoi on this computer does not know this browser. If you reset openMoi, pair again.",
 }
 
 function element<T extends HTMLElement>(id: string): T {
@@ -14,6 +15,13 @@ async function show_status(): Promise<void> {
   element("status").textContent = STATUS_TEXT[status.state] ?? status.state
   element<HTMLButtonElement>("mine").disabled = status.state !== "connected"
   element<HTMLInputElement>("passive").checked = status.passive_enabled
+  element("pair").hidden = status.state !== "unrecognized"
+}
+
+async function pair_again(): Promise<void> {
+  await chrome.runtime.sendMessage({ type: "pair_again" })
+  element("note").textContent = "Now allow this browser in the openMoi app."
+  await show_status()
 }
 
 async function mine_this_page(): Promise<void> {
@@ -28,4 +36,5 @@ async function set_passive(): Promise<void> {
 
 element("mine").addEventListener("click", () => mine_this_page())
 element("passive").addEventListener("change", () => set_passive())
+element("pair").addEventListener("click", () => pair_again())
 show_status()
