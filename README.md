@@ -5,7 +5,7 @@ Your own version of the sites you use. A Chromium shell reads X, YouTube and new
 ## Run
 
 ```
-cd shell && npm install && npm start
+cd shell && npm ci && npm start
 ```
 
 Then connect your Chrome, so openMoi reads with the sessions you are already signed in to:

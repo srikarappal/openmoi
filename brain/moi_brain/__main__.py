@@ -8,7 +8,7 @@ import uvicorn
 
 from moi_brain.api import create_app
 from moi_brain.brain import Brain
-from moi_brain.config import load_paths, load_settings
+from moi_brain.config import load_env_file, load_paths, load_settings
 from moi_brain.feeds import YOUTUBE_BASE
 from moi_brain.relay import DEFAULT_PORT
 
@@ -18,6 +18,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     paths = load_paths()
+    for env_file in (paths.assets / ".env", paths.home / ".env"):
+        load_env_file(env_file)
     brain = Brain(paths, load_settings(paths), youtube_base=os.environ.get("MOI_YOUTUBE_BASE", YOUTUBE_BASE))
     try:
         brain.relay.start(int(os.environ.get("MOI_RELAY_PORT", DEFAULT_PORT)))

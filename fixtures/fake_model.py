@@ -106,12 +106,12 @@ def edit(payload: dict[str, Any], base_url: str) -> str:
     if (match := FIRST.search(ask)) is not None:
         new_rules.append(f"* Posts from @{match.group(1)} always first.")
     if new_rules:
-        edits.append({"file": view_file, "section": "Rules", "text": "\n".join(bullet_lines(files[view_file], "Rules") + new_rules)})
+        edits.append({"file": view_file, "section": "Rules", "text": "\n".join(bullet_lines(files.get(view_file, ""), "Rules") + new_rules)})
     if "vegetarian" in ask:
-        edits.append({"file": "memory/about_me.md", "section": None, "text": "\n".join([*bullet_lines(files["memory/about_me.md"], None), "* Vegetarian."])})
+        edits.append({"file": "memory/about_me.md", "section": None, "text": "\n".join([*bullet_lines(files.get("memory/about_me.md", ""), None), "* Vegetarian."])})
     if "less like this" in ask and request.get("item"):
         line = f"* Posts like \"{request['item']['title']}\""
-        edits.append({"file": "memory/dislikes.md", "section": None, "text": "\n".join([*bullet_lines(files["memory/dislikes.md"], None), line])})
+        edits.append({"file": "memory/dislikes.md", "section": None, "text": "\n".join([*bullet_lines(files.get("memory/dislikes.md", ""), None), line])})
     if "column" in ask or "magazine" in ask or "compact" in ask:
         edits.append({"file": view_file, "section": "Layout", "text": request["request"]})
     rollback = "previous look" in ask

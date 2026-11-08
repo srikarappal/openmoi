@@ -4,7 +4,22 @@ import { randomBytes } from "node:crypto"
 import { createServer } from "node:net"
 import path from "node:path"
 import { wait_for } from "../shared/timing"
-import type { BrainEvent, ExtractorSpec, IngestResult, LensKind, PageSource, Proposal, RawRecord, RelayPoll, ViewInfo, ViewPage } from "../shared/types"
+import type {
+  BrainEvent,
+  EditScope,
+  ExtractorSpec,
+  IngestResult,
+  LensKind,
+  ModelChange,
+  ModelInfo,
+  Overview,
+  PageSource,
+  Proposal,
+  RawRecord,
+  RelayPoll,
+  ViewInfo,
+  ViewPage,
+} from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
 const RESTART_DELAY_MS = 1_000
@@ -65,8 +80,24 @@ export class BrainClient {
     return this.request("POST", "/events", { events })
   }
 
-  edit(view_id: string, text: string, item_id?: string): Promise<Proposal> {
-    return this.request("POST", "/edit", { view_id, text, item_id })
+  edit(view_id: string, text: string, item_id?: string, scope: EditScope = "any"): Promise<Proposal> {
+    return this.request("POST", "/edit", { view_id, text, item_id, scope })
+  }
+
+  create_view(view_id: string, title: string): Promise<ViewInfo> {
+    return this.request("POST", "/views", { view_id, title })
+  }
+
+  model_info(): Promise<ModelInfo> {
+    return this.request("GET", "/model")
+  }
+
+  update_model(change: ModelChange): Promise<ModelInfo> {
+    return this.request("POST", "/model", change)
+  }
+
+  overview(view_id: string): Promise<Overview> {
+    return this.request("GET", `/overview/${encodeURIComponent(view_id)}`)
   }
 
   apply_edit(proposal_id: string): Promise<Proposal> {

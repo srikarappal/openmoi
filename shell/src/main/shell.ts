@@ -1,6 +1,6 @@
 // The window: chrome UI on top and on the right, one content area showing a lens or a web tab.
 import path from "node:path"
-import { BrowserWindow, ipcMain, type WebContentsView } from "electron"
+import { BrowserWindow, ipcMain, shell as desktop, type WebContentsView } from "electron"
 import { site_domain } from "../shared/address"
 import type {
   ActiveTarget,
@@ -28,6 +28,8 @@ import { SmokeTester } from "./smoke"
 import { SourceReader } from "./sources"
 import { TabManager, type Tab } from "./tabs"
 import { ViewController, view_lens_key } from "./views"
+
+function ignore(): void {}
 
 const TOP_BAR_HEIGHT = 48
 const SIDE_PANEL_WIDTH = 340
@@ -85,6 +87,10 @@ export class Shell implements ViewHost {
     this.chat = new ChatController(brain, {
       chat_view: () => this.chat_view_id,
       on_applied: (proposal) => this.on_applied(proposal),
+      view_created: (view_id) => this.on_view_created(view_id),
+      open_folder: (folder) => {
+        desktop.openPath(folder).catch(ignore)
+      },
       changed: () => this.push_state(),
     })
     this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload), {
@@ -289,9 +295,19 @@ export class Shell implements ViewHost {
     else await this.mine.reload_lens(view_id)
   }
 
-  // An applied edit can rename views, change rules, change the layout or roll the lens back.
-  private async on_applied(proposal: Proposal): Promise<void> {
+  private async on_view_created(view_id: string): Promise<void> {
     this.view_infos = await this.brain.views()
+    await this.open_view(view_id)
+  }
+
+  // An applied edit can create or rename views, change rules, change the layout or roll the lens back.
+  private async on_applied(proposal: Proposal): Promise<void> {
+    const known = new Set(this.view_infos.map((view) => view.view_id))
+    this.view_infos = await this.brain.views()
+    if (!known.has(proposal.view_id) && this.view_infos.some((view) => view.view_id === proposal.view_id)) {
+      await this.open_view(proposal.view_id)
+      return
+    }
     if (proposal.lens_action === "rollback") {
       await this.views.reload_lens(proposal.view_id)
       await this.mine.reload_lens(proposal.view_id)

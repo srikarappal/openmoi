@@ -117,7 +117,36 @@ test("with a hosted fast slot and the privacy switch off, chat asks for a local 
     await loaded(harness, "New laptop chip")
     await expect(harness.chrome.locator(".notice", { hasText: "Topic tagging paused" })).toHaveCount(1)
     await harness.chat("no shorts")
-    await expect(harness.chrome.locator(".message.moi").last()).toContainText("needs a local model")
+    await expect(harness.chrome.locator(".message.moi").last()).toContainText("/model privacy on")
+  } finally {
+    await harness.close()
+  }
+})
+
+test("slash commands: /newview makes a tab, /layout touches only the layout, /model and /help answer at once", async () => {
+  const harness = await Harness.launch(world)
+  try {
+    await loaded(harness, "New laptop chip")
+    await harness.chrome.locator(".composer input").fill("/me")
+    await expect(harness.chrome.locator(".hint .hint_usage")).toHaveText(["/memory <what to remember or forget>"])
+    await harness.chat("/help")
+    await expect(harness.chrome.locator(".message.moi").last()).toContainText("/newview <name> [what it should be]")
+
+    await harness.chat("/newview tech")
+    await expect(harness.chrome.locator("button.tab.view.active")).toHaveText("tech")
+    await expect(harness.chrome.locator(".chat_view")).toHaveText("Changes apply to tech")
+    expect(harness.file("views/tech.md")).toBe("# tech\n\n## Sources\n\n## Rules\n\n## Layout\n")
+
+    await harness.chat("/model")
+    await expect(harness.chrome.locator(".message.moi").last()).toContainText("fast: fake via custom (on this machine)")
+
+    await harness.chrome.locator("button.tab.view", { hasText: "Feed" }).click()
+    await harness.chat("/layout no shorts and make it compact")
+    const diff = harness.chrome.locator(".message.moi .diff").last()
+    await expect(diff).toContainText("+no shorts and make it compact")
+    await expect(diff).not.toContainText("+* No shorts.")
+    await harness.chrome.locator(".proposal_actions button", { hasText: "Discard" }).click()
+    expect(harness.file("views/feed.md")).not.toContain("compact")
   } finally {
     await harness.close()
   }

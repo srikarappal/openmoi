@@ -138,6 +138,39 @@ export interface Proposal {
   reply: string
 }
 
+export type EditScope = "any" | "memory" | "rules" | "sources" | "layout" | "view"
+
+export interface ModelChange {
+  slot?: "fast" | "smart" | "both"
+  provider?: "openrouter" | "ollama"
+  model?: string
+  allow_content_to_hosted?: boolean
+}
+
+export interface SlotInfo {
+  provider: string
+  model: string
+  base_url: string
+  local: boolean
+  key_ready: boolean
+}
+
+export interface ModelInfo {
+  fast: SlotInfo
+  smart: SlotInfo
+  allow_content_to_hosted: boolean
+}
+
+export interface Overview {
+  home: string
+  view_id: string
+  view_file: string
+  sections: Record<string, string>
+  memory: Record<string, string>
+  model: ModelInfo
+  relay: { connected: boolean }
+}
+
 export interface ChatEntry {
   entry_id: number
   role: "you" | "moi"

@@ -6,9 +6,10 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import Brain, MineRequest, PageSource, ViewPage
+from moi_brain.brain import Brain, MineRequest, Overview, PageSource, ViewPage
 from moi_brain.compile import BadInput, ViewInfo
-from moi_brain.edits import Proposal
+from moi_brain.config import ModelChange, ModelInfo
+from moi_brain.edits import EditScope, Proposal
 from moi_brain.extractors import ExtractorSpec
 from moi_brain.items import Event, Item, ViewItem
 from moi_brain.llm import LlmError, PrivacyBlocked
@@ -108,6 +109,12 @@ class EditRequest(BaseModel):
     view_id: str
     text: str = Field(min_length=1, max_length=2000)
     item_id: str | None = None
+    scope: EditScope = "any"
+
+
+class NewViewRequest(BaseModel):
+    view_id: str = Field(min_length=1, max_length=60)
+    title: str | None = Field(default=None, max_length=80)
 
 
 class ProposalRequest(BaseModel):
@@ -122,6 +129,26 @@ def health() -> dict[str, str]:
 @router.get("/views")
 def list_views(brain: BrainDep) -> list[ViewInfo]:
     return brain.compiler.view_infos()
+
+
+@router.post("/views")
+def create_view(body: NewViewRequest, brain: BrainDep) -> ViewInfo:
+    return brain.create_view(body.view_id, body.title)
+
+
+@router.get("/model")
+def model_settings(brain: BrainDep) -> ModelInfo:
+    return brain.model_settings()
+
+
+@router.post("/model")
+def update_model(body: ModelChange, brain: BrainDep) -> ModelInfo:
+    return brain.update_model(body)
+
+
+@router.get("/overview/{view_id}")
+def overview(view_id: str, brain: BrainDep) -> Overview:
+    return brain.overview(view_id)
 
 
 @router.post("/refresh")
@@ -151,7 +178,7 @@ def events(body: EventsRequest, brain: BrainDep) -> dict[str, int]:
 
 @router.post("/edit")
 def edit(body: EditRequest, brain: BrainDep) -> Proposal:
-    return brain.propose_edit(body.view_id, body.text, body.item_id)
+    return brain.propose_edit(body.view_id, body.text, body.item_id, body.scope)
 
 
 @router.post("/edit/apply")

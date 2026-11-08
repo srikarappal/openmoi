@@ -1,6 +1,7 @@
 // The chrome UI: view and web tabs, the address bar and the side panel.
 import { useEffect, useState, type FormEvent } from "react"
 import { createRoot } from "react-dom/client"
+import { matching_commands } from "../shared/commands"
 import type { ChatEntry, ShellCommand, ShellState } from "../shared/types"
 
 interface ShellBridge {
@@ -126,6 +127,21 @@ function ChatMessage({ entry }: { entry: ChatEntry }) {
   )
 }
 
+function CommandHints({ text, pick }: { text: string; pick: (name: string) => void }) {
+  const hints = matching_commands(text)
+  if (!hints.length) return null
+  return (
+    <div className="hints">
+      {hints.map((hint) => (
+        <button key={hint.name} className="hint" onClick={() => pick(hint.name)}>
+          <span className="hint_usage">{hint.usage}</span>
+          <span className="hint_summary">{hint.summary}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function Chat({ state }: { state: ShellState }) {
   const [text, set_text] = useState("")
   const submit = (event: FormEvent) => {
@@ -143,8 +159,9 @@ function Chat({ state }: { state: ShellState }) {
         {state.thinking && <div className="message moi thinking">Thinking</div>}
       </div>
       <form className="composer" onSubmit={submit}>
+        <CommandHints text={text} pick={(name) => set_text(`${name} `)} />
         <div className="chat_view">Changes apply to {state.chat_view}</div>
-        <input value={text} placeholder="Tell openMoi what you want" onChange={(event) => set_text(event.target.value)} />
+        <input value={text} placeholder="Tell openMoi what you want, or type / for commands" onChange={(event) => set_text(event.target.value)} />
       </form>
     </section>
   )

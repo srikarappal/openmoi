@@ -11,17 +11,18 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from moi_brain.compile import CompiledView, Compiler, check_view_id
-from moi_brain.config import Paths, Settings, ensure_home
-from moi_brain.edits import Editor, Proposal
+from moi_brain.compile import BadInput, CompiledView, Compiler, ViewInfo, check_view_id
+from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, save_settings
+from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
 from moi_brain.items import Event, Item, ViewItem, normalize, rss_source_id, youtube_source_id
 from moi_brain.lens_gen import generate_lens
-from moi_brain.lenses import LENS_KINDS, LensStore, lens_key
+from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway
-from moi_brain.memory import Memory
+from moi_brain.md import parse_sections, section_text
+from moi_brain.memory import TOPIC_FILES, Memory
 from moi_brain.rank import PAGE_SIZE, Order, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
@@ -79,8 +80,21 @@ class MineRequest(BaseModel):
     title: str = ""
 
 
+class Overview(BaseModel):
+    """Everything /settings shows: the view's sections, memory, models, Chrome and where the files live."""
+
+    home: str
+    view_id: str
+    view_file: str
+    sections: dict[str, str]
+    memory: dict[str, str]
+    model: ModelInfo
+    relay: dict[str, Any]
+
+
 FeedReader = tuple[str, Callable[[], list[dict[str, Any]]]]
 MAX_RELAY_EVENTS = 50
+NEW_VIEW = "# {title}\n\n## Sources\n\n## Rules\n\n## Layout\n"
 
 
 def url_prefix(url: str) -> str:
@@ -283,9 +297,41 @@ class Brain:
         for item in opened.values():
             self.memory.append_journal(now, f"opened: {item.title or (item.text or '')[:80]} ({item.url})")
 
-    def propose_edit(self, view_id: str, request: str, item_id: str | None) -> Proposal:
+    def propose_edit(self, view_id: str, request: str, item_id: str | None, scope: EditScope = "any") -> Proposal:
         item = self.store.get_item(item_id) if item_id else None
-        return self.editor.propose(check_view_id(view_id), request, item, self.memory.journal_lines(self.clock()))
+        return self.editor.propose(check_view_id(view_id), request, item, self.memory.journal_lines(self.clock()), scope)
+
+    def create_view(self, view_id: str, title: str | None) -> ViewInfo:
+        """A new empty view file, which becomes a new tab."""
+        if check_view_id(view_id).startswith(SITE_PREFIX):
+            raise BadInput("site_ views are made by Mine; pick another name")
+        path = self.paths.views / f"{view_id}.md"
+        if path.exists():
+            raise BadInput(f"views/{view_id}.md already exists")
+        path.write_text(NEW_VIEW.format(title=title or view_id))
+        return ViewInfo(view_id=view_id, title=title or view_id)
+
+    def model_settings(self) -> ModelInfo:
+        return model_info(self.gateway.settings)
+
+    def update_model(self, change: ModelChange) -> ModelInfo:
+        """Change a slot or the privacy switch; it is saved to .moi/config.json and used from the next call on."""
+        settings = apply_model_change(self.gateway.settings, change)
+        save_settings(self.paths, settings)
+        self.gateway.settings = settings
+        return model_info(settings)
+
+    def overview(self, view_id: str) -> Overview:
+        _, sections = parse_sections(self.compiler.view_text(view_id))
+        return Overview(
+            home=str(self.paths.home),
+            view_id=view_id,
+            view_file=f"views/{view_id}.md",
+            sections={name: section_text(sections, name) for name in VIEW_SECTIONS},
+            memory={name: self.memory.topic_text(name) for name in TOPIC_FILES},
+            model=self.model_settings(),
+            relay=self.relay_status(),
+        )
 
     def apply_edit(self, proposal_id: str) -> Proposal:
         """Write the proposal, recompile its view now so problems show at once, roll the lens back if asked."""

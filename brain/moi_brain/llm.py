@@ -65,9 +65,9 @@ class Gateway:
         if contains_user_content and not slot.is_local and not self.settings.allow_content_to_hosted:
             raise PrivacyBlocked(
                 f"{task} needs your content but the {slot_name} slot is a hosted model; "
-                "start a local model or turn on allow_content_to_hosted"
+                "start a local model or allow it with /model privacy on"
             )
-        payload: dict[str, Any] = {"model": slot.model, "messages": messages, "temperature": 0.2}
+        payload: dict[str, Any] = {**slot.extra, "model": slot.model, "messages": messages, "temperature": 0.2}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         headers = {"x-moi-task": task}

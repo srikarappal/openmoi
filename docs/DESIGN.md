@@ -373,6 +373,9 @@ Memory rules:
 * One privacy switch, `allow_content_to_hosted`, off by default. Off means items, memory and rules never reach a hosted model: if no local model is running, tagging pauses and chat edits ask you to start one or flip the switch.
 * The smart slot only ever sees layout text, schemas, synthetic fixtures and skeletons.
 * Every call appends one line to `logs/llm_calls.jsonl`: time, task, slot, model, tokens, estimated cost and whether it contained your content.
+* Known providers are presets: `ollama` (local) and `openrouter` (hosted, key in `OPENROUTER_API_KEY`). A preset sets the address, the key variable and per slot extras: on OpenRouter the fast slot runs with reasoning off (a tagging call takes under a second) and the smart slot with reasoning on.
+* Keys live in a `.env` file next to the code or in `~/openMoi/`, never in config.json or git. openMoi's own `.env` wins over a variable already exported in your shell, so a stale shell key cannot shadow it.
+* `/model` (9.9) changes slots and the privacy switch from the chat panel.
 
 ### 9.8 Chrome relay
 
@@ -383,6 +386,23 @@ openMoi reads through the Chrome you already use, so there is nothing to sign in
 * **Window** (`relay_link.ts`, `drivers.ts`): polls the hub once a second for state, approval requests and Mine requests; picks the page driver; opens originals in your Chrome; shows a page you pressed Mine on as a "Mine:" tab.
 * **Keeping the extension awake:** Chrome keeps an extension service worker alive while its WebSocket is active, so the extension pings every 20 s; an alarm reconnects it if Chrome stopped it anyway.
 * **Fallback:** without the extension, openMoi reads in its own Chromium session and says that connecting Chrome would use your Chrome sign in.
+
+### 9.9 Chat commands
+
+The chat panel takes slash commands for each kind of setting; anything without a slash stays free form and openMoi works out from context what to change. Typing `/` lists the commands.
+
+| Command | Does | Needs a model |
+|---|---|---|
+| `/feed <what this view should show>` | Edits only the Rules section of the current view | Yes, then you confirm the diff |
+| `/sources <what to read>` | Edits only the Sources section | Yes, then you confirm |
+| `/layout <how it should look>` | Edits only the Layout section; a new tested lens follows | Yes, then you confirm |
+| `/memory <what to remember or forget>` | Edits only the memory files | Yes, then you confirm |
+| `/newview <name> [what it should be]` | Creates `views/<name>.md` as a new tab; with a description the model drafts the file for you to confirm | Only with a description |
+| `/model [fast\|smart\|both] [ollama\|openrouter] <model>`, `/model privacy on\|off` | Shows or changes the model slots and the privacy switch, saved to `.moi/config.json` | No |
+| `/settings [open]` | Shows the current view's sections, memory, models and Chrome; `open` opens `~/openMoi` | No |
+| `/help` | Lists the commands | No |
+
+A scope is enforced in the brain, not just asked of the model: files outside the scope are not even sent and edits to other sections are dropped.
 
 ## 10. MVP flows
 
@@ -521,7 +541,10 @@ Items expire after 30 days unless opened. Everything else the MVP stores is a fi
 | `POST /ingest {source_id, records, page_url, view_id?, kind?}` | Raw records to items; with a view id, also the Mine page ranked in page order and whether its lens is stale |
 | `POST /view/{view_id} {exclude_ids}` | Ranked page with reasons, excluding what the lens already shows, plus `refreshing`, `version` and `lens_stale` |
 | `POST /events {events}` | `open`, `seen`, `less_like_this`; opens also go into the journal |
-| `POST /edit {view_id, text, item_id?}` | Proposed section edits to .md files, shown as diffs |
+| `POST /edit {view_id, text, item_id?, scope}` | Proposed section edits to .md files, shown as diffs; `scope` (memory, rules, sources, layout, view) limits what may change |
+| `POST /views {view_id, title}` | A new empty view file |
+| `GET /model`, `POST /model {slot, provider, model, allow_content_to_hosted}` | Model slots and the privacy switch, saved to `.moi/config.json` |
+| `GET /overview/{view_id}` | What `/settings` shows: the view's sections, memory, models, Chrome, where the files live |
 | `POST /edit/apply`, `POST /edit/discard {proposal_id}` | Write confirmed edits and recompile, or drop the proposal |
 | `GET /lens/{view_id}?kind=` | The live lens HTML (generated version or the default) |
 | `POST /lens/generate {view_id, kind, last_error?}`, `POST /lens/accept {view_id, kind, html}` | One HTML lens file; keep it as the next version once the shell's smoke test passes |
@@ -709,15 +732,16 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 
 | Check | Result |
 |---|---|
-| Tests | 205 brain (unit and API integration), 135 shell and extension unit, 19 end to end in the real app (4 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 223 brain (unit and API integration), 172 shell and extension unit, 20 end to end in the real app (4 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; the background read tab closes after each read |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
 | Real feeds | Live Ars Technica and The Verge RSS plus two YouTube handles: 60 items in 1.6 s |
 | Real local model | llama3 8B on Ollama tags sensibly but needs about 6 s per item, which is why tagging runs in the background |
+| Real hosted model | Nemotron 3.5 on OpenRouter (free): a tagging call in 0.7 s with reasoning off; a "two column magazine" lens written in 45 s that rendered 30 of 30 synthetic items with no errors |
 | Code size | About 6k lines of product code including the extension (budget 8k) |
 
-Not yet measured: Mine on 7 of 10 real sites and a lens in under 60 s with a real smart model. Both need a hosted smart slot; the fake model proves the pipeline, not model quality.
+Not yet measured: Mine on 7 of 10 real sites with a real smart model.
 
 ## 14. Simplicity budget
 

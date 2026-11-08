@@ -4,6 +4,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
@@ -20,20 +21,99 @@ class Slot(BaseModel):
     api_key_env: str | None = None
     input_cost_per_million: float = 0.0
     output_cost_per_million: float = 0.0
+    extra: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def is_local(self) -> bool:
         return urlparse(self.base_url).hostname in LOCAL_HOSTS
 
 
+class Provider(BaseModel):
+    """A known model provider: where it lives, which env variable holds its key, extra fields per slot."""
+
+    base_url: str
+    api_key_env: str | None = None
+    fast_extra: dict[str, Any] = Field(default_factory=dict)
+    smart_extra: dict[str, Any] = Field(default_factory=dict)
+
+
+# The fast slot answers short JSON tasks, so reasoning stays off there; the smart slot writes code and reasons.
+PROVIDERS = {
+    "ollama": Provider(base_url="http://127.0.0.1:11434/v1"),
+    "openrouter": Provider(
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        fast_extra={"reasoning": {"enabled": False}},
+        smart_extra={"reasoning": {"enabled": True}},
+    ),
+}
+
+
 def local_slot() -> Slot:
-    return Slot(base_url="http://127.0.0.1:11434/v1", model="llama3")
+    return Slot(base_url=PROVIDERS["ollama"].base_url, model="llama3")
 
 
 class Settings(BaseModel):
     fast: Slot = Field(default_factory=local_slot)
     smart: Slot = Field(default_factory=local_slot)
     allow_content_to_hosted: bool = False
+
+
+class ModelChange(BaseModel):
+    """What /model asks for: a provider and model for one or both slots, or the privacy switch."""
+
+    slot: Literal["fast", "smart", "both"] = "both"
+    provider: Literal["openrouter", "ollama"] | None = None
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    allow_content_to_hosted: bool | None = None
+
+
+class SlotInfo(BaseModel):
+    provider: str
+    model: str
+    base_url: str
+    local: bool
+    key_ready: bool
+
+
+class ModelInfo(BaseModel):
+    fast: SlotInfo
+    smart: SlotInfo
+    allow_content_to_hosted: bool
+
+
+def provider_of(slot: Slot) -> str:
+    return next((name for name, provider in PROVIDERS.items() if provider.base_url == slot.base_url), "custom")
+
+
+def slot_info(slot: Slot) -> SlotInfo:
+    key_ready = slot.api_key_env is None or bool(os.environ.get(slot.api_key_env))
+    return SlotInfo(provider=provider_of(slot), model=slot.model, base_url=slot.base_url, local=slot.is_local, key_ready=key_ready)
+
+
+def model_info(settings: Settings) -> ModelInfo:
+    return ModelInfo(fast=slot_info(settings.fast), smart=slot_info(settings.smart), allow_content_to_hosted=settings.allow_content_to_hosted)
+
+
+def changed_slot(slot_name: str, current: Slot, change: ModelChange) -> Slot:
+    """A known provider brings its address, key variable and per slot extras; otherwise only the model name changes."""
+    provider_name = change.provider or provider_of(current)
+    model = change.model or current.model
+    provider = PROVIDERS.get(provider_name)
+    if provider is None:
+        return current.model_copy(update={"model": model})
+    extra = provider.fast_extra if slot_name == "fast" else provider.smart_extra
+    return Slot(base_url=provider.base_url, api_key_env=provider.api_key_env, model=model, extra=extra)
+
+
+def apply_model_change(settings: Settings, change: ModelChange) -> Settings:
+    updated = settings.model_copy(deep=True)
+    if change.allow_content_to_hosted is not None:
+        updated.allow_content_to_hosted = change.allow_content_to_hosted
+    if change.provider or change.model:
+        for slot_name in ("fast", "smart") if change.slot == "both" else (change.slot,):
+            setattr(updated, slot_name, changed_slot(slot_name, getattr(updated, slot_name), change))
+    return updated
 
 
 @dataclass(frozen=True)
@@ -142,6 +222,29 @@ def load_settings(paths: Paths) -> Settings:
     if paths.settings_file.exists():
         return Settings.model_validate_json(paths.settings_file.read_text())
     settings = Settings()
+    save_settings(paths, settings)
+    return settings
+
+
+def save_settings(paths: Paths, settings: Settings) -> None:
     paths.settings_file.parent.mkdir(parents=True, exist_ok=True)
     paths.settings_file.write_text(settings.model_dump_json(indent=2))
-    return settings
+
+
+def load_env_file(path: Path) -> list[str]:
+    """KEY=VALUE lines from openMoi's own .env file into the environment.
+
+    These win over variables already in your shell, so a stale key exported in a shell profile
+    never shadows the one you gave openMoi. Returns the names it set; values are never logged.
+    """
+    if not path.exists():
+        return []
+    loaded = []
+    for line in path.read_text().splitlines():
+        name, separator, value = line.strip().removeprefix("export ").partition("=")
+        name = name.strip()
+        if not separator or not name or name.startswith("#"):
+            continue
+        os.environ[name] = value.strip().strip("'\"")
+        loaded.append(name)
+    return loaded
