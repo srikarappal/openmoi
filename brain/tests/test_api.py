@@ -1,9 +1,12 @@
 """Integration: the HTTP API with real files, SQLite and the fake outside world."""
 
+from datetime import datetime, timedelta
+
 from conftest import TOKEN, wait_until_refreshed
 from fastapi.testclient import TestClient
 
 from moi_brain.api import create_app
+from moi_brain.brain import SEEN_KEEP, utc_now
 
 X_RECORDS = [
     {"native_id": "1000", "url": "https://x.com/maya/status/1000", "author_name": "Maya R", "author_handle": "maya", "text": "Post number 0 from maya"},
@@ -14,6 +17,14 @@ X_RECORDS = [
 
 def page_ids(page: dict) -> list[str]:
     return [view_item["item"]["native_id"] for view_item in page["items"]]
+
+
+def half_a_day_later() -> datetime:
+    return utc_now() + SEEN_KEEP + timedelta(minutes=1)
+
+
+def shown_item_ids(client: TestClient) -> list[str]:
+    return [view_item["item"]["item_id"] for view_item in client.post("/view/feed", json={}).json()["items"]]
 
 
 def test_token_is_required(brain):
@@ -70,14 +81,15 @@ def test_ingest_normalizes_page_records_into_the_view(client):
     assert len(client.post("/view/feed", json={}).json()["items"]) == 2
 
 
-def test_seen_items_leave_the_view_and_open_is_recorded(client):
+def test_seen_items_stay_for_half_a_day_then_leave_and_open_is_recorded(client, brain):
     client.post("/ingest", json={"source_id": "x", "records": X_RECORDS})
     page = client.post("/view/feed", json={}).json()
     first_id = page["items"][0]["item"]["item_id"]
     events = [{"view_id": "feed", "item_id": first_id, "event_kind": "seen"}, {"view_id": "feed", "item_id": first_id, "event_kind": "open"}]
     assert client.post("/events", json={"events": events}).json() == {"recorded": 2}
-    after = client.post("/view/feed", json={}).json()
-    assert first_id not in [view_item["item"]["item_id"] for view_item in after["items"]]
+    assert first_id in shown_item_ids(client)
+    brain.clock = half_a_day_later
+    assert first_id not in shown_item_ids(client)
     assert client.get("/debug").json()["store"]["events"] == {"seen": 1, "open": 1}
 
 

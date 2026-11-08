@@ -31,6 +31,8 @@ from moi_brain.tag import Tagger, rule_topics, watch_list
 PILOT_BUDGET = {"page_loads": 1, "scroll_steps": 5, "min_step_interval_ms": 1500}
 FEED_INTERVAL = timedelta(minutes=5)
 VIEW_WINDOW = timedelta(days=7)
+# What you saw stays in the view this long, so a new look or a reload shows the same feed instead of an empty one.
+SEEN_KEEP = timedelta(hours=12)
 X_DOMAIN = "x.com"
 HTTP_TIMEOUT = 15.0
 
@@ -266,7 +268,8 @@ class Brain:
     ) -> ViewPage:
         compiled = self.compiler.compiled(view_id)
         self.tagger.ensure_current(self.watch_list(), self.clock())
-        items = self.store.items_for_sources(compiled.source_ids(), self.clock() - VIEW_WINDOW)
+        now = self.clock()
+        items = self.store.items_for_sources(compiled.source_ids(), now - VIEW_WINDOW, now - SEEN_KEEP)
         if rule_topics(compiled.rules) and self.tagger.healthy:
             items = [item for item in items if item.tagged]
         ranked, has_more = rank(items, compiled.rules, self.clock(), set(exclude_ids), limit, order)

@@ -174,6 +174,9 @@
   function update_footer(cursor) {
     next_cursor = cursor
     footer.textContent = cursor ? "Loading more" : rendered.size ? "You're caught up." : "Nothing new yet."
+    // Observing again reports whether the end is still in view, so a short page keeps asking for more.
+    more_observer.unobserve(footer)
+    more_observer.observe(footer)
   }
 
   moi.on_render((items, cursor) => {

@@ -30,9 +30,11 @@ def test_items_for_sources_filters_by_source_window_and_seen(tmp_path):
     fresh, old, other, seen = make_item("x", "1"), make_item("x", "2", hours_old=200), make_item("rss:a", "3"), make_item("x", "4")
     store.upsert_items([fresh, old, other, seen])
     store.add_events([Event(view_id="feed", item_id=seen.item_id, event_kind="seen")], NOW)
-    found = store.items_for_sources(["x"], NOW - timedelta(days=7))
+    found = store.items_for_sources(["x"], NOW - timedelta(days=7), NOW + timedelta(seconds=1))
     assert [item.item_id for item in found] == [fresh.item_id]
-    assert store.items_for_sources([], NOW) == []
+    kept = store.items_for_sources(["x"], NOW - timedelta(days=7), NOW - timedelta(hours=12))
+    assert {item.item_id for item in kept} == {fresh.item_id, seen.item_id}
+    assert store.items_for_sources([], NOW, NOW) == []
     assert {item.item_id for item in store.recent_items(NOW - timedelta(days=7))} == {fresh.item_id, other.item_id}
 
 

@@ -9,6 +9,10 @@ import type { SourceReader } from "./sources"
 
 const SETTLE_POLL_MS = 1_000
 const SETTLE_ATTEMPTS = 30
+const MORE_CURSOR = "more"
+// Past the stored items the lens may ask to read the page sources further down, one more budget of scrolling each time.
+const DEEPER_CURSOR = "deeper"
+const MAX_DEPTH = 4
 
 export interface ViewHooks {
   open_original(url: string): void
@@ -38,16 +42,16 @@ function warning_tag(warning: string): string {
   return `warning:${warning}`
 }
 
-function cursor_for(page: ViewPage): string | null {
-  return page.has_more ? "more" : null
-}
-
 export class ViewController {
   private readonly versions = new Map<string, string>()
   private readonly summaries = new Map<string, string>()
   private readonly reported = new Set<string>()
   private readonly warned = new Map<string, string[]>()
   private readonly waiting_for_chrome = new Map<string, { view_id: string; source: PageSource }>()
+  private readonly page_sources = new Map<string, PageSource[]>()
+  private readonly depths = new Map<string, number>()
+  private readonly reached = new Map<string, number>()
+  private readonly deepening = new Set<string>()
 
   constructor(
     private readonly brain: BrainClient,
@@ -78,13 +82,20 @@ export class ViewController {
 
   private async render(context: LensContext): Promise<void> {
     const page = await this.brain.view_page(context.view_id, [])
-    context.send({ type: "render", items: page.items, cursor: cursor_for(page) })
+    context.send({ type: "render", items: page.items, cursor: this.cursor_for(page) })
     this.versions.set(context.view_id, page.version)
     const previous = this.summaries.get(context.view_id)
     if (previous !== undefined && previous !== page.summary) this.hooks.echo(`I understood: ${page.summary}`)
     this.summaries.set(context.view_id, page.summary)
     this.report(page)
     if (page.lens_stale) this.hooks.lens_stale(context.view_id, page.layout_hash)
+  }
+
+  // The next page of stored items, else reading the page sources further down, else caught up.
+  private cursor_for(page: ViewPage): string | null {
+    if (page.has_more) return MORE_CURSOR
+    const deeper = (this.page_sources.get(page.view_id)?.length ?? 0) > 0 && (this.depths.get(page.view_id) ?? 1) < MAX_DEPTH
+    return deeper ? DEEPER_CURSOR : null
   }
 
   // Each warning shows once per view and version, so a notice you dismissed stays dismissed; one that no longer holds goes away.
@@ -105,7 +116,9 @@ export class ViewController {
   async refresh(context: LensContext, force: boolean): Promise<void> {
     await this.hooks.track(`Updating ${context.view_id}`, async () => {
       const { page_sources } = await this.brain.refresh(context.view_id, force)
-      await Promise.all([this.settle(context), this.read_sources(context, page_sources, force)])
+      this.page_sources.set(context.view_id, page_sources)
+      this.depths.set(context.view_id, 1)
+      await Promise.all([this.settle(context), this.read_and_settle(context, page_sources, force, 1)])
     })
   }
 
@@ -121,30 +134,67 @@ export class ViewController {
     this.waiting_for_chrome.clear()
     for (const { view_id, source } of waiting) {
       const context = this.lenses.get(view_lens_key(view_id))
-      if (context) await this.read_sources(context, [source], true)
+      if (context) await this.read_and_settle(context, [source], true, 1)
     }
   }
 
-  // A notice about a source is replaced by its latest read, so one that worked leaves nothing behind.
-  private async read_sources(context: LensContext, sources: PageSource[], force: boolean): Promise<void> {
+  // You scrolled past everything stored: read the page sources again and further down, at the same human pace.
+  private async go_deeper(context: LensContext): Promise<void> {
+    const view_id = context.view_id
+    if (this.deepening.has(view_id)) return
+    const depth = (this.depths.get(view_id) ?? 1) + 1
+    if (depth > MAX_DEPTH) {
+      await this.append_next(context)
+      return
+    }
+    this.depths.set(view_id, depth)
+    this.deepening.add(view_id)
+    try {
+      await this.hooks.track(`Reading further down for ${view_id}`, () => this.read_and_settle(context, this.page_sources.get(view_id) ?? [], true, depth))
+    } finally {
+      this.deepening.delete(view_id)
+    }
+  }
+
+  // A read further down that reached no more records than the one before means the page has nothing more: caught up.
+  private async read_and_settle(context: LensContext, sources: PageSource[], force: boolean, depth: number): Promise<void> {
+    if (!sources.length) return
+    const view_id = context.view_id
+    const reached = await this.read_sources(context, sources, force, depth)
+    const previous = depth > 1 ? (this.reached.get(view_id) ?? 0) : 0
+    this.reached.set(view_id, reached)
+    if (depth > 1 && reached <= previous) this.depths.set(view_id, MAX_DEPTH)
+    await this.settle(context)
+  }
+
+  // A notice about a source is replaced by its latest read, so one that worked leaves nothing behind. Returns the records reached.
+  private async read_sources(context: LensContext, sources: PageSource[], force: boolean, depth: number): Promise<number> {
+    let reached = 0
     for (const source of sources) {
       const tag = source_tag(source.source_id)
       const outcome = await this.hooks.track(`Reading ${source.source_id}`, () =>
-        this.sources.read(source, force, (records) => {
-          this.hooks.retract(tag)
-          return this.ingest_batch(context, source, records)
-        }),
+        this.sources.read(
+          source,
+          force,
+          (records) => {
+            this.hooks.retract(tag)
+            return this.ingest_batch(context, source, records)
+          },
+          depth,
+        ),
       )
       if (outcome.status === "skipped") continue
       this.hooks.retract(tag)
-      if (outcome.status === "challenge") {
+      if (outcome.status === "read") {
+        reached += outcome.count
+      } else if (outcome.status === "challenge") {
         if (outcome.driver === "openmoi") this.waiting_for_chrome.set(`${context.view_id}\0${source.source_id}`, { view_id: context.view_id, source })
         this.hooks.notify(challenge_text(source.source_id, outcome.driver), outcome.url, tag)
       } else if (outcome.status === "failed") {
         this.hooks.notify(`${source.source_id} could not be read: ${outcome.error}`, undefined, tag)
       }
     }
-    if (sources.length) await this.settle(context)
+    return reached
   }
 
   // Appends whatever is new until the brain has finished fetching and tagging.
@@ -188,7 +238,7 @@ export class ViewController {
   private append_next(context: LensContext): Promise<ViewPage> {
     return context.serial(async () => {
       const page = await this.brain.view_page(context.view_id, [...context.rendered.keys()])
-      if (page.items.length || !page.has_more) context.send({ type: "append", items: page.items, cursor: cursor_for(page) })
+      if (page.items.length || !page.has_more) context.send({ type: "append", items: page.items, cursor: this.cursor_for(page) })
       this.report(page)
       return page
     })
@@ -202,6 +252,8 @@ export class ViewController {
     } else if (message.type === "less_like_this" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "less_like_this" }])
       this.hooks.less_like_this(context.view_id, item)
+    } else if (message.type === "more" && message.cursor === DEEPER_CURSOR) {
+      await this.go_deeper(context)
     } else if (message.type === "more") {
       await this.append_next(context)
     } else if (message.type === "seen") {

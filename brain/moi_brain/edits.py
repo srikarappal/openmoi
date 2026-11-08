@@ -39,8 +39,9 @@ recent_journal lists what the person opened lately; use it when the request refe
 Files you may edit, all given to you with their current content:
 * views/<view>.md: sections "Sources", "Rules" and "Layout". For these give "section" and the complete new text of that section.
   Rules are plain words, one per line, each line starting with "* ".
-  Layout describes the look in plain words. Keep every detail the person asks for, close to their own words
-  (for example "a separate section for each source") and drop only older lines the request replaces.
+  Layout describes the look in plain words, one idea per line. Add what the person asks for as new lines, close to their own words
+  (for example "A separate section for each source."). Keep every existing Layout line unless the request names that exact look
+  and asks to drop or change it: a request about one aspect (sections, sizes, colors) never removes lines about another (tile style).
 * memory/about_me.md, memory/likes.md, memory/dislikes.md, memory/people.md: lists of lines starting with "* ".
   For these use "section": null and give the complete new list.
 

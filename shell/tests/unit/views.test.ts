@@ -37,7 +37,7 @@ describe("ViewController page sources", () => {
     expect(hooks.labels).toEqual(["Updating feed", "Reading x"])
     expect(hooks.notify).toHaveBeenCalledWith(expect.stringContaining("x needs your Chrome sign in"), "https://x.com/login", "source:x")
     await views.chrome_connected()
-    expect(sources.read).toHaveBeenLastCalledWith(X_SOURCE, true, expect.any(Function))
+    expect(sources.read).toHaveBeenLastCalledWith(X_SOURCE, true, expect.any(Function), 1)
     expect(hooks.retract).toHaveBeenLastCalledWith("source:x")
     expect(hooks.notify).toHaveBeenCalledTimes(1)
     await views.chrome_connected()
@@ -77,3 +77,46 @@ describe("ViewController warnings", () => {
     expect(hooks.notify).toHaveBeenCalledTimes(1)
   })
 })
+
+describe("ViewController reading further down", () => {
+  function cursors(context: LensContext): Array<string | null> {
+    return (context.send as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0].cursor)
+  }
+
+  function reads(...counts: number[]): SourceOutcome[] {
+    return counts.map((count) => ({ status: "read", count, driver: "chrome" }))
+  }
+
+  it("past the stored items it reads X further down each time, then says caught up", async () => {
+    const { views, context, sources, hooks } = make_views(reads(10, 20, 30, 40))
+    await views.refresh(context, false)
+    expect(cursors(context).at(-1)).toBe("deeper")
+    for (const depth of [2, 3, 4]) {
+      await views.on_event(context, { type: "more", cursor: "deeper" })
+      expect(sources.read).toHaveBeenLastCalledWith(X_SOURCE, true, expect.any(Function), depth)
+    }
+    expect(cursors(context).at(-1)).toBeNull()
+    expect(hooks.labels).toContain("Reading further down for feed")
+    await views.on_event(context, { type: "more", cursor: "more" })
+    expect(sources.read).toHaveBeenCalledTimes(4)
+  })
+
+  it("says caught up as soon as reading further down reaches nothing new", async () => {
+    const { views, context, sources } = make_views(reads(20, 20))
+    await views.refresh(context, false)
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(cursors(context).at(-1)).toBeNull()
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(sources.read).toHaveBeenCalledTimes(2)
+  })
+
+  it("starts from the top again after a refresh", async () => {
+    const { views, context, sources } = make_views(reads(10, 20, 10, 20))
+    await views.refresh(context, false)
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    await views.refresh(context, true)
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(sources.read).toHaveBeenLastCalledWith(X_SOURCE, true, expect.any(Function), 2)
+  })
+})
+

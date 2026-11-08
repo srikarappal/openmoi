@@ -102,8 +102,9 @@ test("hand edits re-render when you come back to the view; the end says caught u
     expect(text).not.toContain("Election results")
     await expect(harness.chrome.locator(".message.moi", { hasText: "I understood:" })).toContainText("Hide politics")
     const [footer] = await eventually(
-      () => harness.in_lenses<string>(`document.getElementById("footer").innerText`),
+      () => harness.in_lenses<string>(`window.scrollTo(0, document.body.scrollHeight), document.getElementById("footer").innerText`),
       (values) => values[0] === "You're caught up.",
+      90_000,
     )
     expect(footer).toBe("You're caught up.")
   } finally {

@@ -14,7 +14,8 @@ HELPER_API = """moi.on_render((items, cursor) => {})   replace everything with t
 moi.on_append((items, cursor) => {})   add these items below, skipping item ids already shown
 moi.ready()                            call once after registering both listeners; the host then sends the first render
 moi.open(item_id)                      open the original
-moi.more(cursor)                       ask for the next page when cursor is not null and the end of the list is visible
+moi.more(cursor)                       ask for the next page when cursor is not null and the end of the list is visible,
+                                       also right after a render or append that leaves the end visible (observe the end again)
 moi.seen(item_ids)                     report items that were visible for at least one second
 moi.less_like_this(item_id)            the person wants fewer items like this one
 Each entry of items is {"item": <Item>, "reasons": ["boost: author maya", "recent", "from x"]}; cursor is a string or null."""

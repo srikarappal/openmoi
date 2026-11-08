@@ -110,13 +110,15 @@ test("a page Mine cannot read leaves the original and says why", async () => {
   }
 })
 
-test("asking for a layout builds a smoke tested lens in under a minute; rollback restores the old look", async () => {
+test("asking for a layout builds a smoke tested lens in under a minute that still shows what you saw; rollback restores the old look", async () => {
   const harness = await Harness.launch(world)
   try {
     await eventually(
       () => harness.lens_text(),
       (value) => value.includes("New laptop chip"),
     )
+    const shown = await harness.brain<{ items: Array<{ item: { item_id: string } }> }>("/view/feed", {})
+    await harness.brain("/events", { events: shown.items.map((entry) => ({ view_id: "feed", item_id: entry.item.item_id, event_kind: "seen" })) })
     await harness.chat("make it a two column magazine")
     await expect(harness.chrome.locator(".message.moi .diff").first()).toContainText("+make it a two column magazine")
     const started = Date.now()

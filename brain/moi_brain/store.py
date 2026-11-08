@@ -2,7 +2,7 @@
 
 import sqlite3
 import threading
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from moi_brain.items import Event, Item
@@ -31,7 +31,10 @@ CREATE INDEX IF NOT EXISTS events_by_item ON events (item_id);
 
 
 def iso(moment: datetime | None) -> str | None:
-    return moment.isoformat() if moment else None
+    """Times are stored in UTC, so comparing the stored text compares the moments."""
+    if moment is None:
+        return None
+    return (moment.astimezone(UTC) if moment.tzinfo else moment).isoformat()
 
 
 class Store:
@@ -58,17 +61,17 @@ class Store:
                     new_items.append(item)
         return new_items
 
-    def items_for_sources(self, source_ids: list[str], since: datetime) -> list[Item]:
-        """Unseen items from these sources published (or fetched) after since."""
+    def items_for_sources(self, source_ids: list[str], since: datetime, seen_since: datetime) -> list[Item]:
+        """Items from these sources published (or fetched) after since, unless you saw them before seen_since."""
         if not source_ids:
             return []
         marks = ", ".join("?" for _ in source_ids)
         query = (
             f"SELECT item_json FROM items WHERE source_id IN ({marks}) "
-            "AND seen_at IS NULL AND COALESCE(published_at, fetched_at) >= ?"
+            "AND (seen_at IS NULL OR seen_at >= ?) AND COALESCE(published_at, fetched_at) >= ?"
         )
         with self.lock:
-            rows = self.connection.execute(query, (*source_ids, iso(since))).fetchall()
+            rows = self.connection.execute(query, (*source_ids, iso(seen_since), iso(since))).fetchall()
         return [Item.model_validate_json(row[0]) for row in rows]
 
     def recent_items(self, since: datetime) -> list[Item]:

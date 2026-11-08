@@ -31,8 +31,8 @@ export class SourceReader {
     private readonly throttle = new Throttle(AUTO_INTERVAL_MS),
   ) {}
 
-  // One page load plus the budgeted scrolls; automatic reads at most every 10 minutes per source.
-  async read(source: PageSource, force: boolean, on_batch: BatchHandler): Promise<SourceOutcome> {
+  // One page load plus the budgeted scrolls, times depth when you scroll past the end; automatic reads at most every 10 minutes per source.
+  async read(source: PageSource, force: boolean, on_batch: BatchHandler, depth = 1): Promise<SourceOutcome> {
     if (!this.throttle.allow(source.source_id, force)) return { status: "skipped" }
     const driver = await this.driver_for()
     let handle: string | null = null
@@ -42,7 +42,7 @@ export class SourceReader {
       if (first === null) return { status: "challenge", url: await driver.url(handle), driver: driver.kind }
       const collected = new Map<string, RawRecord>()
       await deliver(first, collected, on_batch)
-      const steps = source.spec.pagination.kind === "scroll" && first.length ? source.budget.scroll_steps : 0
+      const steps = source.spec.pagination.kind === "scroll" && first.length ? source.budget.scroll_steps * depth : 0
       for (let step = 0; step < steps; step++) {
         await driver.run(handle, "scroll", { step_px: source.spec.pagination.step_px })
         await sleep(source.budget.min_step_interval_ms)
