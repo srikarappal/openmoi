@@ -1,8 +1,10 @@
 # openMoi: your reality
 
-Design doc · draft v2 · Nov 4, 2026 · owner: srikar
+Design doc · draft v3 · Nov 11, 2026 · owner: srikar
 
-**How to read this doc.** Part 1 is the MVP: the first thing we build, small and real, enough to taste the promise. Part 2 is everything later. It stays here so the MVP's bones point the right way, not so we build it now.
+**How to read this doc.** Part 1 is the MVP: the first thing we build, small and real, enough to taste the promise. Part 2 is everything later. It stays here so the MVP's bones point the right way, not so we build it now. Part 3 is a proposal: scenarios that make the vision real for a user and the gaps between them and this design.
+
+**Status tags** on sections: `[built]` done and tested, `[partly built]` some of it shipped early, `[not built]`, `[proposed]` new and not yet agreed.
 
 ## Contents
 
@@ -13,38 +15,46 @@ Shared
 3. From the sketch to this design
 4. Target design (full HLD)
 
-Part 1: MVP
+Part 1: MVP `[built]`
 
-5. What the MVP must prove
-6. Scope: in and out
-7. MVP architecture
-8. The bones
-9. MVP components
-10. MVP flows
-11. MVP data and contracts
-12. MVP guardrails
-13. Milestones
+5. What the MVP must prove `[built]`
+6. Scope: in and out `[built]`
+7. MVP architecture `[built]`
+8. The bones `[built]`
+9. MVP components `[built]`
+10. MVP flows `[built]`
+11. MVP data and contracts `[built]`
+12. MVP guardrails `[built]`
+13. Milestones `[M1 to M3 built]`
 14. Simplicity budget
 15. What got simplified and why
 
 Part 2: Later
 
 16. Later stages map
-17. L1 Robust reading
-18. L2 Smarter brain
-19. L3 Full lens engine
-20. L4 Intent views
-21. L5 Actions and the policy gate
-22. L6 Agents
-23. L7 Recipes and mashups
-24. L8 Native apps and System OS
-25. L9 Launch hardening
-26. Cross cutting: security, compliance, privacy, budgets, testing
+17. L1 Robust reading `[partly built]`
+18. L2 Smarter brain `[not built]`
+19. L3 Full lens engine `[partly built]`
+20. L4 Intent views `[not built]`
+21. L5 Actions and the policy gate `[not built]`
+22. L6 Agents `[not built]`
+23. L7 Recipes and mashups `[not built]`
+24. L8 Native apps and System OS `[not built]`
+25. L9 Launch hardening `[not built]`
+26. Cross cutting: security, compliance, privacy, budgets, testing `[partly built]`
 27. Tech stack and decisions
 28. Repo layout
 29. Risks
 30. Open questions
 31. Beyond
+
+Part 3: Your reality, your terms `[proposed]`
+
+32. Vision
+33. Scenarios
+34. Gaps
+35. Changes to this design
+36. Order
 
 # Shared
 
@@ -70,7 +80,7 @@ The MVP (Part 1) proves this with a Feed across X, YouTube and news, views and m
 | 2 | Generate the renderer, not the page | Lenses and extractors are generated once and cached; LLMs stay off the hot path |
 | 3 | One ladder | Same adapter contract for feeds, web pages and, later, native apps |
 | 4 | Local first | Sessions, items, memory and caches live on your disk; hosted models see structure, not your content, by default |
-| 5 | Your device, your session, your pace | Reads only on your action, fixed budgets, stop on challenge, no proxies, no fingerprint games |
+| 5 | Your device, your session, your pace | Reads only on your action, fixed budgets, stop on challenge, no proxies, no fingerprint games (Part 3 proposes reads on a schedule you wrote, 35) |
 | 6 | Reads free, writes gated | MVP is read only; later every write passes one gate and money always ends on the real site |
 | 7 | Content is data, never instructions | Web text can never trigger an action or change your files |
 | 8 | Inspectable and reversible | Your rules, memory and views are files you can read; reasons on every item; lens versions; show original |
@@ -166,14 +176,14 @@ Items flow up from sources to views. Actions (later) flow down from views throug
 | Brain | Compile .md, tag topics, rules, simple ranking, lens and extractor generation, LLM gateway | Learned ranking, clusters (L2), agents (L6) |
 | Source adapters | Rung 1 (RSS, YouTube RSS) in the brain; rung 3 (DOM specs) and Readability in your Chrome through the relay | Rung 2 (L1), rungs 4 and 5 (L8) |
 | Policy gate | not built: read only | L5 |
-| Websites | X, YouTube, RSS feeds; any page in your Chrome or in openMoi through "Mine" | Facebook and Amazon as Feed sources (L1) |
+| Websites | X, YouTube, RSS feeds; any site's feed page as a source that reads ahead as you scroll; any page in your Chrome or in openMoi through "Mine" | Facebook and Amazon tested as Feed sources (L1) |
 | Native apps | not built | L8 |
 | System OS | Chromium sessions only | Keychain, accessibility, screen, Spotlight (L8) |
 | Disk / FS | `~/openMoi/` plus SQLite with 2 tables | More tables as stages need them |
 
-# Part 1: MVP
+# Part 1: MVP `[built]`
 
-## 5. What the MVP must prove
+## 5. What the MVP must prove `[built]`
 
 Five moments. If a user feels these, the promise is real:
 
@@ -185,13 +195,13 @@ Five moments. If a user feels these, the promise is real:
 
 Not a goal for the MVP: being safe to hand to strangers. It is a dogfood build for the team and a few friendly testers, run from source.
 
-## 6. Scope: in and out
+## 6. Scope: in and out `[built]`
 
 | In the MVP | Out (where it goes later) |
 |---|---|
 | Electron shell with tabs and your own sessions | Packaging, signing, auto update (L9) |
 | Python brain on localhost HTTP | Unix socket RPC, schema codegen, supervisor (L9) |
-| Sources: X home timeline, YouTube channels through RSS (the channel's videos page when YouTube's feed server is down, which happens for hours at a time), any RSS feed | Facebook and Amazon as sources, passive JSON capture, assist mode (L1) |
+| Sources: X home timeline, YouTube channels through RSS (the channel's videos page when YouTube's feed server is down, which happens for hours at a time), any RSS feed, any site's feed page (`Page:`) read ahead in a reader tab | Facebook and Amazon tested as sources, passive JSON capture, assist mode (L1) |
 | "Mine" for any page: Readability for articles, generated extractor for listings | Page classifier with many types, structured data paths, health monitor, packs (L1) |
 | Views as .md files: sources, rules, layout in plain words | Match kinds beyond union, identity links (L7) |
 | Memory as .md files | Journal rollups, vectors (L2) |
@@ -201,7 +211,7 @@ Not a goal for the MVP: being safe to hand to strangers. It is a dogfood build f
 | Read only: act through "open original" | Gate, actions, executors (L5) |
 | | Agents (L6), native apps (L8) |
 
-## 7. MVP architecture
+## 7. MVP architecture `[built]`
 
 ```
                                       USER
@@ -244,9 +254,9 @@ Not a goal for the MVP: being safe to hand to strangers. It is a dogfood build f
       no saved extractor -> one is written from the page skeleton the first time, then kept
       openMoi quit -> the extension closes its reading tabs after a minute
 * The window calls the brain; the brain never calls the window. Anything that needs a browser (running an extractor, smoke testing a lens) runs on the window's side, which sends the result back in its next request.
-* RSS and YouTube feeds are public feeds meant for machines, so the brain fetches them directly. X is read in your Chrome: a background tab in a collapsed "openMoi" group, closed right after.
+* RSS and YouTube feeds are public feeds meant for machines, so the brain fetches them directly. X and every `Page:` source are read in your Chrome: one reader tab each in a collapsed "openMoi" group, kept open while you scroll and closed after 10 idle minutes.
 
-## 8. The bones
+## 8. The bones `[built]`
 
 The few decisions later stages build on. These must be right in the MVP; everything else may be rough.
 
@@ -263,15 +273,15 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 | Read only boundary | Items carry `available_actions`; no executor exists | The gate adds executors at one point (L5) |
 | Page driver | `open`, `run` a page operation, `url`, `close`; your Chrome through the relay, or openMoi's own session | Native apps as one more driver (L8); actions run through the same driver (L5) |
 
-## 9. MVP components
+## 9. MVP components `[built]`
 
 ### 9.1 Shell (Electron, TypeScript)
 
 * One window: a top bar (view tabs, one per `views/*.md`; web tabs; URL bar; "Mine" toggle; refresh), a main area (a lens or a web tab) and a chat panel on the side.
 * All web tabs and source views share one persistent session (`persist:web`), so you sign in to X once, like any browser.
-* Source views are hidden views that load a source page (X home) on your action. The first task of M1 is a spike confirming hidden views render and lazy load with `backgroundThrottling: false`; the fallback is keeping the view attached behind the lens.
+* Source pages are read in reader tabs in your Chrome (9.8). Without the extension, openMoi's own driver loads them in views attached behind the lens with `backgroundThrottling: false`, the fallback the M1 spike chose.
 * Preload script in an isolated world with three small pieces: the extraction interpreter (runs a JSON spec against the DOM), the skeletonizer (9.6) and Mozilla Readability.
-* Pilot reads: one page load plus up to 5 scrolls 1.5 s apart, only when you open or refresh a view, at most once every 10 minutes automatically.
+* Pilot reads: only when you open, refresh or scroll near the end of a view; each source's reader tab moves on at its pace (1.5 s between scrolls plus up to half again), automatic reads of a source at most once every 10 minutes, at most 200 scroll steps per source a day.
 * Challenge stop: on a login wall, CAPTCHA or checkpoint, stop reading that source, show you the real page and retry only when you press refresh.
 * Standard Chromium user agent; no spoofing of any kind.
 * Security baseline: `contextIsolation`, `sandbox`, no `nodeIntegration` in web content.
@@ -283,7 +293,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 |---|---|---|
 | RSS / Atom | Brain fetches with `feedparser` using conditional GET | 1 |
 | YouTube | Channel RSS feeds; channels listed in the view file by @handle (resolved to a channel id once, cached) or imported from a Takeout `subscriptions.csv` | 1 |
-| X | Handwritten extractor spec for the home timeline, run in a hidden source view in your session | 3 |
+| X | Handwritten extractor spec for the home timeline, run in a reader tab in your Chrome (or openMoi's session) | 3 |
 | Any website ("Mine") | Readability for articles; generated extractor spec for listings | 3 |
 | Any site's feed page (`* Page: <url>` in Sources) | A reader tab that keeps scrolling as you do: Instagram, Facebook, a YouTube home, any listing; its extractor is generated from the page the first time | 3 |
 
@@ -428,14 +438,14 @@ Several edits to one file in a reply build on each other. A proposal made before
 
 The top of the side panel says what openMoi is doing and for how long: asking the model, designing a new look, reading a source, updating a view, or Idle. Notices withdraw themselves once what they reported is no longer true (a source reads again, tagging works again after `/model`).
 
-## 10. MVP flows
+## 10. MVP flows `[built]`
 
 ### 10.1 Open a view
 
 ```
 open Feed -> cached lens + cached items render (under 300 ms)
   -> brain refreshes RSS + YouTube in a thread
-  -> shell reads X in a hidden source view (1 load, up to 5 scrolls)
+  -> shell moves the reader tab of X and of each Page: source on until the view has 30 items
   -> records -> /ingest -> tag new items -> rank
   -> lens re-render, new items land below what you are reading
 ```
@@ -492,13 +502,13 @@ source view hits a login wall, CAPTCHA or checkpoint -> stop that source
 
 ```
 first run: extension connects -> openMoi shows "wants to read pages" -> Allow -> remembered -> "Chrome connected"
-refresh:   window -> brain hub -> extension opens x.com/home in a quiet background tab -> page operations -> records -> brain -> tab closed
+refresh:   window -> brain hub -> extension opens x.com/home in a quiet background tab -> page operations -> records -> brain -> tab kept as the reader tab, closed after 10 idle minutes
 passive:   you scroll x.com yourself -> watcher sends new items every 3 s -> brain ingests them -> Feed fills, no automation
 mine:      you press Mine in Chrome -> openMoi reads your tab through the relay -> "Mine:" tab in openMoi -> your tab untouched
 originals: click an item in openMoi -> it opens in your Chrome, in front
 ```
 
-## 11. MVP data and contracts
+## 11. MVP data and contracts `[built]`
 
 ### 11.1 Item
 
@@ -526,6 +536,7 @@ class Item(BaseModel):
     published_at: datetime | None = None
     fetched_at: datetime
     topics: list[str] = Field(default_factory=list)
+    tagged: bool = False  # the tagger has looked at it
     available_actions: list[str] = Field(default_factory=list)  # empty until L5
     extra: dict[str, str] = Field(default_factory=dict)  # price_text, rating_text, duration
 ```
@@ -545,7 +556,9 @@ CREATE TABLE items (
     UNIQUE (source_id, url)  -- one copy per source; a view shows each URL once; seeing one copy marks them all
 );
 
-CREATE INDEX items_by_published ON items (published_at);
+CREATE INDEX items_by_url ON items (url);
+CREATE INDEX items_by_source ON items (source_id, published_at);
+CREATE INDEX events_by_item ON events (item_id);
 
 CREATE TABLE events (
     event_id INTEGER PRIMARY KEY,
@@ -565,7 +578,7 @@ Items expire after 30 days unless opened. Everything else the MVP stores is a fi
 | `GET /health`, `GET /views` | Liveness; the view tabs (every `views/*.md` except site views) |
 | `POST /refresh {view_id, force}` | Start the rung 1 refresh in a thread; returns the page sources the shell should read |
 | `POST /ingest {source_id, records, page_url, view_id?, kind?}` | Raw records to items; with a view id, also the Mine page ranked in page order and whether its lens is stale |
-| `POST /view/{view_id} {exclude_ids}` | Ranked page with reasons, excluding what the lens already shows, plus `refreshing`, `version` and `lens_stale` |
+| `POST /view/{view_id} {exclude_ids}` | Ranked page with reasons, excluding what the lens already shows, plus `refreshing`, `version`, `lens_stale` and `keep_rate` (per source, the share its rules let through, which sizes read ahead) |
 | `POST /events {events}` | `open`, `seen`, `less_like_this`; opens also go into the journal |
 | `POST /edit {view_id, text, item_id?, scope}` | Proposed section edits to .md files, shown as diffs; `scope` (memory, rules, sources, layout, view) limits what may change |
 | `POST /views {view_id, title}` | A new empty view file |
@@ -606,19 +619,22 @@ class Rule(BaseModel):
 
 
 class SourceRef(BaseModel):
-    source_id: str  # "x", "youtube", "rss"
+    source_id: Literal["x", "youtube", "rss", "page"]
     page_type: str | None = None
     channels: list[str] = Field(default_factory=list)
     feeds: list[str] = Field(default_factory=list)
+    pages: list[str] = Field(default_factory=list)  # any site's feed page, read in a reader tab
 
 
 class CompiledView(BaseModel):
     view_id: str
+    title: str
     file_hash: str
     sources: list[SourceRef]
     rules: list[Rule]
     layout: str
     summary: str  # plain words echo shown in chat
+    warnings: list[str]  # lines the compiler could not use
 ```
 
 The Feed file from 9.4 compiles to:
@@ -626,6 +642,7 @@ The Feed file from 9.4 compiles to:
 ```json
 {
   "view_id": "feed",
+  "title": "Feed",
   "file_hash": "sha256:5f1c",
   "sources": [
     {"source_id": "x", "page_type": "home_timeline"},
@@ -716,19 +733,25 @@ class FeedSource(Protocol):
 
 ```ts
 interface PageSource {
-  source_id: string
-  rung: 3
-  read(view: WebContentsView, spec: ExtractorSpec, budget: PilotBudget): Promise<RawRecord[]>
+  source_id: string              // "x", "page:instagram.com/"
+  page_type: string
+  start_url: string
+  spec: ExtractorSpec | null     // null until the reader writes one from the page
+  budget: PilotBudget
 }
 
 interface PilotBudget {
-  page_loads: 1
-  scroll_steps: number          // up to 5
-  min_step_interval_ms: number  // 1500
+  page_loads: number             // 1
+  scroll_steps: number           // 5
+  min_step_interval_ms: number   // 1500, plus up to half again
+  daily_steps?: number           // 200
 }
+
+// readers.ts: one tab per source that continues where it stopped
+fill(source, wanted, on_batch, force, from_top): Promise<FillOutcome>  // read, skipped, ended, exhausted, challenge, failed
 ```
 
-## 12. MVP guardrails
+## 12. MVP guardrails `[built]`
 
 Even a dogfood build keeps these, because they cost little now and a lot to retrofit:
 
@@ -742,10 +765,13 @@ Even a dogfood build keeps these, because they cost little now and a lot to retr
 8. Electron security baseline on every view.
 9. Chrome relay: only an extension you allowed may connect; openMoi only reads pages and only closes tabs it opened itself.
 
-## 13. Milestones
+Part 3 proposes changing 3 (reads on a schedule you wrote) and 5 (content may add to the journal); see 35.
+
+## 13. Milestones `[M1 to M3 built]`
 
 ```
-M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [next] -> pick the first later stage
+M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
+  -> 2 weeks of dogfood [next] -> pick the first later stage or the first step of Part 3 (36)
 ```
 
 | Milestone | Builds | Exit criteria | Rough size (2 engineers) |
@@ -754,7 +780,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 | M2 Yours | .md views and memory, compile, tagging, rules, ranking with reasons, seen and "caught up", chat edits with diff confirm, "less like this", a second view file | "No shorts, hide politics, Maya first" works by chat and by hand edit; every item shows its reasons; "caught up" appears | 2 weeks |
 | M3 Mine | Lens generation with smoke test and versions; Mine with Readability, generated listing extractors and drift regeneration | A "two column magazine" lens in under 60 s; Mine works on at least 7 of 10 test sites (Hacker News, Amazon search, a blog, a news article, a shop, a forum, a docs site, three more) | 2 to 3 weeks |
 
-### 13.1 As built (Nov 8, 2026)
+### 13.1 As built (Nov 11, 2026)
 
 | Check | Result |
 |---|---|
@@ -765,7 +791,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> 2 weeks of dogfood [n
 | Real feeds | Live Ars Technica and The Verge RSS plus two YouTube handles: 60 items in 1.6 s |
 | Real local model | llama3 8B on Ollama tags sensibly but needs about 6 s per item, which is why tagging runs in the background |
 | Real hosted model | Nemotron 3.5 on OpenRouter (free): a tagging call in 0.7 s with reasoning off; a "two column magazine" lens written in 45 s that rendered 30 of 30 synthetic items with no errors |
-| Code size | About 7.2k lines of product code including the extension (budget 8k) |
+| Code size | About 7.6k lines of product code: brain 3.5k, shell and extension 4.2k (budget 8k) |
 
 Not yet measured: Mine on 7 of 10 real sites with a real smart model.
 
@@ -782,7 +808,7 @@ Not yet measured: Mine on 7 of 10 real sites with a real smart model.
 |---|---|---|---|
 | Process boundary | Two way JSON RPC over a Unix socket, schema codegen, bundled Python, supervisor | One way localhost HTTP, handwritten TS types, `uv run` | Builds go to people outside the team (L9) |
 | Source ladder | 5 rungs plus passive JSON capture | RSS feeds, DOM specs, Readability | A source keeps breaking or native apps arrive (L1, L8) |
-| Sources | X, Facebook, YouTube, news, Amazon | X, YouTube, RSS; Amazon only through Mine | The Feed has proven itself (L1) |
+| Sources | X, Facebook, YouTube, news, Amazon | X, YouTube, RSS, any site's feed page with a generated spec; Amazon only through Mine | The Feed has proven itself (L1) |
 | Pacing and policy | Pilot and assist modes, site policy registry, signed packs, kill switch | Fixed budget in code, stop on challenge, specs in the repo | Distribution (L1, L9) |
 | Extractor healing | Skeleton, oracle check, candidate and active states, health stats, packs | Generate once, regenerate once on empty | More than a handful of sites break each week (L1) |
 | Rules | Nested grammar plus a rules screen | Plain words in .md, flat JSON with one `unless` | Real rules need nesting (L2) |
@@ -809,23 +835,25 @@ MVP -> ( L1 robust reading | L2 smarter brain | L3 full lens engine ) -> L4 inte
 
 Packaging from L9 moves earlier the day builds go to people outside the team.
 
-| Stage | Adds | Extends bone |
-|---|---|---|
-| L1 Robust reading | Facebook, Amazon, rung 2, assist mode, health monitor, packs, site policy | Source adapter |
-| L2 Smarter brain | Learned ranking, clusters, embeddings, search, richer rules | Event log, Item |
-| L3 Full lens engine | Test gate, visual judge, patch mode, media proxy, tokens, gesture binding | Lens contract |
-| L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file |
-| L5 Actions and gate | Tiers, executors, verify, audit, injection defense | Read only boundary, shell and brain split |
-| L6 Agents | Runtime, tools, standing tasks | Brain, gate |
-| L7 Recipes and mashups | Match kinds, identity and entity links | View as a .md file |
-| L8 Native apps | Swift helper, app ladder | Source adapter |
-| L9 Launch hardening | Packaging, socket RPC, privacy modes, kill switch, legal | LLM gateway, shell and brain split |
+| Stage | Adds | Extends bone | Status |
+|---|---|---|---|
+| L1 Robust reading | Facebook, Amazon, rung 2, assist mode, health monitor, packs, site policy | Source adapter | partly built |
+| L2 Smarter brain | Learned ranking, clusters, embeddings, search, richer rules | Event log, Item | not built |
+| L3 Full lens engine | Test gate, visual judge, patch mode, media proxy, tokens, gesture binding | Lens contract | partly built |
+| L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file | not built |
+| L5 Actions and gate | Tiers, executors, verify, audit, injection defense | Read only boundary, shell and brain split | not built |
+| L6 Agents | Runtime, tools, standing tasks | Brain, gate | not built |
+| L7 Recipes and mashups | Match kinds, identity and entity links | View as a .md file | not built |
+| L8 Native apps | Swift helper, app ladder | Source adapter | not built |
+| L9 Launch hardening | Packaging, socket RPC, privacy modes, kill switch, legal | LLM gateway, shell and brain split | not built |
 
-## 17. L1 Robust reading
+## 17. L1 Robust reading `[partly built]`
+
+**Built early:** any site's feed page as a source, its spec written from the page skeleton the first time (9.2); a daily scroll cap per source (200 steps); reader tabs that continue where they stopped (7). Facebook and Instagram through reader tabs are untested on the real sites.
 
 **Adds**
 
-* Facebook: rung 3 anchored on roles and aria labels (class names are obfuscated); assist mode by default, reading only pages you scroll yourself; history through "Download your information".
+* Facebook: rung 3 anchored on roles and aria labels (class names are obfuscated); assist mode by default, reading only pages you scroll yourself; history through "Download your information". Part 3 needs this decided per source instead (34.7).
 * Amazon as a Feed and Shop source: search results keyed by `data-asin`, product details on demand, `JSON-LD` where present; order history through the data export or Mail (L8).
 * Rung 2: `JSON-LD`, microdata, OpenGraph, RSS discovery and hydration state (`__NEXT_DATA__`, `__NUXT__`). Passive capture of the JSON the page already fetched, through the Chromium debugger protocol: zero extra requests, disabled per source if it causes trouble.
 * Pilot and assist modes per source, 24 h challenge backoff, daily caps.
@@ -865,7 +893,7 @@ Full spec format adds action anchors and quality hints:
 
 **Exit:** field accuracy at least 95% on golden fixtures; simulated drift repaired in under 2 minutes; Facebook and Amazon working in Feed and Mine.
 
-## 18. L2 Smarter brain
+## 18. L2 Smarter brain `[not built]`
 
 **Adds**
 
@@ -886,7 +914,9 @@ do        := hide | boost(weight) | demote(weight) | limit(count, per) | group_b
 
 **Exit:** NDCG@20 at least 15% above MVP ranking on the team's logs; the same story from 3 sources lands in one cluster in at least 90% of labeled cases.
 
-## 19. L3 Full lens engine
+## 19. L3 Full lens engine `[partly built]`
+
+**Built early:** a lens may load only the https images of items it was sent, enforced by its session and its CSP (a lighter stand in for the media proxy); opening an item or "less like this" needs a real click or key press in the lens and comes at most at the pace of clicks (a first form of gesture binding).
 
 **Adds**
 
@@ -909,7 +939,7 @@ request -> spec -> code
 
 **Exit:** lens switch under 100 ms; escape suite contained; generation under 60 s with every gate green.
 
-## 20. L4 Intent views
+## 20. L4 Intent views `[not built]`
 
 **Adds**
 
@@ -927,7 +957,7 @@ query -> searches Amazon + configured stores -> normalized products -> ranked by
 
 **Exit:** 14 consecutive days reading through openMoi instead of opening x.com, youtube.com or news sites directly.
 
-## 21. L5 Actions and the policy gate
+## 21. L5 Actions and the policy gate `[not built]`
 
 **Tiers**
 
@@ -954,7 +984,7 @@ action request (lens or agent) -> schema check
 
 **Exit:** like, reply and follow on X, add to cart on Amazon at 99% verified success on test accounts; zero unauthorized actions in the red team corpus; tier 3 automation impossible by construction.
 
-## 22. L6 Agents
+## 22. L6 Agents `[not built]`
 
 **Adds**
 
@@ -962,11 +992,11 @@ action request (lens or agent) -> schema check
 * Tools: `search_store`, `read_item` (returns a quarantined summary), `build_view`, `open_source_page` (counts against the pilot budget, visible in a "working" tab), `propose_action` (always through the gate), `propose_memory_edit` (you confirm), `notify`, `ask_user`.
 * Plan first: sources, rungs, budget and expiry shown before it runs; any deviation pauses and asks.
 * Agents: Digest (what you missed), Shop ("quiet dishwasher under $900 that fits 24 inches"), Research (report with citations), Cleanup (unfollow and unsubscribe proposals), Watcher (standing tasks such as a price drop).
-* Scheduling: rung 1 sources may refresh in the background at polite intervals honoring `Cache-Control` and `ETag`; rung 2 and 3 sources are read only while you use the app. No background page automation.
+* Scheduling: rung 1 sources may refresh in the background at polite intervals honoring `Cache-Control` and `ETag`; rung 2 and 3 sources are read only while you use the app. No background page automation. Part 3 proposes reading them on a view's schedule too (34.1), still read only.
 
 **Exit:** Shop agent shortlists rated useful (4 of 5 or better) on 20 scripted tasks with zero gate violations; every run traceable and cancelable.
 
-## 23. L7 Recipes and mashups
+## 23. L7 Recipes and mashups `[not built]`
 
 The MVP already treats every view as a recipe: a .md file with sources, rules and layout, merged as a union. L7 adds ways to combine sources beyond a union.
 
@@ -1032,7 +1062,7 @@ CREATE TABLE entity_links (
 
 **Guardrails:** recipes inherit every budget, the gate and the privacy switch; a recipe never raises a source's budget; costly recipes show page loads per open before you confirm; writes inside a mashup go to the item's own source; shared recipes strip people and personal rules.
 
-## 24. L8 Native apps and System OS
+## 24. L8 Native apps and System OS `[not built]`
 
 **Adds**
 
@@ -1052,7 +1082,7 @@ A system frameworks (EventKit, Contacts)
 
 **Exit:** Mail and Calendar items in views with zero synthetic clicks.
 
-## 25. L9 Launch hardening
+## 25. L9 Launch hardening `[not built]`
 
 **Adds**
 
@@ -1062,7 +1092,9 @@ A system frameworks (EventKit, Contacts)
 
 **Exit:** clean install to a first merged Feed in under 3 minutes; kill switch exercised end to end; review findings closed.
 
-## 26. Cross cutting: security, compliance, privacy, budgets, testing
+## 26. Cross cutting: security, compliance, privacy, budgets, testing `[partly built]`
+
+Items marked (MVP) below are built; the rest wait for their stage.
 
 ### 26.1 Security and prompt injection
 
@@ -1195,7 +1227,7 @@ Fixtures come from recorded sessions of team test accounts. There is no central 
 ```
 openMoi/
   shell/                   Electron + TypeScript
-    src/main/              window and layout, tabs, page drivers, relay link, lenses, views, chat, Mine, lens generation, smoke test, brain process
+    src/main/              window and layout, tabs, page drivers, relay link, reader tabs, listing specs, lenses, views, chat, Mine, lens generation, smoke test, activity, brain process
     src/extension/         Chrome extension: service worker, relay client, Chrome commands, content script, popup
     extension/             extension manifest and popup page (built into dist/extension)
     src/preload/           page (extract, scroll, challenge, skeleton, Readability), lens (the moi helper), chrome UI bridge
@@ -1235,7 +1267,7 @@ openMoi/
 
 | Risk | Stage | Mitigation |
 |---|---|---|
-| Hidden source views do not render or lazy load | MVP | Spike on day 1 of M1; fallback keeps the view attached behind the lens |
+| Hidden source views do not render or lazy load | MVP | Resolved: views attached behind the lens; reader tabs in your Chrome when the extension is connected |
 | X changes its DOM | MVP | Small handwritten spec, golden fixture, regenerate on empty |
 | Local model too weak for compile or chat edits | MVP | Echo back every compile; route to the smart slot when the privacy switch allows |
 | Generated lenses look generic or break | MVP | Default lenses, smoke test, numbered versions with rollback |
@@ -1252,6 +1284,8 @@ openMoi/
 4. Launch sources beyond X, YouTube and RSS: Facebook, Amazon, Reddit, LinkedIn each carry different policy risk.
 5. Sharing views and lenses: both hold no personal data once people and rules are stripped; who reviews shared ones?
 6. Multi device: sync `~/openMoi/` (files only, never sessions or the database), end to end encrypted?
+7. Background reads (34.1): is openMoi in the menu bar with Chrome open acceptable, or should an edition read only when you open it?
+8. Content passes on a local model take about 6 s per item: read an hour ahead, or allow a hosted model per view?
 
 ## 31. Beyond
 
@@ -1259,3 +1293,143 @@ openMoi/
 * Mobile companion: a viewer of your synced reality; it cannot host sessions, so it shows what the desktop gathered.
 * A gallery of shared views and lenses, with review.
 * Voice and ambient surfaces on top of the same views.
+
+# Part 3: Your reality, your terms `[proposed]`
+
+Proposal, Nov 11, 2026. Nothing here is agreed or built; it changes Parts 1 and 2 only where 35 says so.
+
+## 32. Vision
+
+> See the reality you want to see, not what they want to show you.
+>
+> Take control of your life: no brain rot, no doom scrolling.
+
+Sites tune their feeds for their own goals: time on site, ads, outrage. openMoi lets your goals choose and shape what reaches you, across every site at once.
+
+**Why only openMoi can do this.** The unlock is access plus delegation, not AI. openMoi reads through your own logged in session, ahead of you and at human pace, so the machine does the scrolling and only the machine faces the slot machine. Nobody else can: platforms won't, closed APIs block third parties, extensions only change the page you have open and AI assistants can't see your feeds.
+
+**The four hooks.** Doom scrolling runs on four mechanics. Each scenario in 33 removes one, or turns the same access into productivity.
+
+| Hook | What it does | What removes it |
+|---|---|---|
+| No stopping point | The feed never ends | Editions with a last item (scenario 1) |
+| Fear of missing out | You keep going in case something matters | A verified "you missed nothing" (2) |
+| Bait mixed with signal | You wade through strangers, ads and Reels to reach friends | Platforms unbundled into the parts you want (4) |
+| Notifications as hooks | A ping pulls you back into the feed | One batch at a time you chose (5) |
+
+## 33. Scenarios
+
+| # | Scenario | Flow | Status |
+|---|---|---|---|
+| 1 | Editions | reader tabs scroll X, Instagram and LinkedIn before 7am -> your rules keep 15 -> 7am edition -> view closed until 6pm | read ahead built; schedule not built |
+| 2 | You missed nothing | reader follows a chronological Following feed down to the last post you saw -> "nothing else from your 40 people since yesterday" -> you stop because you know | seen tracking built; the claim not built |
+| 3 | Intent gate | open openMoi -> "why are you here?" -> a 5 minute break gets 10 items then a stop screen, research gets a deep list, friends gets only people | not built |
+| 4 | Unbundled platforms | Facebook -> only events and birthdays; LinkedIn -> only job changes of people you know; YouTube -> new uploads from subscriptions, no sidebar; Instagram -> close friends, no Reels | `Page:` sources and rules built; Facebook and Instagram untested |
+| 5 | Notification firewall | reader opens each site's notifications page -> replies from people you know pass, likes and "trending" drop -> one batch at noon -> every app's push turned off | `Page:` sources built; batching not built |
+| 6 | Algorithm mirror | keep rate and topics per source -> weekly "X showed you 600 posts, 7% passed your rules, a third were anger" -> X earns your time or loses its place | keep rate and topics built; report not built |
+| 7 | Watch for me | visa slot page, school portal, a Marketplace seller -> reader checks at human pace -> one notice when it changes -> no more compulsive checking | not built |
+| 8 | Hunts across sites | Zillow, Craigslist and Facebook Marketplace -> "pets ok, not ground floor, under $3k" -> one listing on 3 sites merged -> only new matches; the same for jobs, used cars and deals | `Page:` sources and rules built; merging not built |
+| 9 | Watch before you watch | 40 minute video -> transcript summary plus the 6 minutes worth watching -> watch those or nothing | not built |
+| 10 | Your reading as memory | every article you open -> 3 line note in the journal -> "what was that lithium piece?" answered from what you actually read | journal of opens built; notes not built |
+| 11 | Updates, not repeats | new item on a story you followed -> "what changed since you read it Oct 3" -> retellings hidden | not built |
+| 12 | Share a filter, not a feed | a friend's "AI news without hype" view file -> runs on your own sources and session -> experts publish judgment instead of content | views as .md built; import not built |
+
+## 34. Gaps
+
+Five building blocks and four smaller pieces cover all 12. Two of the gaps are guardrails (12), not missing code. None of the 12 needs the L6 agent runtime: each is a read plus one model pass per item, the shape guardrail 6 already allows (JSON out, no tools), like topic tagging today.
+
+### 34.1 Background reads on a schedule (1, 5, 7, 8)
+
+* **Missing:** guardrail 3 says "reads only on your action"; L6 reads rung 2 and 3 sources only while you use the app.
+* **Design:** a view's Time section (34.2) says when it is due. The reader pool starts filling early enough for tagging to finish, inside the same daily budget per source, at the same pace, with the same challenge stop; a challenge waits for you instead of retrying.
+* **Needs:** openMoi running with its window closed (a menu bar icon, started at login), Chrome running and the Mac awake. A read missed during sleep runs at wake or when you open the view. Alerts use OS notifications while the window is closed.
+* **Side effect:** background time is what a slow local model needs. At about 6 s per item (13.1), 500 items take 50 minutes, so a local edition starts reading an hour ahead and its content never reaches a hosted model.
+
+### 34.2 Time in views (1, 3, 5)
+
+* **Missing:** a view is always open; nothing in it knows the clock.
+* **Design:** an optional Time section in plain words, compiled like Rules:
+
+```markdown
+## Time
+* Editions at 7:00 and 18:00, closed in between.
+* Weekdays 9:00 to 17:00: only the work sources.
+* A visit lasts 10 minutes, then a stop screen with what you read.
+```
+
+```json
+{"editions": ["07:00", "18:00"], "closed_between": true,
+ "windows": [{"days": "weekdays", "from": "09:00", "to": "17:00", "sources": ["rss"]}],
+ "visit_minutes": 10}
+```
+
+* A closed view shows its next edition time and nothing else. "Open anyway" is one click and is counted (34.6 history).
+* **Intent gate (3):** the first iteration is a chooser of your views at launch, each with its own visit length. An intent is a view; no new mechanism.
+
+### 34.3 Rules that use model judgments (4, 5, 6, 8)
+
+* **Missing:** rules test only source, author, topic, media type, text and age (11.4).
+* **Design:** a judgment is a named question the view's Rules imply: "is this an event or a birthday?", "monthly rent in dollars", "pets allowed?", "written to make you angry?". The compiler lists judgments next to topics; the tagging pass answers both in one call per batch, against a closed list as today; answers land in `extra` as `judged:<name>`; `Condition.field` gains `judged:<name>` so rules test them like topics. An item not yet judged waits like an untagged one.
+* **Folds in:** L2's ragebait score becomes one judgment. Listing fields (price, floor, pets) come from the extractor where the page has them and from a judgment where it does not.
+
+### 34.4 People and duplicates across sites (4, 5, 6, 8, 11)
+
+* **Missing:** `author_handle` belongs to one platform and duplicates merge only on an identical URL (11.2).
+* **People:** `memory/people.md` already holds handles per source and L7's identity links fill it. "People you know" needs your following lists: each platform's Following page read weekly as a `Page:` source into a `follows (source_id, handle, seen_at)` table, machine state rather than memory. `Condition.field` gains `author_in` (`people` or `following`); a stranger is an author in neither.
+* **Duplicates:** L2 clusters for stories (simhash, then embeddings within 48 h); L7 `same_product` extended to listings (address, price and first image). One card per cluster with "also on".
+
+### 34.5 Full content (9, 10, 11)
+
+* **Missing:** items hold a snippet; Readability runs only for Mine; nothing reads video transcripts.
+* **Design:** a content pass for items a view asks to summarize:
+
+```
+item kept by the rules -> its page opened by the reader driver within the page load budget
+  -> Readability, or a new transcript page operation for videos
+  -> model pass: JSON {summary, key_points, worth_watching: [start, end]} -> stored in extra
+  -> hosted model only with the privacy switch on
+```
+
+* **Journal:** opens already write the item's title to the journal (9.3), so web text already reaches a file prompts read. Make that the explicit rule: `memory/journal/` is the one place content may write, as quoted data with a link; topic files, views and rules still change only through a diff you confirm. Notes (10) append there and Chat Q&A (L4) cites them.
+* **Updates (11):** new item in a cluster you read -> pass comparing it with the summary you read -> "what changed" shown; a cluster with nothing new stays hidden.
+
+### 34.6 Smaller pieces
+
+| Piece | Missing | Design | Unlocks |
+|---|---|---|---|
+| Completeness | `caught_up` means openMoi has nothing more stored, not that the platform has nothing new | A `Page:` source marked chronological (X Following, Instagram Following) reads down to the newest item you already saw, then says "complete since <time>"; a ranked feed never claims it | 2 |
+| Page watch | Every source is a listing of items | `Watch: <url>` in Sources: the reader reads the page's main text at the source's pace, compares it with the last read and raises a notice when it changed in a way the view's Rules care about | 7 |
+| History | Keep rate is computed per render and never stored | A `source_days` table: per source and day, items listed, kept, judged angry and from strangers; a weekly report view | 6 |
+| Import | A shared view file has no way in | Drop a view file in chat -> untrusted text -> a proposal you confirm like any edit -> its lens regenerated from Layout, never copied; people and personal rules stripped (L7 guardrails) | 12 |
+
+### 34.7 Reading risk
+
+Facebook and Instagram through reader tabs are untested on the real sites (4, 5). L1 plans Facebook in assist mode, reading only pages you scroll yourself, which rules out a reader tab scrolling it for you. Decide per source in the site policy (26.2): pilot with a low daily cap, or assist only, in which case scenarios 4 and 5 cover Facebook only from what you scroll.
+
+## 35. Changes to this design
+
+| Where | Today | Proposed |
+|---|---|---|
+| Principle 5 (2), guardrail 3 (12) | Reads only on your action | Reads on your action or on a schedule you wrote, within the same daily budget per source |
+| Guardrail 5 (12) | Web content never writes memory or rules | Web content may add to `memory/journal/` as quoted data with a link; never to topic files, views or rules |
+| L6 scheduling (22) | Rung 2 and 3 sources read only while you use the app | Also read on a view's schedule (34.1); still read only |
+| L1 Facebook (17) | Assist mode by default | Chosen per source in the site policy (34.7) |
+| View file (9.4) | Sources, Rules, Layout | Adds an optional Time section |
+| Sources (9.2) | RSS, YouTube, X, `Page:` | Adds `Watch:` and a chronological mark on `Page:` |
+| Condition (11.4) | 6 fields | Adds `judged:<name>` and `author_in` |
+| Store (11.2) | 2 tables | Adds `follows` and `source_days` |
+| Page operations | extract, scroll, challenge, skeleton, readability | Adds transcript |
+
+## 36. Order
+
+Each step is usable on its own; the cheapest path to the most scenarios comes first.
+
+```
+judged rules [34.3] -> Time section + scheduled reads [34.1, 34.2] -> completeness [34.6]
+    => 1, 2, 3, 4 (except "people you know")
+  -> following lists [34.4]                 => 5, the rest of 4
+  -> source history [34.6]                  => 6
+  -> page watch [34.6]                      => 7
+  -> clusters [34.4] + content passes [34.5] => 8, 9, 10, 11
+  -> import [34.6]                          => 12
+```
