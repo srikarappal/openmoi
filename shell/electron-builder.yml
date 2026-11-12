@@ -1,0 +1,45 @@
+# Packages openMoi as a Mac app (scripts/package.sh runs this after building the shell, the helper and the Python).
+# The app's Resources mirror the repo: brain, lenses, templates, extractors, policy and helper/build, next to a Python
+# of its own, so the brain finds everything the way it does in the repo.
+appId: app.openmoi
+productName: openMoi
+directories:
+  output: release
+files:
+  - dist/**
+  - package.json
+  - "!node_modules/**"
+asarUnpack:
+  - dist/extension/**
+extraResources:
+  - from: ../brain/moi_brain
+    to: brain/moi_brain
+    filter: ["**/*.py"]
+  - from: ../lenses
+    to: lenses
+  - from: ../templates
+    to: templates
+  - from: ../extractors
+    to: extractors
+  - from: ../policy
+    to: policy
+  - from: ../helper/build/moi_mac_helper
+    to: helper/build/moi_mac_helper
+  - from: build/python
+    to: python
+mac:
+  category: public.app-category.news
+  target:
+    - dmg
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Signing and notarizing need your Apple Developer identity (CSC_LINK, APPLE_ID ...); without it the app is unsigned.
+  notarize: false
+  extendInfo:
+    NSCalendarsFullAccessUsageDescription: openMoi reads your events to show today's meetings in your views. It never changes them.
+    NSAppleEventsUsageDescription: openMoi reads newsletters and order confirmations from Mail, and your notes, to show them in your views. It never sends, moves or changes anything.
+    NSDocumentsFolderUsageDescription: openMoi reads the folders in Documents that your views name. It never changes them.
+    NSDesktopFolderUsageDescription: openMoi reads the folders on your Desktop that your views name. It never changes them.
+    NSDownloadsFolderUsageDescription: openMoi reads the folders in Downloads that your views name. It never changes them.

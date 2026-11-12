@@ -346,6 +346,9 @@ class FakeHost:
     def save_run(self, run):
         self.saved.append(run.status)
 
+    def cloud_for_this_thread(self, on):
+        self.cloud = on
+
 
 def runner_for(host: FakeHost, steps: list[dict]) -> AgentRunner:
     run = AgentRun(plan_id="p", kind="research", request="r", summary="s", steps=steps, budget=Budget(), created_at=NOW, expires_at=NOW + timedelta(hours=1), status="running")

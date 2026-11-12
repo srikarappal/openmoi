@@ -6,6 +6,7 @@ import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { chromium, _electron as electron, type BrowserContext, type ElectronApplication, type Page, type Worker } from "@playwright/test"
+import { BrainClient } from "../../src/main/brain"
 import { sleep, wait_for } from "../../src/shared/timing"
 
 export const SHELL_DIR = path.resolve(__dirname, "..", "..")
@@ -81,13 +82,17 @@ export interface LaunchOptions {
   // The folder of an earlier run, to start openMoi again on the same home, as after a restart.
   root?: string
   env?: Record<string, string>
+  // More settings for .moi/config.json, such as a pack channel.
+  config?: Record<string, unknown>
+  // A packaged openMoi to launch instead of the shell's dist/main.js.
+  executable?: string
 }
 
 export class Harness {
   private constructor(
     readonly app: ElectronApplication,
     readonly chrome: Page,
-    readonly brain_url: string,
+    readonly brain_socket: string,
     readonly root: string,
     readonly relay_port: number,
   ) {}
@@ -101,10 +106,11 @@ export class Harness {
     const assets = path.join(root, "assets")
     const home = path.join(root, "home")
     if (!options.root) Harness.prepare(world, options, assets, home)
-    const brain_port = await free_port()
+    // The brain answers on a Unix socket in the run's own folder, as it does for the shell.
+    const brain_socket = path.join(root, "brain.sock")
     const relay_port = await free_port()
     const app = await electron.launch({
-      args: [path.join(SHELL_DIR, "dist", "main.js")],
+      ...(options.executable ? { executablePath: options.executable, args: [] } : { args: [path.join(SHELL_DIR, "dist", "main.js")] }),
       env: {
         ...process.env,
         MOI_HOME: home,
@@ -113,14 +119,14 @@ export class Harness {
         MOI_EMBED_BASE: world.base_url,
         MOI_MEDIA_LOOPBACK: "1",
         MOI_HEADLESS: "1",
-        MOI_BRAIN_PORT: String(brain_port),
+        MOI_BRAIN_SOCKET: brain_socket,
         MOI_TOKEN: TOKEN,
         MOI_RELAY_PORT: String(relay_port),
         ...options.env,
       },
     })
     const chrome = await app.firstWindow()
-    return new Harness(app, chrome, `http://127.0.0.1:${brain_port}`, root, relay_port)
+    return new Harness(app, chrome, brain_socket, root, relay_port)
   }
 
   // A fresh home and assets folder with the fixture views, the X extractor pointed at the fake world and the fake model.
@@ -143,16 +149,11 @@ export class Harness {
       writeFileSync(path.join(assets, relative), text)
     }
     const slot = { base_url: `${world.base_url}/llm/v1`, model: "fake" }
-    writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot, ...(options.vision ? { vision: slot } : {}) }))
+    writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot, ...(options.vision ? { vision: slot } : {}), ...options.config }))
   }
 
   async brain<T>(route: string, body?: unknown): Promise<T> {
-    const response = await fetch(`${this.brain_url}${route}`, {
-      method: body === undefined ? "GET" : "POST",
-      headers: { "x-moi-token": TOKEN, "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    return (await response.json()) as T
+    return new BrainClient(this.brain_socket, TOKEN).request<T>(body === undefined ? "GET" : "POST", route, body)
   }
 
   // Runs script in every lens view and returns the results, in creation order.

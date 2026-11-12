@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { expect, test } from "@playwright/test"
-import { FakeWorld, Harness, TOKEN, eventually } from "./harness"
+import { FakeWorld, Harness, eventually } from "./harness"
 
 let world: FakeWorld
 
@@ -56,7 +56,7 @@ test("an edition shows only what was read by it, while its next read runs in the
       (text) => text.includes('"morning"'),
       60_000,
     )
-    const debug = await (await fetch(`${harness.brain_url}/debug`, { headers: { "x-moi-token": TOKEN } })).json()
+    const debug = await harness.brain<{ store: { items: Record<string, number> } }>("/debug")
     expect(debug.store.items["page:127.0.0.1/pages/endless.html"]).toBeGreaterThanOrEqual(30)
     expect(debug.store.items["rss:tech"]).toBeGreaterThan(0)
     await harness.chrome.locator(".notice", { hasText: "That is all of the" }).getByRole("button", { name: "Open anyway" }).click()

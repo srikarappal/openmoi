@@ -17,6 +17,9 @@ export interface ChatHooks {
   model_changed(): void
   // macOS let openMoi read an app: the view you are on reads again.
   app_allowed(): Promise<void>
+  // Everything was deleted: forget openMoi's web sessions, and start again once a new brain (not the one that
+  // deleted, given by its boot) answers.
+  everything_deleted(boot: string): Promise<void>
   open_folder(path: string): void
   // Turns reading in the background on or off; the reply says what that means.
   set_background(on: boolean): string
@@ -40,7 +43,7 @@ const GOOGLE_POLLS = 150
 
 export function explain(error: unknown): string {
   if (error instanceof BrainError && error.kind === "privacy") {
-    return "This needs a model that may see your content. Start Ollama, or allow hosted models with /model privacy on."
+    return "This needs a model that may see your content. Start Ollama, or let hosted models read it with /model privacy cloud (or hybrid naming the feature)."
   }
   if (error instanceof BrainError && error.kind === "llm") return `The model did not answer: ${error.message}`
   return error instanceof Error ? error.message : String(error)
@@ -164,6 +167,23 @@ export class ChatController {
         const access = await this.hooks.track(`Asking macOS about ${capability}`, () => this.brain.allow_app(capability))
         this.say(access.message)
         if (access.status[capability] === "allowed") await this.hooks.app_allowed()
+        return
+      }
+      case "backup": {
+        const { path } = await this.hooks.track("Saving everything", () => this.brain.export_everything())
+        this.hooks.show_file(path)
+        this.say(`Saved everything you have in openMoi as ${path}. Your keys, Chrome's pairing and Google's sign in are left out.`)
+        return
+      }
+      case "delete_everything": {
+        if (!command.confirmed) {
+          this.say("This deletes every view, memory file, lens, read item and setting openMoi keeps, its sign ins in its own browser and your keys file. Only the exports folder stays, so save a /backup first if you want one. To go ahead, say /delete everything confirm.")
+          return
+        }
+        const { boot } = await this.brain.health()
+        await this.brain.delete_everything()
+        await this.hooks.track("Starting over", () => this.hooks.everything_deleted(boot ?? ""))
+        this.say("Everything is deleted. openMoi starts over from its first views.")
         return
       }
       case "people": {

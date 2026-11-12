@@ -7,7 +7,10 @@ import { configure_sessions } from "./sessions"
 import { Shell } from "./shell"
 
 const DIST_DIR = __dirname
-const REPO_DIR = path.resolve(__dirname, "..", "..")
+// Packaged, the app's Resources hold the brain, lenses, templates, specs, policy and helper laid out as in the repo,
+// with a Python of its own; from the repo, uv runs the brain.
+const REPO_DIR = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "..", "..")
+const BUNDLED_PYTHON = app.isPackaged ? path.join(process.resourcesPath, "python", "bin", "python3") : undefined
 
 // The media proxy's scheme is standard and secure, so lens images load from it like https ones; this must come before
 // the app is ready.
@@ -19,7 +22,7 @@ let window_shell: Shell | null = null
 // Started at login, openMoi reads on schedule without putting a window in front of you.
 async function launch(): Promise<void> {
   configure_sessions()
-  brain_process = await BrainProcess.start(REPO_DIR)
+  brain_process = await BrainProcess.start(REPO_DIR, BUNDLED_PYTHON)
   window_shell = new Shell(brain_process.client, DIST_DIR, process.env.MOI_HEADLESS === "1", app.getLoginItemSettings().wasOpenedAtLogin === true)
   await window_shell.start()
 }

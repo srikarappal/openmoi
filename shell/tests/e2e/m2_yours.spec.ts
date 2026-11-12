@@ -116,7 +116,7 @@ test("with a hosted fast slot and the privacy switch off, chat asks for a local 
     await loaded(harness, "New laptop chip")
     await expect(harness.chrome.locator(".notice", { hasText: "Topic tagging paused" })).toHaveCount(1)
     await harness.chat("no shorts")
-    await expect(harness.chrome.locator(".message.moi").last()).toContainText("/model privacy on")
+    await expect(harness.chrome.locator(".message.moi").last()).toContainText("/model privacy cloud")
   } finally {
     await harness.close()
   }

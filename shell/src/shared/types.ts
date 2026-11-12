@@ -455,11 +455,16 @@ export interface Proposal {
 
 export type EditScope = "any" | "memory" | "rules" | "sources" | "layout" | "time" | "view"
 
+export type PrivacyMode = "local" | "hybrid" | "cloud"
+export type CloudFeature = "summaries" | "agents" | "answers" | "tagging" | "edits"
+
 export interface ModelChange {
   slot?: "fast" | "smart" | "both"
   provider?: "openrouter" | "ollama"
   model?: string
   allow_content_to_hosted?: boolean
+  privacy_mode?: PrivacyMode
+  cloud_features?: CloudFeature[]
 }
 
 export interface SlotInfo {
@@ -474,6 +479,8 @@ export interface ModelInfo {
   fast: SlotInfo
   smart: SlotInfo
   allow_content_to_hosted: boolean
+  privacy_mode: PrivacyMode
+  cloud_features: CloudFeature[]
 }
 
 export interface Overview {
@@ -577,7 +584,7 @@ export type ShellCommand =
   | { type: "confirm_action"; request_id: string }
   | { type: "decline_action"; request_id: string }
   | { type: "undo_action"; request_id: string }
-  | { type: "approve_plan"; plan_id: string }
+  | { type: "approve_plan"; plan_id: string; cloud?: boolean }
   | { type: "decline_plan"; plan_id: string }
   | { type: "stop_plan"; plan_id: string }
   | { type: "answer_plan"; plan_id: string; answer: string }

@@ -4,8 +4,9 @@ import type { ContentWanted, PageSource, ViewSchedule } from "../shared/types"
 import type { BrainClient } from "./brain"
 
 const TICK_MS = 60_000
-// The pack channel is asked for a newer pack once a day.
-const PACK_CHECK_MS = 24 * 60 * 60 * 1000
+// The pack channel is asked for a newer pack every 30 ticks (half an hour), so a site the kill switch removes stops
+// being read within the hour.
+const PACK_CHECK_TICKS = 30
 // Keys of reads that are not a view's: a view id never holds a NUL or a colon.
 const SUMMARIES = "\0summaries"
 
@@ -19,7 +20,7 @@ export interface SchedulerHooks {
   edition_out(schedule: ViewSchedule): void
   // A read for an edition finished and the edition is marked read.
   read_done(view_id: string): void
-  // What the daily look at the pack channel found.
+  // What the half hourly look at the pack channel found.
   packs(status: string): void
   failed(text: string): void
 }
@@ -85,7 +86,7 @@ export class Scheduler {
   }
 
   private check_packs(): void {
-    if (Date.now() - this.packs_checked_at < PACK_CHECK_MS) return
+    if (Date.now() - this.packs_checked_at < this.tick_ms * PACK_CHECK_TICKS) return
     this.packs_checked_at = Date.now()
     this.brain
       .update_packs()

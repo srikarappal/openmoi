@@ -42,7 +42,8 @@ def test_token_is_required(brain):
     anonymous = TestClient(create_app(brain, TOKEN))
     assert anonymous.get("/health").status_code == 401
     assert anonymous.get("/health", headers={"x-moi-token": "wrong"}).status_code == 401
-    assert anonymous.get("/health", headers={"x-moi-token": TOKEN}).json() == {"status": "ok"}
+    health = anonymous.get("/health", headers={"x-moi-token": TOKEN}).json()
+    assert health["status"] == "ok" and len(health["boot"]) == 32
 
 
 def test_views_lists_the_feed(client):

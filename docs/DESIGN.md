@@ -878,7 +878,7 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 | L6 Agents | Runtime, tools, standing tasks | Brain, gate | built |
 | L7 Recipes and mashups | Match kinds, identity and entity links | View as a .md file | built |
 | L8 Native apps | Swift helper, app ladder | Source adapter | built (rungs A, B and folders) |
-| L9 Launch hardening | Packaging, socket RPC, privacy modes, kill switch, legal | LLM gateway, shell and brain split | not built |
+| L9 Launch hardening | Packaging, socket RPC, privacy modes, kill switch, legal | LLM gateway, shell and brain split | built (reviews and notarization need people) |
 
 ## 17. L1 Robust reading `[built]`
 
@@ -1248,7 +1248,7 @@ view .md: * Calendar | * Mail: newsletters, orders | * Notes | * Files: ~/Docume
 
 Checked end to end with a fake helper that keeps the real helper's commands and permission rules, and with the real helper's commands that never ask; Mail and Calendar through the packaged app and its permission prompts wait for L9.
 
-## 25. L9 Launch hardening `[not built]`
+## 25. L9 Launch hardening `[built]`
 
 **Adds**
 
@@ -1257,6 +1257,27 @@ Checked end to end with a fake helper that keeps the real helper's commands and 
 * Privacy modes (26.3), signed updates, the remote kill switch, external security review, legal review, onboarding to a first Feed in under 3 minutes, full export and delete.
 
 **Exit:** clean install to a first merged Feed in under 3 minutes; kill switch exercised end to end; review findings closed.
+
+**As built (Nov 12, 2026):**
+
+```
+scripts/package.sh -> npm ci -> shell build -> Swift helper -> python-build-standalone 3.12.16, SHA256 checked
+  -> brain deps from uv.lock, with hashes -> electron-builder 26.0.12 -> openMoi.app and a DMG in shell/release
+shell start -> brain on a Unix socket in a 0700 folder, per launch token, host moi.brain
+  -> health check every 10 s -> 3 misses or an exit -> restart with 1, 2, 4 ... 30 s backoff
+pydantic models -> JSON Schema -> shell/src/shared/brain_schema.ts -> tsc checks the shell's own types accept them
+```
+
+| Piece | Built | Not verified |
+|---|---|---|
+| Packaging | `scripts/package.sh` builds `openMoi.app` and its DMG: hardened runtime, five entitlements (Chromium's JIT, the bundled Python's native code, Calendar, Apple Events), the usage strings macOS shows. Its Resources mirror the repo (brain, lenses, templates, specs, policy, the helper) next to a Python of its own, so the brain runs as it does from the repo. The packaged app goes from a fresh home to a first merged Feed in seconds (`tests/e2e/packaged.spec.ts`) | Notarization: it needs your Apple ID. Here the app was signed with the Developer ID found in the keychain |
+| Process boundary | The brain answers only on a Unix socket in a folder only you can open, with the per launch token and its own host name; a stuck brain is stopped after three missed health checks and restarts like a crashed one; the TypeScript types of what the brain sends are generated from its models and checked against the shell's at build time, and a brain test fails when they are stale | |
+| Privacy modes | `/model privacy local` (no hosted call at all), `hybrid` (hosted models see outlines and layouts, never item text, unless you name features: summaries, agents, answers, tagging, edits) and `cloud`; an agent run can be let read with a hosted model on its own, from its plan card, on its own thread only | |
+| Kill switch | The pack channel is checked every 30 minutes, so a site removed by a signed pack stops being read within the hour; a pack signed with another key is refused. End to end in `tests/e2e/hardening.spec.ts` | A hosted pack channel |
+| Your data | `/backup` saves everything in one zip in exports/ (views, memory, journal, lenses, specs, settings, logs and a consistent copy of the database), leaving out your keys, Chrome's pairing and Google's tokens. `/delete everything confirm` deletes everything but exports/, openMoi's web sessions too, and starts over from the templates | |
+| Onboarding | From launch on a fresh home to a first merged Feed in seconds, from the repo and packaged | With real accounts and real sites |
+| Signed updates | Packs (specs and policy) are signed and checked | App updates: they need a release channel; not built |
+| Reviews | Each stage had a code review whose findings were fixed with tests | The external security review and the legal review need people outside this work |
 
 ## 26. Cross cutting: security, compliance, privacy, budgets, testing `[partly built]`
 

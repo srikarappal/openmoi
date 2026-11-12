@@ -2,6 +2,7 @@
 
 import base64
 import hmac
+import uuid
 from datetime import datetime
 from operator import attrgetter
 from typing import Annotated, Any, Literal
@@ -195,9 +196,13 @@ class ScheduleDoneRequest(BaseModel):
     edition: datetime
 
 
+# Which brain process answers: a new one after a restart has a new boot.
+BOOT = uuid.uuid4().hex
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "boot": BOOT}
 
 
 @router.get("/views")
@@ -355,9 +360,14 @@ def agent_run(plan_id: str, brain: BrainDep) -> AgentRun:
     return brain.agent_run(plan_id)
 
 
+class ApproveRequest(BaseModel):
+    # Let a hosted model read item text for this run only.
+    cloud: bool = False
+
+
 @router.post("/agents/{plan_id}/approve")
-def approve_agent(plan_id: str, brain: BrainDep) -> AgentRun:
-    return brain.approve_agent(plan_id)
+def approve_agent(plan_id: str, brain: BrainDep, body: ApproveRequest | None = None) -> AgentRun:
+    return brain.approve_agent(plan_id, body.cloud if body else False)
 
 
 @router.post("/agents/{plan_id}/decline")
@@ -411,6 +421,20 @@ class ShopRequest(BaseModel):
 @router.post("/shop")
 def shop(body: ShopRequest, brain: BrainDep) -> ShopStart:
     return brain.shop(body.query, body.view_id)
+
+
+class DeleteRequest(BaseModel):
+    confirm: str = Field(max_length=40)
+
+
+@router.post("/data/export")
+def export_data(brain: BrainDep) -> dict[str, str]:
+    return {"path": brain.export_everything()}
+
+
+@router.post("/data/delete")
+def delete_data(body: DeleteRequest, brain: BrainDep) -> dict[str, list[str]]:
+    return {"removed": brain.delete_everything(body.confirm)}
 
 
 class LookupRequest(BaseModel):

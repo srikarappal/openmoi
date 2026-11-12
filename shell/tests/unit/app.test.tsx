@@ -401,7 +401,10 @@ describe("the plan card", () => {
     expect(texts(".plan_steps .step_args")).toEqual(['query: "desk lamp", limit: 5', ""])
     expect(texts(".plan_budget")[0]).toContain("12 steps, 300 s, $0.25 at most")
     await click(query(".plan_actions .approve"))
-    expect(last_sent()).toEqual({ type: "approve_plan", plan_id: "p1" })
+    expect(last_sent()).toEqual({ type: "approve_plan", plan_id: "p1", cloud: false })
+    await click(query(".plan_cloud input"))
+    await click(query(".plan_actions .approve"))
+    expect(last_sent()).toEqual({ type: "approve_plan", plan_id: "p1", cloud: true })
     await click(query(".plan_actions .decline"))
     expect(last_sent()).toEqual({ type: "decline_plan", plan_id: "p1" })
     const paused = { ...plan, status: "paused" as const, question: "What is your budget?", trace: [{ step: 1, tool: "search_store", ok: true, outcome: "found 2 items", seconds: 0.1 }] }

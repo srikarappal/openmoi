@@ -150,6 +150,8 @@ class AgentRun(BaseModel):
     # A standing task (kind watch) runs again after this, until it expires.
     next_run_at: datetime | None = None
     runs: int = 0
+    # You let a hosted model read item text for this run (and only this run).
+    cloud: bool = False
 
 
 class ItemSummary(BaseModel):
@@ -223,6 +225,8 @@ class AgentHost(Protocol):
 
     def spent(self) -> float: ...
 
+    def cloud_for_this_thread(self, on: bool) -> None: ...
+
     def propose_view(self, view_id: str, description: str) -> str: ...
 
     def propose_memory(self, request: str) -> str: ...
@@ -286,6 +290,7 @@ class AgentRunner:
         standing task runs again tomorrow unless you stopped it."""
         run = self.run
         self.spent_before = self.host.spent()
+        self.host.cloud_for_this_thread(run.cloud)
         try:
             for number, step in enumerate(run.steps[: run.budget.max_steps], start=1):
                 self.check()

@@ -41,6 +41,19 @@ def test_one_slot_model_only_and_privacy_changes():
     assert apply_model_change(custom, ModelChange(slot="fast", model="b")).fast.base_url == "https://models.example.com/v1"
 
 
+def test_privacy_modes_set_the_switches_together():
+    local = apply_model_change(Settings(allow_content_to_hosted=True), ModelChange(privacy_mode="local"))
+    assert (local.local_only, local.allow_content_to_hosted, local.cloud_features) == (True, False, [])
+    hybrid = apply_model_change(local, ModelChange(privacy_mode="hybrid", cloud_features=["summaries", "agents", "summaries"]))
+    assert (hybrid.local_only, hybrid.allow_content_to_hosted, hybrid.cloud_features) == (False, False, ["summaries", "agents"])
+    cloud = apply_model_change(hybrid, ModelChange(privacy_mode="cloud"))
+    assert (cloud.local_only, cloud.allow_content_to_hosted, cloud.cloud_features) == (False, True, [])
+    assert apply_model_change(local, ModelChange(allow_content_to_hosted=False)).local_only is False
+    assert [model_info(settings).privacy_mode for settings in (local, hybrid, cloud)] == ["local", "hybrid", "cloud"]
+    with pytest.raises(ValueError):
+        ModelChange(privacy_mode="hybrid", cloud_features=["everything"])
+
+
 def test_model_info_reports_whether_the_key_is_there(monkeypatch):
     settings = apply_model_change(Settings(), ModelChange(slot="both", provider="openrouter", model=NEMOTRON))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
@@ -101,7 +114,7 @@ def test_overview_shows_the_view_memory_models_and_chrome(client, paths):
     assert overview["sections"]["Sources"].startswith("* X home timeline")
     assert overview["sections"]["Rules"] == ""
     assert overview["memory"]["dislikes.md"] == "* crypto"
-    assert set(overview["model"]) == {"fast", "smart", "allow_content_to_hosted"}
+    assert set(overview["model"]) == {"fast", "smart", "allow_content_to_hosted", "privacy_mode", "cloud_features"}
     assert overview["relay"]["connected"] is False
 
 

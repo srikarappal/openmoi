@@ -55,18 +55,35 @@ def local_slot() -> Slot:
     return Slot(base_url=PROVIDERS["ollama"].base_url, model="llama3")
 
 
+PrivacyMode = Literal["local", "hybrid", "cloud"]
+# Features that may send item text to a hosted model in hybrid mode, if you name them, by the model tasks they make.
+CLOUD_FEATURES: dict[str, tuple[str, ...]] = {
+    "summaries": ("summarize", "update"),
+    "agents": ("agent_plan", "agent_read", "agent_compose"),
+    "answers": ("ask",),
+    "tagging": ("tag", "mentions"),
+    "edits": ("edit", "compile_rules", "compile_match"),
+}
+CloudFeature = Literal["summaries", "agents", "answers", "tagging", "edits"]
+
+
 class Settings(BaseModel):
     fast: Slot = Field(default_factory=local_slot)
     smart: Slot = Field(default_factory=local_slot)
     allow_content_to_hosted: bool = False
+    # Local only: no hosted model is called at all, with your content or without.
+    local_only: bool = False
+    # In hybrid mode, the features whose item text may go to a hosted model all the same.
+    cloud_features: list[CloudFeature] = Field(default_factory=list)
     # A local embedding model (an OpenAI compatible /embeddings endpoint, such as Ollama with all-minilm); without
     # one, item vectors come from feature hashing.
     embed: Slot | None = None
     # A model that sees images (an OpenAI compatible chat endpoint taking image_url parts) judges new lenses from a
     # screenshot of made up items; without one, lenses pass on their tests alone.
     vision: Slot | None = None
-    # Where signed packs of specs and site policy come from; none means no pack updates.
-    pack_url: str | None = Field(default=None, pattern=r"^https://")
+    # Where signed packs of specs and site policy come from; none means no pack updates. The signature is what makes a
+    # pack trusted; http is allowed only to this machine, for testing a channel.
+    pack_url: str | None = Field(default=None, pattern=r"^(https://|http://(127\.0\.0\.1|localhost)(:\d+)?/)")
 
 
 class ModelChange(BaseModel):
@@ -76,6 +93,9 @@ class ModelChange(BaseModel):
     provider: Literal["openrouter", "ollama"] | None = None
     model: str | None = Field(default=None, min_length=1, max_length=200)
     allow_content_to_hosted: bool | None = None
+    # local, hybrid (with the cloud features named) or cloud.
+    privacy_mode: PrivacyMode | None = None
+    cloud_features: list[CloudFeature] = Field(default_factory=list)
 
 
 class SlotInfo(BaseModel):
@@ -90,6 +110,8 @@ class ModelInfo(BaseModel):
     fast: SlotInfo
     smart: SlotInfo
     allow_content_to_hosted: bool
+    privacy_mode: PrivacyMode
+    cloud_features: list[CloudFeature]
 
 
 def provider_of(slot: Slot) -> str:
@@ -101,8 +123,20 @@ def slot_info(slot: Slot) -> SlotInfo:
     return SlotInfo(provider=provider_of(slot), model=slot.model, base_url=slot.base_url, local=slot.is_local, key_ready=key_ready)
 
 
+def privacy_mode(settings: Settings) -> PrivacyMode:
+    if settings.local_only:
+        return "local"
+    return "cloud" if settings.allow_content_to_hosted else "hybrid"
+
+
 def model_info(settings: Settings) -> ModelInfo:
-    return ModelInfo(fast=slot_info(settings.fast), smart=slot_info(settings.smart), allow_content_to_hosted=settings.allow_content_to_hosted)
+    return ModelInfo(
+        fast=slot_info(settings.fast),
+        smart=slot_info(settings.smart),
+        allow_content_to_hosted=settings.allow_content_to_hosted,
+        privacy_mode=privacy_mode(settings),
+        cloud_features=settings.cloud_features,
+    )
 
 
 def changed_slot(slot_name: str, current: Slot, change: ModelChange) -> Slot:
@@ -120,6 +154,11 @@ def apply_model_change(settings: Settings, change: ModelChange) -> Settings:
     updated = settings.model_copy(deep=True)
     if change.allow_content_to_hosted is not None:
         updated.allow_content_to_hosted = change.allow_content_to_hosted
+        updated.local_only = False
+    if change.privacy_mode is not None:
+        updated.local_only = change.privacy_mode == "local"
+        updated.allow_content_to_hosted = change.privacy_mode == "cloud"
+        updated.cloud_features = list(dict.fromkeys(change.cloud_features)) if change.privacy_mode == "hybrid" else []
     if change.provider or change.model:
         for slot_name in ("fast", "smart") if change.slot == "both" else (change.slot,):
             setattr(updated, slot_name, changed_slot(slot_name, getattr(updated, slot_name), change))

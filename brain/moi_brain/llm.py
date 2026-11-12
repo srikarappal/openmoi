@@ -12,7 +12,7 @@ from typing import Any, Literal, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from moi_brain.config import Settings, Slot
+from moi_brain.config import CLOUD_FEATURES, Settings, Slot
 from moi_brain.vectors import normalized
 
 SlotName = Literal["fast", "smart", "vision"]
@@ -71,6 +71,8 @@ class Gateway:
         self.log_lock = threading.Lock()
         # What this thread's model calls have cost so far, for budgets such as an agent run's.
         self.costs = threading.local()
+        # An agent run you let a hosted model read item text for: only its own thread may.
+        self.cloud_run = threading.local()
 
     def slot(self, slot_name: SlotName) -> Slot:
         slot = getattr(self.settings, slot_name)
@@ -87,10 +89,12 @@ class Gateway:
         json_mode: bool = False,
     ) -> str:
         slot = self.slot(slot_name)
-        if contains_user_content and not slot.is_local and not self.settings.allow_content_to_hosted:
+        if self.settings.local_only and not slot.is_local:
+            raise PrivacyBlocked(f"openMoi is in local only mode and the {slot_name} slot is a hosted model; start a local model or say /model privacy hybrid")
+        if contains_user_content and not slot.is_local and not self.content_allowed(task):
             raise PrivacyBlocked(
                 f"{task} needs your content but the {slot_name} slot is a hosted model; "
-                "start a local model or allow it with /model privacy on"
+                "start a local model, or allow it with /model privacy cloud (or cloud for one feature)"
             )
         payload: dict[str, Any] = {**slot.extra, "model": slot.model, "messages": messages, "temperature": 0.2}
         if json_mode:
@@ -118,7 +122,7 @@ class Gateway:
         """Vectors from the embedding slot, unit length, in the order given; None when there is no slot, it may not see
         your content, or it failed (the caller then uses hashed vectors)."""
         slot = self.settings.embed
-        if slot is None or not texts or (not slot.is_local and not self.settings.allow_content_to_hosted):
+        if slot is None or not texts or (not slot.is_local and (self.settings.local_only or not self.content_allowed(task))):
             return None
         headers = {"x-moi-task": task}
         if slot.api_key_env:
@@ -192,6 +196,15 @@ class Gateway:
                 os.replace(self.log_path, self.log_path.with_name(f"{self.log_path.name}.1"))
             with self.log_path.open("a", encoding="utf-8") as handle:
                 handle.write(f"{json.dumps(line)}\n")
+
+    def content_allowed(self, task: str) -> bool:
+        """Whether item text may go to a hosted model for a task: cloud mode, a cloud feature you named, or an agent
+        run you opted in, on its own thread."""
+        named = {name for feature in self.settings.cloud_features for name in CLOUD_FEATURES.get(feature, ())}
+        return self.settings.allow_content_to_hosted or task in named or bool(getattr(self.cloud_run, "on", False))
+
+    def cloud_for_this_thread(self, on: bool) -> None:
+        self.cloud_run.on = on
 
     def spent(self) -> float:
         """What this thread's model calls have cost so far, in dollars."""

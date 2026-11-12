@@ -397,7 +397,7 @@ describe("Shell after edits", () => {
         { view_id: "feed", title: "Feed" },
         { view_id: "tech", title: "Tech" },
       ])
-    const info = { fast: { provider: "ollama", model: "llama3", base_url: "", local: true, key_ready: true }, smart: { provider: "ollama", model: "llama3", base_url: "", local: true, key_ready: true }, allow_content_to_hosted: true }
+    const info = { fast: { provider: "ollama", model: "llama3", base_url: "", local: true, key_ready: true }, smart: { provider: "ollama", model: "llama3", base_url: "", local: true, key_ready: true }, allow_content_to_hosted: true, privacy_mode: "cloud", cloud_features: [] }
     const { shell, window } = await started({ views, create_view: vi.fn(async () => ({ view_id: "tech", title: "Tech" })), update_model: vi.fn(async () => info) })
     await command(window, { type: "chat_send", text: "/newview Tech" })
     expect(state_of(shell).active).toEqual({ kind: "view", view_id: "tech" })

@@ -4,6 +4,7 @@ import json
 import queue
 import re
 import sys
+import os
 import threading
 import uuid
 from collections import deque
@@ -22,6 +23,7 @@ from moi_brain.compile import VIEW_ID, AppRef, BadInput, CompiledView, Compiler,
 from moi_brain.agents import AgentKind, AgentRun, AgentRunner, Budget, ComposerReply, ItemSummary, PlanDraft, PlanStep, composer_messages, load_runs, plan_expiry, planner_messages, summary_messages
 from moi_brain.actions import KINDS, RATE_CAPS, RATE_WINDOW, UNDO_SECONDS, ActionAnchor, ActionDecision, ActionKind, ActionRequest, ActionResult, AuditLog, new_request_id, plain_url, policy_flag, state_key
 from moi_brain.answers import MAX_SOURCES, Answer, AnswerReply, answer_prompt, cited
+from moi_brain.backup import CONFIRM, delete_everything, export_everything
 from moi_brain.apps import WHY, AppError, Capability, MacHelper, app_location, permission_text, read_app, start_of_day
 from moi_brain.collections import READ_LATER, collection_name, collection_title, export_json, export_markdown, is_collection_name
 from moi_brain.content import ContentSummary, caption_allowed, is_video, offline_blocks, summary_extra, summary_prompt, transcript_text
@@ -308,6 +310,11 @@ def url_prefix(url: str) -> str:
     """The part of a page URL a passive source matches on: no query, no fragment."""
     parts = urlparse(url)
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
+
+
+def end_process() -> None:
+    """Ends the brain at once, after everything was deleted: the shell's supervisor starts a fresh one."""
+    os._exit(0)
 
 
 def wants_offline_copy(item: Item) -> bool:
@@ -1249,7 +1256,7 @@ class Brain:
             raise BadInput("No plan has that id.")
         return run
 
-    def approve_agent(self, plan_id: str) -> AgentRun:
+    def approve_agent(self, plan_id: str, cloud: bool = False) -> AgentRun:
         """You approved the plan: it runs now, marked running before its thread starts, so a second approve or a Stop
         sees it. A standing task you approved runs again when it is due, each run starting fresh."""
         with self.agent_lock:
@@ -1261,6 +1268,8 @@ class Brain:
                 raise BadInput("That plan has expired; ask again.")
             run.trace, run.result, run.refs, run.notices, run.proposal_ids, run.action_ids = [], None, [], [], [], []
             run.status, run.reason, run.question, run.answer, run.cost_usd, run.runs = "running", "", "", "", 0.0, run.runs + 1
+            # A standing task you let read with a hosted model keeps that for its later runs.
+            run.cloud = run.cloud or cloud
             self.save_run(run)
             runner = AgentRunner(self, run)
             self.runners[plan_id] = runner
@@ -1329,6 +1338,9 @@ class Brain:
     def spent(self) -> float:
         """What this thread's model calls have cost so far."""
         return self.gateway.spent()
+
+    def cloud_for_this_thread(self, on: bool) -> None:
+        self.gateway.cloud_for_this_thread(on)
 
     def propose_view(self, view_id: str, description: str) -> str:
         return self.propose_edit(view_id, description, None, "view").proposal_id
@@ -1835,6 +1847,21 @@ class Brain:
         install(pack, self.paths.packs)
         self.policies = merged_policy(load_policy(self.paths.site_policy), pack)
         return f"installed pack v{pack.pack_version}"
+
+    def export_everything(self) -> str:
+        """Everything you have in openMoi as one zip in exports/, secrets left out."""
+        return str(export_everything(self.paths, self.store.copy_to, self.clock()))
+
+    def delete_everything(self, confirm: str) -> list[str]:
+        """Deletes everything openMoi keeps but exports/, then ends this brain; the shell starts a new one, which
+        begins again from the templates. Only with the exact words, typed by you."""
+        if confirm != CONFIRM:
+            raise BadInput(f'Say exactly "{CONFIRM}" to delete everything.')
+        with self.lock:
+            self.store.close()
+            removed = delete_everything(self.paths)
+        threading.Timer(0.5, end_process).start()
+        return removed
 
     def share_view(self, view_id: str) -> str:
         """A copy of a view to send to someone, in ~/openMoi/shared, without people, following lists or watched pages."""

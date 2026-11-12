@@ -302,6 +302,19 @@ class Store:
             ).fetchall()
         return [(Item.model_validate_json(item_json), datetime.fromisoformat(seen_at) if seen_at else None) for item_json, seen_at in rows]
 
+    def copy_to(self, target: Path) -> None:
+        """A consistent copy of the whole database, taken while nothing writes."""
+        with self.lock:
+            copy = sqlite3.connect(target)
+            try:
+                self.connection.backup(copy)
+            finally:
+                copy.close()
+
+    def close(self) -> None:
+        with self.lock:
+            self.connection.close()
+
     def unchecked_for_mentions(self, item_ids: list[str], target: str) -> list[str]:
         """The items not yet read for what they name, for one target source."""
         if not item_ids:

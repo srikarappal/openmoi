@@ -12,6 +12,8 @@ const MODEL_INFO: ModelInfo = {
   fast: { provider: "openrouter", model: "nvidia/nemotron-3.5-super-vl:free", base_url: "https://openrouter.ai/api/v1", local: false, key_ready: true },
   smart: { provider: "ollama", model: "llama3", base_url: "http://127.0.0.1:11434/v1", local: true, key_ready: true },
   allow_content_to_hosted: false,
+  privacy_mode: "hybrid",
+  cloud_features: [],
 }
 
 const OVERVIEW: Overview = {
@@ -32,6 +34,7 @@ function make_chat(brain: Partial<BrainClient>) {
     view_created: vi.fn(async () => {}),
     shopping: vi.fn(async () => {}),
     app_allowed: vi.fn(async () => {}),
+    everything_deleted: vi.fn(async () => {}),
     model_changed: vi.fn(),
     open_folder: vi.fn(),
     set_background: vi.fn((on: boolean) => (on ? "on now" : "off now")),
@@ -87,7 +90,7 @@ describe("ChatController", () => {
   it("explains failures in plain words", async () => {
     const { chat } = make_chat({ edit: async () => Promise.reject(new BrainError(409, "privacy", "blocked")) })
     await chat.send("no shorts")
-    expect(chat.list()[1].text).toContain("/model privacy on")
+    expect(chat.list()[1].text).toContain("/model privacy cloud")
     expect(chat.thinking).toBe(false)
   })
 
@@ -228,17 +231,17 @@ describe("chat commands", () => {
 
   it("shows and changes models without asking a model", async () => {
     const model_info = vi.fn(async () => MODEL_INFO)
-    const update_model = vi.fn(async () => ({ ...MODEL_INFO, allow_content_to_hosted: true }))
+    const update_model = vi.fn(async () => ({ ...MODEL_INFO, allow_content_to_hosted: true, privacy_mode: "cloud" as const }))
     const { chat, hooks } = make_chat({ model_info, update_model })
     await chat.send("/model")
     expect(last_reply(chat)).toContain("fast: nvidia/nemotron-3.5-super-vl:free via openrouter (hosted)")
     expect(last_reply(chat)).toContain("smart: llama3 via ollama (on this machine)")
     expect(hooks.model_changed).not.toHaveBeenCalled()
     await chat.send("/model privacy on")
-    expect(update_model).toHaveBeenCalledWith({ allow_content_to_hosted: true })
+    expect(update_model).toHaveBeenCalledWith({ privacy_mode: "cloud", cloud_features: [] })
     expect(hooks.model_changed).toHaveBeenCalledTimes(1)
     expect(last_reply(chat)).toMatch(/^Models updated\./)
-    expect(last_reply(chat)).toContain("Your content may go to hosted models: on")
+    expect(last_reply(chat)).toContain("Privacy: cloud assisted.")
   })
 
   it("shows settings and opens the folder", async () => {
@@ -381,6 +384,26 @@ describe("ChatController sharing", () => {
     expect(share_view).toHaveBeenCalledWith("feed")
     expect(hooks.show_file).toHaveBeenCalledWith("/Users/me/openMoi/shared/feed.md")
     expect(last_reply(chat)).toBe("Saved a copy of feed to send: /Users/me/openMoi/shared/feed.md. People, following lists and watched pages are left out.")
+  })
+})
+
+describe("ChatController your data", () => {
+  it("saves everything as one file and deletes everything only once you say confirm", async () => {
+    const export_everything = vi.fn(async () => ({ path: "/Users/me/openMoi/exports/openmoi_everything_20261112_120000.zip" }))
+    const delete_everything = vi.fn(async () => ({ removed: ["views", ".moi"] }))
+    const health = vi.fn(async () => ({ status: "ok", boot: "first" }))
+    const { chat, hooks, labels } = make_chat({ export_everything, delete_everything, health } as unknown as Partial<BrainClient>)
+    await chat.send("/backup")
+    expect(hooks.show_file).toHaveBeenCalledWith("/Users/me/openMoi/exports/openmoi_everything_20261112_120000.zip")
+    expect(last_reply(chat)).toContain("Your keys, Chrome's pairing and Google's sign in are left out.")
+    await chat.send("/delete everything")
+    expect(delete_everything).not.toHaveBeenCalled()
+    expect(last_reply(chat)).toContain("say /delete everything confirm")
+    await chat.send("/delete everything confirm")
+    expect(delete_everything).toHaveBeenCalledTimes(1)
+    expect(hooks.everything_deleted).toHaveBeenCalledWith("first")
+    expect(labels).toContain("Starting over")
+    expect(last_reply(chat)).toBe("Everything is deleted. openMoi starts over from its first views.")
   })
 })
 

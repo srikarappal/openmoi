@@ -1,4 +1,5 @@
 import json
+import threading
 
 import httpx
 import pytest
@@ -72,6 +73,47 @@ def test_hosted_slot_takes_content_when_the_switch_is_on(tmp_path):
     gateway = hosted_gateway(tmp_path, recorder, allow=True)
     assert gateway.complete_json("fast", "math", [{"role": "user", "content": "2+2"}], True, Answer) == Answer(answer=4)
     assert json.loads(recorder.requests[0].content)["response_format"] == {"type": "json_object"}
+
+
+def test_local_only_calls_no_hosted_model_at_all(tmp_path):
+    recorder = Recorder(ok_reply("<html>lens</html>"))
+    gateway = Gateway(Settings(fast=HOSTED, smart=HOSTED, local_only=True, embed=HOSTED), tmp_path / "calls.jsonl", httpx.Client(transport=httpx.MockTransport(recorder)))
+    with pytest.raises(PrivacyBlocked, match="local only mode"):
+        gateway.complete_text("smart", "lens", [{"role": "user", "content": "layout"}], contains_user_content=False)
+    assert gateway.embed("embed", ["a"]) is None and recorder.requests == []
+
+
+def test_hybrid_lets_only_the_features_you_named_send_item_text(tmp_path):
+    recorder = Recorder(ok_reply('{"answer": 4}'))
+    gateway = Gateway(Settings(fast=HOSTED, smart=HOSTED, cloud_features=["summaries"]), tmp_path / "calls.jsonl", httpx.Client(transport=httpx.MockTransport(recorder)))
+    assert gateway.complete_json("fast", "summarize", [{"role": "user", "content": "article"}], True, Answer) == Answer(answer=4)
+    with pytest.raises(PrivacyBlocked):
+        gateway.complete_json("fast", "tag", [{"role": "user", "content": "items"}], True, Answer)
+    assert [request.headers["x-moi-task"] for request in recorder.requests] == ["summarize"]
+
+
+def read_item_elsewhere(gateway: Gateway, answers: list[str]) -> None:
+    """An agent_read call from a thread no run opted in."""
+    try:
+        gateway.complete_json("fast", "agent_read", [{"role": "user", "content": "item"}], True, Answer)
+        answers.append("sent")
+    except PrivacyBlocked:
+        answers.append("blocked")
+
+
+def test_an_agent_run_you_opt_in_may_send_item_text_on_its_own_thread_only(tmp_path):
+    recorder = Recorder(ok_reply('{"answer": 4}'))
+    gateway = hosted_gateway(tmp_path, recorder, allow=False)
+    answers: list[str] = []
+    gateway.cloud_for_this_thread(True)
+    assert gateway.complete_json("fast", "agent_read", [{"role": "user", "content": "item"}], True, Answer) == Answer(answer=4)
+    worker = threading.Thread(target=read_item_elsewhere, args=(gateway, answers))
+    worker.start()
+    worker.join()
+    gateway.cloud_for_this_thread(False)
+    with pytest.raises(PrivacyBlocked):
+        gateway.complete_json("fast", "agent_read", [{"role": "user", "content": "item"}], True, Answer)
+    assert answers == ["blocked"] and len(recorder.requests) == 1
 
 
 def test_complete_json_retries_once_with_the_error(tmp_path):

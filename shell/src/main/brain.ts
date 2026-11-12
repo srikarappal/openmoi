@@ -1,7 +1,9 @@
 // Starts the Python brain, keeps it alive and talks to it over localhost HTTP.
 import { spawn, type ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { createServer } from "node:net"
+import { mkdtempSync, rmSync } from "node:fs"
+import { request as http_request } from "node:http"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import { wait_for } from "../shared/timing"
 import type {
@@ -41,6 +43,12 @@ import type {
 } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
+// The host every request names: the brain turns away any other, as it does on a port.
+const SOCKET_HOST = "moi.brain"
+// A brain that stops answering its health check this many times in a row is stopped, and restarts.
+const HEALTH_EVERY_MS = 10_000
+const HEALTH_TIMEOUT_MS = 5_000
+const HEALTH_MISSES = 3
 const RESTART_DELAY_MS = 1_000
 const MAX_RESTART_DELAY_MS = 30_000
 // A brain that ran this long before exiting was working, so the next restart is quick again.
@@ -56,28 +64,50 @@ export class BrainError extends Error {
   }
 }
 
+interface RawReply {
+  status: number
+  type: string
+  text: string
+}
+
+// One request to the brain over its Unix socket.
+function over_socket(socket_path: string, method: string, route: string, headers: Record<string, string>, body: string | undefined, timeout_ms: number): Promise<RawReply> {
+  return new Promise((resolve, reject) => {
+    const outgoing = http_request({ socketPath: socket_path, path: route, method, headers: { ...headers, host: SOCKET_HOST }, timeout: timeout_ms }, (response) => {
+      const chunks: Buffer[] = []
+      response.on("data", (chunk: Buffer) => chunks.push(chunk))
+      response.on("end", () => resolve({ status: response.statusCode ?? 0, type: String(response.headers["content-type"] ?? ""), text: Buffer.concat(chunks).toString("utf-8") }))
+      response.on("error", reject)
+    })
+    outgoing.on("timeout", () => outgoing.destroy(new Error(`the brain did not answer ${route} in ${timeout_ms / 1000} s`)))
+    outgoing.on("error", reject)
+    outgoing.end(body)
+  })
+}
+
 export class BrainClient {
   constructor(
-    readonly base_url: string,
+    readonly socket_path: string,
     private readonly token: string,
   ) {}
 
-  async request<T>(method: "GET" | "POST", route: string, body?: unknown): Promise<T> {
-    const response = await fetch(`${this.base_url}${route}`, {
-      method,
-      headers: { "x-moi-token": this.token, "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    const is_json = (response.headers.get("content-type") ?? "").includes("application/json")
-    const payload = is_json ? await response.json() : await response.text()
-    if (!response.ok) {
+  async request<T>(method: "GET" | "POST", route: string, body?: unknown, timeout_ms = 0): Promise<T> {
+    const reply = await over_socket(this.socket_path, method, route, { "x-moi-token": this.token, "content-type": "application/json" }, body === undefined ? undefined : JSON.stringify(body), timeout_ms)
+    const is_json = reply.type.includes("application/json")
+    const payload = is_json ? JSON.parse(reply.text) : reply.text
+    if (reply.status < 200 || reply.status >= 300) {
       const detail = is_json ? payload : { detail: payload }
-      throw new BrainError(response.status, detail.kind ?? "http", String(detail.detail ?? response.statusText))
+      throw new BrainError(reply.status, detail.kind ?? "http", String(detail.detail ?? reply.status))
     }
     return payload as T
   }
 
-  health(): Promise<{ status: string }> {
+  // Answers within a few seconds or fails: a check, not a wait.
+  quick_health(): Promise<{ status: string }> {
+    return this.request("GET", "/health", undefined, HEALTH_TIMEOUT_MS)
+  }
+
+  health(): Promise<{ status: string; boot?: string }> {
     return this.request("GET", "/health")
   }
 
@@ -191,8 +221,8 @@ export class BrainClient {
     return this.request("GET", `/agents/${encodeURIComponent(plan_id)}`)
   }
 
-  agent_step(plan_id: string, step: "approve" | "decline" | "stop"): Promise<AgentRun> {
-    return this.request("POST", `/agents/${encodeURIComponent(plan_id)}/${step}`, {})
+  agent_step(plan_id: string, step: "approve" | "decline" | "stop", cloud = false): Promise<AgentRun> {
+    return this.request("POST", `/agents/${encodeURIComponent(plan_id)}/${step}`, step === "approve" ? { cloud } : {})
   }
 
   answer_agent(plan_id: string, answer: string): Promise<AgentRun> {
@@ -229,6 +259,14 @@ export class BrainClient {
 
   allow_app(capability: "calendar" | "mail" | "notes" | "files"): Promise<AppAccess> {
     return this.request("POST", "/apps/allow", { capability })
+  }
+
+  export_everything(): Promise<{ path: string }> {
+    return this.request("POST", "/data/export")
+  }
+
+  delete_everything(): Promise<{ removed: string[] }> {
+    return this.request("POST", "/data/delete", { confirm: "delete everything" })
   }
 
   people_suggest(): Promise<PeopleReply> {
@@ -334,16 +372,9 @@ export class BrainClient {
   }
 }
 
-function free_port(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer()
-    server.on("error", reject)
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address()
-      const port = typeof address === "object" && address ? address.port : 0
-      server.close(() => resolve(port))
-    })
-  })
+// A socket in a fresh folder only you can open (mkdtemp makes it 0700), so no other account on the Mac can reach it.
+function private_socket(): string {
+  return path.join(mkdtempSync(path.join(tmpdir(), "moi-")), "brain.sock")
 }
 
 function ignore(): void {}
@@ -362,34 +393,67 @@ export class BrainProcess {
     this.fail_start = reject
   })
 
+  private health_timer: ReturnType<typeof setInterval> | null = null
+  private misses = 0
+
   private constructor(
     private readonly repo_dir: string,
-    private readonly port: number,
+    private readonly socket: string,
     private readonly token: string,
+    private readonly owns_folder: boolean,
+    private readonly python: string | undefined,
   ) {
-    this.client = new BrainClient(`http://127.0.0.1:${port}`, token)
+    this.client = new BrainClient(socket, token)
     this.spawn_failed.catch(ignore)
   }
 
-  static async start(repo_dir: string): Promise<BrainProcess> {
-    const port = Number(process.env.MOI_BRAIN_PORT) || (await free_port())
+  // With a bundled Python (the packaged app) the brain runs on it from repo_dir/brain; otherwise uv runs it.
+  static async start(repo_dir: string, python?: string): Promise<BrainProcess> {
+    const given = process.env.MOI_BRAIN_SOCKET
     const token = process.env.MOI_TOKEN || randomBytes(16).toString("hex")
-    const brain = new BrainProcess(repo_dir, port, token)
+    const brain = new BrainProcess(repo_dir, given || private_socket(), token, !given, python)
     brain.spawn()
-    await Promise.race([wait_for(() => brain.client.health(), START_TIMEOUT_MS, 200), brain.spawn_failed])
+    try {
+      await Promise.race([wait_for(() => brain.client.health(), START_TIMEOUT_MS, 200), brain.spawn_failed])
+    } catch (error) {
+      brain.stop()
+      throw error
+    }
+    brain.health_timer = setInterval(() => brain.check_health(), HEALTH_EVERY_MS)
     return brain
+  }
+
+  // A brain that is running but stops answering (stuck, not crashed) is stopped after a few missed checks; its exit
+  // then restarts it like any crash.
+  async check_health(): Promise<void> {
+    if (this.stopping || !this.child || Date.now() - this.started_at < START_TIMEOUT_MS) return
+    try {
+      await this.client.quick_health()
+      this.misses = 0
+    } catch {
+      this.misses += 1
+      if (this.misses >= HEALTH_MISSES) {
+        this.misses = 0
+        this.child?.kill("SIGKILL")
+      }
+    }
   }
 
   private spawn(): void {
     const project = path.join(this.repo_dir, "brain")
     this.started_at = Date.now()
-    this.child = spawn("uv", ["run", "--project", project, "python", "-m", "moi_brain", "--port", String(this.port)], {
-      env: { ...process.env, MOI_TOKEN: this.token },
+    const brain_args = ["-m", "moi_brain", "--socket", this.socket]
+    const [command, args, extra] = this.python
+      ? [this.python, brain_args, { PYTHONPATH: project, PYTHONNOUSERSITE: "1" }]
+      : ["uv", ["run", "--project", project, "python", ...brain_args], {}]
+    this.child = spawn(command, args, {
+      env: { ...process.env, ...extra, MOI_TOKEN: this.token },
       stdio: ["ignore", "inherit", "inherit"],
     })
     this.child.on("error", (error) => {
       console.error(`openMoi brain: ${error.message}`)
-      this.fail_start(new Error(`the brain could not be started with uv (${error.message}); install uv, see the README`))
+      const advice = this.python ? "reinstall openMoi" : "install uv, see the README"
+      this.fail_start(new Error(`the brain could not be started with ${this.python ? "its Python" : "uv"} (${error.message}); ${advice}`))
     })
     this.child.on("exit", () => this.exited())
   }
@@ -406,6 +470,8 @@ export class BrainProcess {
 
   stop(): void {
     this.stopping = true
+    if (this.health_timer) clearInterval(this.health_timer)
     this.child?.kill()
+    if (this.owns_folder) rmSync(path.dirname(this.socket), { recursive: true, force: true })
   }
 }

@@ -157,6 +157,7 @@ function step_args(args: Record<string, unknown>): string {
 
 function PlanCard({ plan }: { plan: AgentRun }) {
   const [answer, set_answer] = useState("")
+  const [cloud, set_cloud] = useState(false)
   const budget = `${plan.budget.max_steps} steps, ${plan.budget.max_seconds} s, $${plan.budget.max_cost_usd.toFixed(2)} at most; expires ${new Date(plan.expires_at).toLocaleString()}`
   return (
     <div className="plan">
@@ -212,7 +213,11 @@ function PlanCard({ plan }: { plan: AgentRun }) {
       <div className="plan_actions">
         {plan.status === "proposed" && (
           <>
-            <button className="primary approve" onClick={() => send({ type: "approve_plan", plan_id: plan.plan_id })}>
+            <label className="plan_cloud">
+              <input type="checkbox" checked={cloud} onChange={(event) => set_cloud(event.target.checked)} />
+              Let a hosted model read item text for this run only
+            </label>
+            <button className="primary approve" onClick={() => send({ type: "approve_plan", plan_id: plan.plan_id, cloud })}>
               Approve and run
             </button>
             <button className="decline" onClick={() => send({ type: "decline_plan", plan_id: plan.plan_id })}>

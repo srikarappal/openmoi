@@ -1,6 +1,6 @@
 // Chat commands: "/memory", "/feed", "/sources", "/layout", "/settings", "/newview", "/model", "/help".
 // Anything without a slash stays free form and openMoi works out from context what to change.
-import type { AgentKind, Answer, CollectionInfo, EditScope, Mirror, ModelChange, ModelInfo, Overview, SearchHit, SlotInfo, SourceMirror, ViewMirror } from "./types"
+import type { AgentKind, Answer, CloudFeature, CollectionInfo, EditScope, Mirror, ModelChange, ModelInfo, Overview, PrivacyMode, SearchHit, SlotInfo, SourceMirror, ViewMirror } from "./types"
 
 export interface CommandHelp {
   name: string
@@ -15,7 +15,7 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/time", usage: "/time <when this view comes out>", summary: "editions and how long a visit lasts" },
   { name: "/memory", usage: "/memory <what to remember or forget>", summary: "facts, likes, dislikes and people, for every view" },
   { name: "/newview", usage: "/newview <name> [what it should be]", summary: "create views/<name>.md as a new tab" },
-  { name: "/model", usage: "/model [fast|smart|both] [ollama|openrouter] <model>  or  /model privacy on|off", summary: "show or change models and the privacy switch" },
+  { name: "/model", usage: "/model [fast|smart|both] [ollama|openrouter] <model>  or  /model privacy local|hybrid|cloud [summaries agents answers tagging edits]", summary: "show or change models and what hosted models may see" },
   { name: "/settings", usage: "/settings [open]", summary: "show this view's settings, memory and models; open the folder" },
   { name: "/background", usage: "/background on|off", summary: "keep reading on schedule with the window closed, and start at login" },
   { name: "/mirror", usage: "/mirror [days]", summary: "what each source showed you and how much passed your rules" },
@@ -28,6 +28,8 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/import", usage: "/import <https link to a view file>", summary: "add a view someone shared; or drop its .md file here" },
   { name: "/share", usage: "/share", summary: "save a copy of this view to send, without your people" },
   { name: "/people", usage: "/people", summary: "accounts on different sites that look like one person, to link in people.md" },
+  { name: "/backup", usage: "/backup", summary: "save everything you have in openMoi as one file, without your keys" },
+  { name: "/delete", usage: "/delete everything [confirm]", summary: "delete every view, memory, setting and read item openMoi keeps; exports stay" },
   { name: "/allow", usage: "/allow [calendar|mail|notes|files]", summary: "let openMoi read one app on this Mac (macOS asks you), or see what it may read" },
   { name: "/google", usage: "/google [connect]", summary: "sign in to Google in your browser so YouTube subscriptions come from your account" },
   { name: "/help", usage: "/help", summary: "list the commands" },
@@ -54,6 +56,8 @@ export type ChatCommand =
   | { kind: "import"; url: string }
   | { kind: "share" }
   | { kind: "people" }
+  | { kind: "backup" }
+  | { kind: "delete_everything"; confirmed: boolean }
   | { kind: "allow"; capability: AppCapability | null }
   | { kind: "google"; connect: boolean }
   | { kind: "help" }
@@ -70,13 +74,23 @@ function usage_error(name: string): ChatCommand {
   return { kind: "error", message: `Usage: ${help?.usage ?? name}` }
 }
 
-// "/model", "/model privacy on", "/model both openrouter <model>", "/model fast <model>".
+const MODES = new Set<PrivacyMode>(["local", "hybrid", "cloud"])
+const FEATURES = new Set<CloudFeature>(["summaries", "agents", "answers", "tagging", "edits"])
+
+// "/model privacy local", "/model privacy hybrid summaries agents" (those may send item text all the same),
+// "/model privacy cloud"; on and off mean cloud and hybrid.
+function parse_privacy(words: string[]): ChatCommand {
+  const mode = { on: "cloud", off: "hybrid" }[words[0]] ?? words[0]
+  const features = words.slice(1).map((word) => word.replace(/,$/, ""))
+  if (!MODES.has(mode as PrivacyMode) || !features.every((word) => FEATURES.has(word as CloudFeature))) return usage_error("/model")
+  if (features.length && mode !== "hybrid") return usage_error("/model")
+  return { kind: "model", change: { privacy_mode: mode as PrivacyMode, cloud_features: features as CloudFeature[] } }
+}
+
+// "/model", "/model privacy hybrid summaries", "/model both openrouter <model>", "/model fast <model>".
 export function parse_model(words: string[]): ChatCommand {
   if (!words.length) return { kind: "model", change: null }
-  if (words[0] === "privacy") {
-    if (words[1] !== "on" && words[1] !== "off") return usage_error("/model")
-    return { kind: "model", change: { allow_content_to_hosted: words[1] === "on" } }
-  }
+  if (words[0] === "privacy") return parse_privacy(words.slice(1))
   const [first, ...rest] = words
   const slot = SLOTS.has(first) ? (first as ModelChange["slot"]) : "both"
   const remaining = SLOTS.has(first) ? rest : words
@@ -127,6 +141,11 @@ export function parse_chat(input: string): ChatCommand {
   if (command === "/import") return words.length === 1 && words[0].startsWith("https://") ? { kind: "import", url: words[0] } : usage_error(command)
   if (command === "/share") return words.length ? usage_error(command) : { kind: "share" }
   if (command === "/people") return words.length ? usage_error(command) : { kind: "people" }
+  if (command === "/backup") return words.length ? usage_error(command) : { kind: "backup" }
+  if (command === "/delete") {
+    if (words[0] !== "everything" || words.length > 2 || (words.length === 2 && words[1] !== "confirm")) return usage_error(command)
+    return { kind: "delete_everything", confirmed: words.length === 2 }
+  }
   if (command === "/allow") {
     if (!words.length) return { kind: "allow", capability: null }
     const capability = words[0].toLowerCase()
@@ -153,10 +172,15 @@ function slot_line(name: string, slot: SlotInfo): string {
   return `${name}: ${slot.model} via ${slot.provider} (${where}${key})`
 }
 
+const PRIVACY: Record<PrivacyMode, string> = {
+  local: "Privacy: local only. No hosted model is called at all.",
+  hybrid: "Privacy: hybrid. Hosted models see page outlines and layouts, never your items' text",
+  cloud: "Privacy: cloud assisted. Hosted models may read your items' text.",
+}
+
 export function format_model(info: ModelInfo): string {
-  const privacy = info.allow_content_to_hosted
-    ? "Your content may go to hosted models: on (turn off with /model privacy off)"
-    : "Your content may go to hosted models: off (turn on with /model privacy on)"
+  const features = info.cloud_features.length ? `, except for ${info.cloud_features.join(", ")}.` : "."
+  const privacy = `${PRIVACY[info.privacy_mode]}${info.privacy_mode === "hybrid" ? features : ""} Change it with /model privacy local, hybrid or cloud.`
   return [slot_line("fast", info.fast), slot_line("smart", info.smart), privacy].join("\n")
 }
 

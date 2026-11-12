@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, shell as desktop, Tray, type WebContentsView } from "electron"
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, session, shell as desktop, Tray, type WebContentsView } from "electron"
 import { is_search, is_web_url, site_domain } from "../shared/address"
 import type {
   ActiveTarget,
@@ -42,7 +42,9 @@ import { Player } from "./player"
 import { SmokeTester } from "./smoke"
 import { ReaderPool } from "./readers"
 import { Scheduler } from "./scheduler"
+import { LENS_PARTITION, PLAYER_PARTITION, WEB_PARTITION } from "./sessions"
 import { TabManager, type Tab } from "./tabs"
+import { wait_for } from "../shared/timing"
 import { ViewController, clock_time, view_lens_key } from "./views"
 
 function ignore(): void {}
@@ -50,6 +52,8 @@ function ignore(): void {}
 const TOP_BAR_HEIGHT = 48
 const SIDE_PANEL_WIDTH = 340
 const MAX_NOTICES = 6
+// How long a fresh start waits for the new brain.
+const START_OVER_MS = 60_000
 // An item from an app on this Mac (an event, a message, a note, a file) says where it is instead of opening.
 const APP_ITEM = /^moi-app:\/\/(calendar|mail|notes|files)\//
 const APP_NAMES: Record<string, string> = { calendar: "Calendar", mail: "Mail", notes: "Notes", files: "your files" }
@@ -152,6 +156,7 @@ export class Shell implements ViewHost {
       view_created: (view_id) => this.on_view_created(view_id),
       shopping: (view_id, created) => this.on_shopping(view_id, created),
       app_allowed: () => this.run({ type: "refresh" }),
+      everything_deleted: (boot) => this.start_over(boot),
       model_changed: () => {
         this.views.recheck(this.chat_view_id).catch((error) => this.notify(String(error)))
       },
@@ -651,6 +656,20 @@ export class Shell implements ViewHost {
     if (context) await this.views.refresh(context, true)
   }
 
+  // After you deleted everything: openMoi's own browser forgets its sign ins and pages, every tab and lens closes,
+  // and the first view of the fresh start opens once the new brain answers.
+  private async start_over(old_boot: string): Promise<void> {
+    for (const tab of this.tabs.infos()) this.tabs.close(tab.tab_id)
+    for (const context of this.lenses.all()) this.lenses.close(context.key)
+    for (const name of [WEB_PARTITION, LENS_PARTITION, PLAYER_PARTITION]) await session.fromPartition(name).clearStorageData()
+    await wait_for(async () => {
+      const { boot } = await this.brain.health()
+      if (boot === old_boot) throw new Error("the brain that deleted everything is still ending")
+    }, START_OVER_MS, 300)
+    this.view_infos = await this.brain.views()
+    if (this.view_infos[0]) await this.open_view(this.view_infos[0].view_id)
+  }
+
   private async on_view_created(view_id: string): Promise<void> {
     this.view_infos = await this.brain.views()
     await this.open_view(view_id)
@@ -738,7 +757,7 @@ export class Shell implements ViewHost {
         await this.actions.undo(command.request_id)
         return
       case "approve_plan":
-        this.chat.update_plan(await this.brain.agent_step(command.plan_id, "approve"))
+        this.chat.update_plan(await this.brain.agent_step(command.plan_id, "approve", command.cloud === true))
         this.agents.follow(command.plan_id)
         return
       case "decline_plan":

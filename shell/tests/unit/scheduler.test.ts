@@ -217,15 +217,17 @@ describe("Scheduler after the review", () => {
 })
 
 describe("Scheduler packs", () => {
-  it("asks the pack channel once a day and reports what it found or that it failed", async () => {
+  it("asks the pack channel every half hour, so a kill switch lands within the hour, and reports what it found", async () => {
     vi.useFakeTimers()
     const { scheduler, brain, hooks } = make_scheduler([[]])
     brain.update_packs.mockResolvedValueOnce({ status: "installed pack v2" }).mockRejectedValueOnce(new Error("brain gone"))
     await scheduler.tick()
     await vi.waitFor(() => expect(hooks.packs).toHaveBeenCalledWith("installed pack v2"))
+    // This scheduler ticks every second (a minute in the app): 29 ticks on it has not asked again, 31 on it has.
+    vi.setSystemTime(Date.now() + 29 * 1_000)
     await scheduler.tick()
     expect(brain.update_packs).toHaveBeenCalledTimes(1)
-    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000)
+    vi.setSystemTime(Date.now() + 2 * 1_000)
     await scheduler.tick()
     await vi.waitFor(() => expect(hooks.failed).toHaveBeenCalledWith("The pack channel could not be checked: brain gone"))
   })
