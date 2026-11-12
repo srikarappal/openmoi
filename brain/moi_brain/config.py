@@ -59,6 +59,8 @@ class Settings(BaseModel):
     fast: Slot = Field(default_factory=local_slot)
     smart: Slot = Field(default_factory=local_slot)
     allow_content_to_hosted: bool = False
+    # Where signed packs of specs and site policy come from; none means no pack updates.
+    pack_url: str | None = Field(default=None, pattern=r"^https://")
 
 
 class ModelChange(BaseModel):
@@ -212,6 +214,14 @@ class Paths:
     @property
     def site_policy(self) -> Path:
         return self.assets / "policy" / "sites.json"
+
+    @property
+    def pack_key(self) -> Path:
+        return self.assets / "policy" / "pack_key.pub"
+
+    @property
+    def packs(self) -> Path:
+        return self.state / "packs"
 
 
 def load_paths() -> Paths:

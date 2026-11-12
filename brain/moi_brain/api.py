@@ -243,6 +243,11 @@ def import_view(body: ImportRequest, brain: BrainDep) -> Proposal:
     return brain.import_view(body.name, body.text, body.url)
 
 
+@router.post("/packs/update")
+def update_packs(brain: BrainDep) -> dict[str, str]:
+    return {"status": brain.update_packs()}
+
+
 @router.post("/history")
 def import_history(body: HistoryRequest, brain: BrainDep) -> dict[str, Any]:
     source_id, stored = brain.import_history(body.name, body.text)

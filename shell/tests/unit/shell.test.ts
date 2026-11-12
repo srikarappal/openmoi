@@ -39,6 +39,7 @@ function fake_brain(fields: Record<string, unknown> = {}) {
     schedule_done: vi.fn(async () => ({ status: "done" })),
     watches_due: vi.fn(async () => []),
     content_wanted: vi.fn(async () => []),
+    update_packs: vi.fn(async () => ({ status: "no pack channel" })),
     add_content: vi.fn(async () => ({ status: "summarized" })),
     watch_report: vi.fn(async () => ({ changed: false, alert: null })),
     weekly_mirror: vi.fn(async () => null),
@@ -688,5 +689,15 @@ describe("Shell history imports", () => {
     const imported = vi.spyOn(shell.chat, "import_history").mockResolvedValue()
     await command(window, { type: "import_history", name: "your_events.json", text: "[]" })
     expect(imported).toHaveBeenCalledWith("your_events.json", "[]")
+  })
+})
+
+describe("Shell packs", () => {
+  it("says in the chat when a pack installed or was refused, and nothing otherwise", async () => {
+    const { shell } = await started({ update_packs: vi.fn(async () => ({ status: "installed pack v4" })) })
+    await vi.waitFor(() => expect(state_of(shell).chat.at(-1)?.text).toBe("Site packs: installed pack v4."))
+    const quiet = await started({ update_packs: vi.fn(async () => ({ status: "pack v4 is current" })) })
+    await wait(5)
+    expect(state_of(quiet.shell).chat.some((entry) => entry.text.startsWith("Site packs"))).toBe(false)
   })
 })

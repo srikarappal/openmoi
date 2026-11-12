@@ -160,6 +160,9 @@ export class Shell implements ViewHost {
         // Not forced: a page that keeps failing is tried at most every 10 minutes, not every minute.
         watch: (source) => this.views.check_watch(source, false),
         summarize: (wanted) => this.views.summarize(wanted),
+        packs: (status) => {
+          if (status.startsWith("installed") || status.startsWith("pack refused")) this.chat.say(`Site packs: ${status}.`)
+        },
         read_done: (view_id) => {
           this.views.after_edit(view_id).catch((error) => this.notify(String(error)))
         },

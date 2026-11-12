@@ -47,6 +47,7 @@ from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import parse_sections, section_text
 from moi_brain.memory import TOPIC_FILES, Memory
 from moi_brain.mirror import MAX_DAYS, Mirror, build_mirror
+from moi_brain.packs import PackError, install, installed_pack, merged_policy, public_key, verified_pack
 from moi_brain.policy import Mode, load_policy, policy_for
 from moi_brain.rank import PAGE_SIZE, Circles, Order, applies, kept_share, rank
 from moi_brain.relay import RelayHub
@@ -258,8 +259,8 @@ class Brain:
         self.tagger = Tagger(self.store, self.gateway, paths.tagging_state, self.watch_list, self.watch_judgments)
         self.updater = Updater(self.store, self.gateway)
         self.editor = Editor(paths, self.gateway)
-        self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors)
-        self.policies = load_policy(paths.site_policy)
+        self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors, paths.packs / "extractors")
+        self.policies = merged_policy(load_policy(paths.site_policy), installed_pack(paths.packs))
         self.health = HealthBook(paths.extractor_health)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
         self.relay = RelayHub(paths.relay_trust, self.queue_relay_event, self.relay_config)
@@ -857,6 +858,27 @@ class Brain:
         kind, records = found
         items = self.store_records(SOURCE_IDS[kind], records)
         return SOURCE_IDS[kind], len(items)
+
+    def update_packs(self) -> str:
+        """Fetch the pack channel's newest pack and install it if it is signed with openMoi's key and newer."""
+        url = self.gateway.settings.pack_url
+        if not url:
+            return "no pack channel"
+        key = public_key(self.paths.pack_key)
+        if key is None:
+            return "packs are off: openMoi ships without a pack key"
+        try:
+            data = self.http.get(url).raise_for_status().content
+            signature = self.http.get(f"{url}.sig").raise_for_status().content
+            pack = verified_pack(data, signature, key)
+        except (httpx.HTTPError, PackError) as error:
+            return f"pack refused: {error}"
+        current = installed_pack(self.paths.packs)
+        if current and current.pack_version >= pack.pack_version:
+            return f"pack v{current.pack_version} is current"
+        install(pack, self.paths.packs)
+        self.policies = merged_policy(load_policy(self.paths.site_policy), pack)
+        return f"installed pack v{pack.pack_version}"
 
     def share_view(self, view_id: str) -> str:
         """A copy of a view to send to someone, in ~/openMoi/shared, without people, following lists or watched pages."""

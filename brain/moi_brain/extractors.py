@@ -84,13 +84,16 @@ def readable_spec(path: Path) -> ExtractorSpec | None:
 class ExtractorStore:
     """Handwritten specs ship with the app; generated specs live in .moi/extractors with numbered versions."""
 
-    def __init__(self, builtin_dir: Path, generated_dir: Path):
+    def __init__(self, builtin_dir: Path, generated_dir: Path, pack_dir: Path | None = None):
         self.builtin_dir = builtin_dir
         self.generated_dir = generated_dir
+        self.pack_dir = pack_dir
 
     def specs(self) -> list[ExtractorSpec]:
-        """Every readable spec; a damaged generated file is skipped (the page's spec is made again when needed)."""
-        paths = [*sorted(self.builtin_dir.glob("*.json")), *sorted(self.generated_dir.glob("*.json"))]
+        """Every readable spec: shipped, from the installed pack, then generated; a damaged file is skipped (the page's
+        spec is made again when needed)."""
+        pack = sorted(self.pack_dir.glob("*.json")) if self.pack_dir else []
+        paths = [*sorted(self.builtin_dir.glob("*.json")), *pack, *sorted(self.generated_dir.glob("*.json"))]
         return [spec for spec in (readable_spec(path) for path in paths) if spec]
 
     def for_page_type(self, domain: str, page_type: str) -> ExtractorSpec | None:

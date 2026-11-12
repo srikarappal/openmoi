@@ -128,6 +128,10 @@ export class BrainClient {
     return this.request("POST", "/import", { name, text, url })
   }
 
+  update_packs(): Promise<{ status: string }> {
+    return this.request("POST", "/packs/update")
+  }
+
   import_history(name: string, text: string): Promise<{ source_id: string; stored: number }> {
     return this.request("POST", "/history", { name, text })
   }

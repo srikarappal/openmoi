@@ -4,6 +4,8 @@ import type { ContentWanted, PageSource, ViewSchedule } from "../shared/types"
 import type { BrainClient } from "./brain"
 
 const TICK_MS = 60_000
+// The pack channel is asked for a newer pack once a day.
+const PACK_CHECK_MS = 24 * 60 * 60 * 1000
 // Keys of reads that are not a view's: a view id never holds a NUL or a colon.
 const SUMMARIES = "\0summaries"
 
@@ -17,6 +19,8 @@ export interface SchedulerHooks {
   edition_out(schedule: ViewSchedule): void
   // A read for an edition finished and the edition is marked read.
   read_done(view_id: string): void
+  // What the daily look at the pack channel found.
+  packs(status: string): void
   failed(text: string): void
 }
 
@@ -29,6 +33,7 @@ export class Scheduler {
   // The edition each view showed at the last look, so only a new one is announced.
   private readonly editions = new Map<string, string>()
   private looking: Promise<void> | null = null
+  private packs_checked_at = -Infinity
 
   constructor(
     private readonly brain: BrainClient,
@@ -76,6 +81,16 @@ export class Scheduler {
     }
     await this.look_at_watches()
     this.summarize_wanted()
+    this.check_packs()
+  }
+
+  private check_packs(): void {
+    if (Date.now() - this.packs_checked_at < PACK_CHECK_MS) return
+    this.packs_checked_at = Date.now()
+    this.brain
+      .update_packs()
+      .then(({ status }) => this.hooks.packs(status))
+      .catch((error) => this.hooks.failed(`The pack channel could not be checked: ${error instanceof Error ? error.message : String(error)}`))
   }
 
   // Items to summarize are read one at a time, in the background, a few each minute.

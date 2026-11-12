@@ -20,6 +20,7 @@ function make_scheduler(answers: Array<ViewSchedule[] | Error>, read: (view_id: 
     schedule_done: vi.fn(async () => ({ status: "done" })),
     watches_due: vi.fn(async (): Promise<PageSource[]> => []),
     content_wanted: vi.fn(async (): Promise<ContentWanted[]> => []),
+    update_packs: vi.fn(async () => ({ status: "no pack channel" })),
   }
   const hooks = {
     read: vi.fn(read),
@@ -27,6 +28,7 @@ function make_scheduler(answers: Array<ViewSchedule[] | Error>, read: (view_id: 
     summarize: vi.fn(async (_wanted: ContentWanted) => {}),
     edition_out: vi.fn(),
     read_done: vi.fn(),
+    packs: vi.fn(),
     failed: vi.fn(),
   }
   const scheduler = new Scheduler(brain as unknown as BrainClient, hooks, 1_000)
@@ -211,5 +213,20 @@ describe("Scheduler after the review", () => {
     await vi.waitFor(() => expect(hooks.summarize).toHaveBeenCalledTimes(1))
     held.release()
     await scheduler.idle()
+  })
+})
+
+describe("Scheduler packs", () => {
+  it("asks the pack channel once a day and reports what it found or that it failed", async () => {
+    vi.useFakeTimers()
+    const { scheduler, brain, hooks } = make_scheduler([[]])
+    brain.update_packs.mockResolvedValueOnce({ status: "installed pack v2" }).mockRejectedValueOnce(new Error("brain gone"))
+    await scheduler.tick()
+    await vi.waitFor(() => expect(hooks.packs).toHaveBeenCalledWith("installed pack v2"))
+    await scheduler.tick()
+    expect(brain.update_packs).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000)
+    await scheduler.tick()
+    await vi.waitFor(() => expect(hooks.failed).toHaveBeenCalledWith("The pack channel could not be checked: brain gone"))
   })
 })
