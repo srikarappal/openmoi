@@ -1,6 +1,7 @@
 """Extractor health: runs judged, candidates promoted, drift spotted."""
 
 import json
+import threading
 
 import pytest
 
@@ -45,7 +46,7 @@ def test_only_the_last_ten_healthy_counts_are_kept_and_a_damaged_file_starts_ove
     book = HealthBook(tmp_path / "health.json")
     for count in range(1, 15):
         book.record(run(count))
-    assert book.health("news.example", "/", 1).counts == list(range(5, 15))
+    assert book.health("news.example", "/", 1).counts == {"": list(range(5, 15))}
     (tmp_path / "health.json").write_text('{"a": {"runs": "many"}, "b": {"runs": 2}}')
     reread = HealthBook(tmp_path / "health.json")
     assert list(reread.specs) == ["b"]
@@ -98,3 +99,36 @@ def test_a_failing_newest_spec_is_still_used_when_it_is_the_only_one_and_the_ora
     client.post("/extractor/health", json=report_body(1, 0))
     assert client.get("/extractor", params={"url": "https://news.example/"}).json()["spec"]["version"] == 1
     assert client.get("/extractor", params={"url": "https://other.example/"}).json()["spec"] is None
+
+
+def test_an_oracle_rejection_sticks_and_such_a_spec_is_never_served_again(client):
+    client.post("/extractor/accept", json=SPEC)
+    client.post("/extractor/accept", json=SPEC)
+    menu = report_body(2, 6, ["Home", "About", "Contact", "Privacy", "Story", "Help"])
+    assert client.post("/extractor/health", json=menu).json()["healthy"] is False
+    for _ in range(6):
+        assert client.post("/extractor/health", json=report_body(2, 20)).json() == {"healthy": False, "status": "failing", "problem": "the items look like menu links"}
+    client.post("/extractor/health", json=report_body(1, 0))
+    assert client.get("/extractor", params={"url": "https://news.example/"}).json()["spec"]["version"] == 1
+    assert client.get("/extractor/previous", params={"url": "https://news.example/", "version": 3}).json()[0]["version"] == 1
+    assert all(spec["version"] != 2 for spec in client.get("/extractor/previous", params={"url": "https://news.example/", "version": 3}).json())
+
+
+def test_usual_counts_are_kept_per_page_so_a_narrow_search_is_not_drift(tmp_path):
+    book = HealthBook(tmp_path / "health.json")
+    for _ in range(5):
+        book.record(run(22).model_copy(update={"page": "https://www.amazon.com/s?k=lamp"}))
+    assert book.record(run(5).model_copy(update={"page": "https://www.amazon.com/s?k=rare+lamp+bulb"})).healthy
+    assert not book.record(run(5).model_copy(update={"page": "https://www.amazon.com/s?k=lamp"})).healthy
+    (tmp_path / "old.json").write_text('{"news.example/@v1": {"runs": 3, "healthy_runs": 3, "counts": [20, 21, 22]}}')
+    assert HealthBook(tmp_path / "old.json").specs["news.example/@v1"].counts == {"": [20, 21, 22]}
+
+
+def test_health_writes_never_lose_each_other(tmp_path):
+    book = HealthBook(tmp_path / "health.json")
+    threads = [threading.Thread(target=book.record, args=(run(10, version=version),)) for version in range(1, 21)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(HealthBook(tmp_path / "health.json").specs) == 20

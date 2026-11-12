@@ -50,7 +50,8 @@ def facebook_posts(payload: Any) -> list[dict[str, Any]]:
     for post in payload if isinstance(payload, list) else []:
         if not isinstance(post, dict):
             continue
-        text = " ".join(fixed_text(data.get("post")) for data in post.get("data", []) if isinstance(data, dict) and data.get("post")).strip()
+        entries = post.get("data") if isinstance(post.get("data"), list) else []
+        text = " ".join(fixed_text(data.get("post")) for data in entries if isinstance(data, dict) and data.get("post")).strip()
         title = fixed_text(post.get("title"))
         if not (text or title):
             continue
@@ -61,11 +62,10 @@ def facebook_posts(payload: Any) -> list[dict[str, Any]]:
 
 
 def facebook_events(payload: Any) -> list[dict[str, Any]]:
-    """your_events.json or event_invitations.json: events with a name, a start time and maybe a place."""
-    if isinstance(payload, dict):
-        payload = next((value for value in payload.values() if isinstance(value, list)), [])
+    """your_events.json, event_invitations.json or your_event_responses.json (lists one level deeper): events with a
+    name, a start time and maybe a place. The same event named twice is kept apart by its start time."""
     records = []
-    for event in payload if isinstance(payload, list) else []:
+    for event in event_entries(payload):
         if not isinstance(event, dict) or not event.get("name"):
             continue
         name = fixed_text(event["name"])
@@ -74,7 +74,7 @@ def facebook_events(payload: Any) -> list[dict[str, Any]]:
         records.append(
             {
                 "native_id": native_id,
-                "url": f"https://www.facebook.com/events/search/?q={quote(name)}",
+                "url": f"https://www.facebook.com/events/search/?q={quote(name)}&start={quote(str(event.get('start_timestamp', '')))}",
                 "title": name,
                 "text": f"At {fixed_text(place)}" if place else None,
                 "published_at": iso_time(event.get("start_timestamp")),
@@ -82,6 +82,15 @@ def facebook_events(payload: Any) -> list[dict[str, Any]]:
             }
         )
     return records
+
+
+def event_entries(payload: Any, depth: int = 0) -> list[Any]:
+    """Every event object in an export, wherever its lists sit."""
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict) and depth < 2:
+        return [entry for value in payload.values() for entry in event_entries(value, depth + 1)]
+    return []
 
 
 def amazon_orders(text: str) -> list[dict[str, Any]]:
@@ -92,9 +101,10 @@ def amazon_orders(text: str) -> list[dict[str, Any]]:
         if not asin or not name:
             continue
         price = " ".join(part for part in ((row.get("Currency") or "").strip(), (row.get("Unit Price") or "").strip()) if part)
+        order = (row.get("Order ID") or "").strip()
         record = {
-            "native_id": f"{(row.get('Order ID') or '').strip()}:{asin}",
-            "url": f"https://www.amazon.com/dp/{asin}",
+            "native_id": f"{order}:{asin}",
+            "url": f"https://www.amazon.com/gp/your-account/order-details?orderID={quote(order)}&asin={quote(asin)}",
             "title": name,
             "published_at": (row.get("Order Date") or "").strip() or None,
             "kind": "product",

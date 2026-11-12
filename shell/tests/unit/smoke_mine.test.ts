@@ -271,3 +271,12 @@ describe("Mine with structured data and health checks", () => {
     expect(doubted.hooks.notify).toHaveBeenCalledWith("Could not make a Mine view of this page: the new spec the items look like menu links")
   })
 })
+
+describe("Mine product pages after the L1 review", () => {
+  it("shows the product record, not whatever comes first", async () => {
+    const product = { url: "https://shop.example/p/1", title: "Desk lamp", kind: "product" }
+    const { mine, brain, target } = make_mine({ structured: { page_type: "product", records: [{ url: "https://shop.example/", title: "Home" }, product], feeds: [] } })
+    await mine.enable(target)
+    expect(brain.ingest).toHaveBeenCalledWith("site:news.example.com", [product], target.url, "site_news.example.com", "listing")
+  })
+})

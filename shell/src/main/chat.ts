@@ -176,8 +176,9 @@ export class ChatController {
 
   private async google_finished(): Promise<{ connected: boolean; status: string }> {
     for (let attempt = 0; attempt < GOOGLE_POLLS; attempt++) {
+      // This sign in's own outcome, not an older token: "connected" or "not connected: why" once it finished.
       const status = await this.brain.google_status()
-      if (status.connected || status.status.startsWith("not connected:")) return status
+      if (status.status === "connected" || status.status.startsWith("not connected:")) return status
       await sleep(GOOGLE_POLL_MS)
     }
     return { connected: false, status: "no answer from the browser in five minutes" }

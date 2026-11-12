@@ -91,7 +91,8 @@ export class MineController {
       const article = await target.driver.run<RawRecord | null>(target.handle, "readability")
       if (article) return { kind: "article", records: [article] }
       const page = await target.driver.run<StructuredPage | null>(target.handle, "structured")
-      if (page?.page_type === "product" && page.records.length) return { kind: "listing", records: page.records.slice(0, 1) }
+      const product = page?.page_type === "product" ? page.records.find((record) => record.kind === "product") : undefined
+      if (product) return { kind: "listing", records: [product] }
       const records = await this.listing_records(target, page?.records ?? [])
       return records ? { kind: "listing", records } : null
     } catch (error) {

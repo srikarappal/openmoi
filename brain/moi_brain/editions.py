@@ -90,8 +90,7 @@ class EditionBook:
             editions.setdefault(edition_at.astimezone().isoformat(), {})[key] = now.isoformat()
             oldest = now - KEEP_EDITIONS
             self.reads[view_id] = {name: entry for name, entry in editions.items() if (moment_of(name) or now) >= oldest}
-            snapshot = {view: dict(entries) for view, entries in self.reads.items()}
-        write_atomic(self.path, json.dumps(snapshot, indent=2))
+            write_atomic(self.path, json.dumps(self.reads, indent=2))
 
     def read_done_at(self, view_id: str, edition_at: datetime) -> datetime | None:
         """When the read for this edition finished, if it did."""

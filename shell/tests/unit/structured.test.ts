@@ -71,3 +71,33 @@ describe("item lists in any JSON", () => {
     expect(json_records("not json", URL_NOW)).toEqual([])
   })
 })
+
+describe("structured data after the review", () => {
+  const LD = (data: unknown) => `<script type="application/ld+json">${JSON.stringify(data)}</script>`
+
+  function records_of(html: string, url = "https://shop.example/p/lamp"): Array<Record<string, string>> {
+    const doc = new DOMParser().parseFromString(`<html><head>${html}</head><body></body></html>`, "text/html")
+    return structured_records(read_structured(doc, url), url)
+  }
+
+  it("never takes breadcrumbs for items, and a product without a link is the page itself", () => {
+    const breadcrumbs = { "@type": "BreadcrumbList", itemListElement: [{ "@type": "ListItem", position: 1, item: { "@id": "https://shop.example/", name: "Home" } }, { "@type": "ListItem", position: 2, item: { "@id": "https://shop.example/p/lamp", name: "Lamp" } }] }
+    const product = { "@type": "Product", name: "Desk lamp", offers: { price: "24.99", priceCurrency: "USD" } }
+    const found = records_of(LD([breadcrumbs, product]))
+    expect(found).toEqual([{ native_id: "https://shop.example/p/lamp", url: "https://shop.example/p/lamp", title: "Desk lamp", "extra.price_text": "USD 24.99", kind: "product" }])
+  })
+
+  it("fills a record from a second node for the same link, and reads untyped list members", () => {
+    const list = { "@type": "ItemList", itemListElement: [{ "@type": "ListItem", url: "/p/1", name: "Desk lamp" }, { "@type": "ListItem", item: { "@id": "/p/2", name: "Floor lamp" } }] }
+    const product = { "@type": "Product", name: "Desk lamp", url: "/p/1", offers: { price: "24.99", priceCurrency: "USD" } }
+    const found = records_of(LD([list, product]), "https://shop.example/c/lamps")
+    expect(found.map((record) => record.title)).toEqual(["Desk lamp", "Floor lamp"])
+    expect(found[0]["extra.price_text"]).toBe("USD 24.99")
+    expect(found[0].kind).toBe("product")
+  })
+
+  it("skips a feed link it cannot read instead of failing the page", () => {
+    const doc = new DOMParser().parseFromString('<html><head><link rel="alternate" type="application/rss+xml" href="http://[bad"><link rel="alternate" type="application/rss+xml" href="/ok.xml"></head></html>', "text/html")
+    expect(read_structured(doc, "https://shop.example/").feeds).toEqual([{ title: "", url: "https://shop.example/ok.xml" }])
+  })
+})

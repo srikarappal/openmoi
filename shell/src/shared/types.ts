@@ -204,6 +204,8 @@ export interface RunReport {
   count: number
   missing: Record<string, number>
   samples: Array<{ title: string; url: string }>
+  // The page it ran on: usual counts are kept per page.
+  page: string
 }
 
 export interface HealthVerdict {

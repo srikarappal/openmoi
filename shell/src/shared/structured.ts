@@ -6,7 +6,9 @@ import type { RawRecord } from "./types"
 const MAX_RECORDS = 200
 const MAX_DEPTH = 12
 const FEED_TYPES = ["application/rss+xml", "application/atom+xml", "application/feed+json"]
-const ITEM_TYPES = new Set(["Product", "Article", "NewsArticle", "BlogPosting", "VideoObject", "SocialMediaPosting", "Event", "Recipe", "Offer", "ListItem", "CreativeWork"])
+const ITEM_TYPES = new Set(["Product", "Article", "NewsArticle", "BlogPosting", "VideoObject", "SocialMediaPosting", "Event", "Recipe", "CreativeWork"])
+// Types whose url, when they have none, is the page itself: the page's main thing.
+const MAIN_TYPES = new Set(["Product", "Article", "NewsArticle", "BlogPosting", "VideoObject", "Event", "Recipe"])
 
 export interface Structured {
   json_ld: unknown[]
@@ -63,7 +65,8 @@ export function read_structured(doc: Document, page_url: string): Structured {
   const hydration = ["script#__NEXT_DATA__", "script#__NUXT_DATA__"].map((selector) => parse_json(doc.querySelector(selector)?.textContent)).filter((value) => value !== null)
   const feeds = Array.from(doc.querySelectorAll("link[rel~=alternate][href]"))
     .filter((link) => FEED_TYPES.includes((link.getAttribute("type") ?? "").toLowerCase()))
-    .map((link) => ({ title: link.getAttribute("title") ?? "", url: new URL(link.getAttribute("href") ?? "", page_url).href }))
+    .map((link) => ({ title: link.getAttribute("title") ?? "", url: absolute(link.getAttribute("href") ?? "", page_url) }))
+    .filter((feed) => feed.url)
   return { json_ld, open_graph, microdata, hydration, feeds }
 }
 
@@ -88,10 +91,12 @@ function absolute(url: string, page_url: string): string {
   }
 }
 
-// One schema.org item as a record: its name, link, text, picture, author, time, price and rating where it says.
-function record_of(node: Node, page_url: string): RawRecord | null {
+// One schema.org item as a record: its name, link, text, picture, author, time, price and rating where it says. A main
+// item at the top of the page's data without a link of its own is the page itself.
+function record_of(node: Node, page_url: string, top_level: boolean): RawRecord | null {
   const inner = is_node(node.item) ? node.item : node
-  const url = absolute(text_of(inner.url ?? inner["@id"] ?? node.url), page_url)
+  const raw = text_of(inner.url ?? inner["@id"] ?? node.url)
+  const url = raw ? absolute(raw, page_url) : top_level && types_of(inner).some((type) => MAIN_TYPES.has(type)) ? page_url : ""
   const title = text_of(inner.name ?? inner.headline)
   if (!url || !title) return null
   const offers = (Array.isArray(inner.offers) ? inner.offers[0] : inner.offers) as Node | undefined
@@ -111,33 +116,47 @@ function record_of(node: Node, page_url: string): RawRecord | null {
   return record
 }
 
-// Every node in a JSON value that names an item type, depth first, with ItemList members unwrapped.
-function item_nodes(value: unknown, found: Node[], depth = 0): void {
+interface Found {
+  node: Node
+  top_level: boolean
+}
+
+// Every node in a JSON value that names an item type, depth first. An ItemList's members count (a member that only
+// names an item and its link too); breadcrumbs never do.
+// nested: inside another typed node (an ItemList, a page), so not the page's own main thing.
+function item_nodes(value: unknown, found: Found[], depth = 0, in_list = false, nested = false): void {
   if (depth > MAX_DEPTH || found.length >= MAX_RECORDS) return
   if (Array.isArray(value)) {
-    for (const entry of value) item_nodes(entry, found, depth + 1)
+    for (const entry of value) item_nodes(entry, found, depth + 1, in_list, nested)
     return
   }
   if (!is_node(value)) return
-  if (types_of(value).some((type) => ITEM_TYPES.has(type))) {
-    found.push(value)
+  const types = types_of(value)
+  if (types.includes("BreadcrumbList")) return
+  if (types.some((type) => ITEM_TYPES.has(type))) {
+    found.push({ node: value, top_level: !nested })
     return
   }
-  for (const entry of Object.values(value)) item_nodes(entry, found, depth + 1)
+  if (types.includes("ListItem") && in_list) {
+    if (is_node(value.item) && types_of(value.item).some((type) => ITEM_TYPES.has(type))) found.push({ node: value.item, top_level: false })
+    else found.push({ node: value, top_level: false })
+    return
+  }
+  for (const entry of Object.values(value)) item_nodes(entry, found, depth + 1, in_list || types.includes("ItemList"), nested || types.length > 0)
 }
 
-// Records the structured data names, each URL once, in page order.
+// Records the structured data names, each URL once in page order; a second node for the same URL fills what the first
+// left out (a product's price, say).
 export function structured_records(structured: Structured, page_url: string): RawRecord[] {
-  const nodes: Node[] = []
-  item_nodes([...structured.json_ld, ...structured.microdata], nodes)
-  const seen = new Set<string>()
-  const records: RawRecord[] = []
-  for (const node of nodes) {
-    const record = record_of(node, page_url)
-    if (record && !seen.has(record.url)) {
-      seen.add(record.url)
-      records.push(record)
-    }
+  const found: Found[] = []
+  item_nodes([...structured.json_ld, ...structured.microdata], found)
+  const by_url = new Map<string, RawRecord>()
+  for (const { node, top_level } of found) {
+    const record = record_of(node, page_url, top_level)
+    if (!record) continue
+    const existing = by_url.get(record.url)
+    if (existing) for (const [key, value] of Object.entries(record)) existing[key] ??= value
+    else by_url.set(record.url, record)
   }
-  return records
+  return [...by_url.values()]
 }

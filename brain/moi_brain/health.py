@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from moi_brain.files import read_json, write_atomic
 
@@ -40,6 +40,8 @@ class RunReport(BaseModel):
     version: int
     count: int = Field(ge=0)
     missing: dict[str, int] = Field(default_factory=dict)
+    # The page it ran on: usual counts are kept per page, since one pattern can cover searches big and small.
+    page: str = ""
     # A few records, for the oracle check of a new spec's first run.
     samples: list[Sample] = Field(default_factory=list, max_length=ORACLE_SAMPLES)
 
@@ -57,9 +59,17 @@ def oracle_prompt(domain: str, page: str, samples: list[Sample]) -> list[dict[st
 class SpecHealth(BaseModel):
     runs: int = 0
     healthy_runs: int = 0
-    counts: list[int] = Field(default_factory=list)
+    counts: dict[str, list[int]] = Field(default_factory=dict)
     status: Literal["candidate", "active", "failing"] = "candidate"
     problem: str = ""
+    # Set when the oracle said the spec reads something other than the page's items; such a spec never heals.
+    rejected: str = ""
+
+    @field_validator("counts", mode="before")
+    @classmethod
+    def per_page(cls, counts: object) -> object:
+        """A file from before kept one list for the whole spec."""
+        return {"": counts} if isinstance(counts, list) else counts
 
 
 class Verdict(BaseModel):
@@ -114,16 +124,16 @@ class HealthBook:
         key = spec_key(report.domain, report.path_pattern, report.version)
         with self.lock:
             health = self.specs.get(key, SpecHealth())
-            problem = run_problem(report, health.counts) or oracle_problem
+            health.rejected = health.rejected or oracle_problem
+            problem = health.rejected or run_problem(report, health.counts.get(report.page, []))
             health.runs += 1
             if problem:
                 health.status, health.problem = "failing", problem
             else:
                 health.healthy_runs += 1
-                health.counts = [*health.counts, report.count][-KEPT_COUNTS:]
+                health.counts[report.page] = [*health.counts.get(report.page, []), report.count][-KEPT_COUNTS:]
                 health.status = "active" if health.healthy_runs >= RUNS_TO_ACTIVE else "candidate"
                 health.problem = ""
             self.specs[key] = health
-            snapshot = {name: value.model_dump() for name, value in self.specs.items()}
-        write_atomic(self.path, json.dumps(snapshot, indent=2))
+            write_atomic(self.path, json.dumps({name: value.model_dump() for name, value in self.specs.items()}, indent=2))
         return Verdict(healthy=not problem, status=health.status, problem=problem)

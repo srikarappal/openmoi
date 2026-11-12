@@ -74,6 +74,8 @@ class GoogleAccount:
         self.api_base = api_base
         self.lock = threading.Lock()
         self.status = "not connected"
+        # Each sign in is numbered: one you gave up on never reports over a newer one.
+        self.attempt = 0
 
     @property
     def client_id(self) -> str:
@@ -92,8 +94,9 @@ class GoogleAccount:
         server.expected_state = secrets.token_urlsafe(24)
         server.timeout = WAIT_SECONDS
         redirect_uri = f"http://127.0.0.1:{server.server_address[1]}/callback"
+        self.attempt += 1
         self.status = "waiting for you in the browser"
-        threading.Thread(target=self.finish, args=(server, verifier, redirect_uri), daemon=True).start()
+        threading.Thread(target=self.finish, args=(server, verifier, redirect_uri, self.attempt), daemon=True).start()
         query = {
             "client_id": self.client_id,
             "redirect_uri": redirect_uri,
@@ -107,19 +110,23 @@ class GoogleAccount:
         }
         return f"{self.auth_url}?{urlencode(query)}"
 
-    def finish(self, server: Redirect, verifier: str, redirect_uri: str) -> None:
+    def finish(self, server: Redirect, verifier: str, redirect_uri: str, attempt: int) -> None:
         try:
             server.handle_request()
         finally:
             server.server_close()
         if not server.code:
-            self.status = f"not connected: {server.error or 'no answer from the browser'}"
+            self.report(attempt, f"not connected: {server.error or 'no answer from the browser'}")
             return
         try:
             self.save(self.token_request({"grant_type": "authorization_code", "code": server.code, "code_verifier": verifier, "redirect_uri": redirect_uri}))
-            self.status = "connected"
+            self.report(attempt, "connected")
         except GoogleError as error:
-            self.status = f"not connected: {error}"
+            self.report(attempt, f"not connected: {error}")
+
+    def report(self, attempt: int, status: str) -> None:
+        if attempt == self.attempt:
+            self.status = status
 
     def token_request(self, fields: dict[str, str]) -> dict[str, Any]:
         body = {"client_id": self.client_id, **fields}

@@ -376,3 +376,17 @@ describe("ChatController Google", () => {
     expect(last_reply(status.chat)).toBe("Google is not connected. Use /google connect.")
   })
 })
+
+describe("ChatController Google after the L1 review", () => {
+  it("waits for this sign in, not an older token that is still there", async () => {
+    vi.useFakeTimers()
+    const statuses = [{ connected: true, status: "waiting for you in the browser", client: true }, { connected: true, status: "connected", client: true }]
+    const google_status = vi.fn(async () => statuses.shift() ?? { connected: true, status: "connected", client: true })
+    const { chat } = make_chat({ google_connect: vi.fn(async () => ({ auth_url: "https://a" })), google_status } as unknown as Partial<BrainClient>)
+    const sending = chat.send("/google connect")
+    await vi.advanceTimersByTimeAsync(2_500)
+    await sending
+    expect(google_status).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+})

@@ -155,3 +155,19 @@ def test_your_google_subscriptions_feed_youtube_subscriptions_and_refresh_daily(
         assert refused.status_code == 400 and "GOOGLE_CLIENT_ID" in refused.json()["detail"]
     finally:
         http.close()
+
+
+def test_a_sign_in_you_gave_up_on_never_reports_over_a_newer_one(google, monkeypatch):
+    account, _, _ = google
+    monkeypatch.setattr("moi_brain.google.WAIT_SECONDS", 0.3)
+    account.start()
+    newer = account.start()
+    time.sleep(0.6)
+    assert account.status == "not connected: no answer from the browser"
+    monkeypatch.setattr("moi_brain.google.WAIT_SECONDS", 5)
+    first = account.start()
+    second = account.start()
+    browser_returns(second)
+    wait_for(account, "connected")
+    assert account.status == "connected"
+    assert newer and first

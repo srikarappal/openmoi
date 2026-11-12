@@ -33,7 +33,7 @@ def test_facebook_posts_become_records_with_a_link_when_they_shared_one():
 def test_facebook_events_become_records():
     records = facebook_events(EVENTS)
     assert [(record["title"], record["text"]) for record in records] == [("Garden party", "At City Park"), ("No place", None)]
-    assert records[0]["url"] == "https://www.facebook.com/events/search/?q=Garden%20party"
+    assert records[0]["url"] == "https://www.facebook.com/events/search/?q=Garden%20party&start=1700100000"
     assert records[1]["published_at"] is None
     assert facebook_events("nothing") == []
 
@@ -41,8 +41,8 @@ def test_facebook_events_become_records():
 def test_amazon_orders_become_product_records():
     records = amazon_orders(ORDERS)
     assert records == [
-        {"native_id": "111-1:B0CX1LAMP", "url": "https://www.amazon.com/dp/B0CX1LAMP", "title": "Desk Lamp", "published_at": "2026-10-01T10:00:00Z", "kind": "product", "extra.price_text": "USD 24.99"},
-        {"native_id": "111-2:B0NOPRICE", "url": "https://www.amazon.com/dp/B0NOPRICE", "title": "Cable", "published_at": "2026-10-02T10:00:00Z", "kind": "product"},
+        {"native_id": "111-1:B0CX1LAMP", "url": "https://www.amazon.com/gp/your-account/order-details?orderID=111-1&asin=B0CX1LAMP", "title": "Desk Lamp", "published_at": "2026-10-01T10:00:00Z", "kind": "product", "extra.price_text": "USD 24.99"},
+        {"native_id": "111-2:B0NOPRICE", "url": "https://www.amazon.com/gp/your-account/order-details?orderID=111-2&asin=B0NOPRICE", "title": "Cable", "published_at": "2026-10-02T10:00:00Z", "kind": "product"},
     ]
 
 
@@ -80,3 +80,12 @@ def test_your_history_never_expires(client):
 def test_odd_attachments_are_skipped():
     post = {"timestamp": 1, "data": [{"post": "Look"}], "attachments": ["junk", {"data": ["x", {"external_context": {"url": "ftp://old"}}, {"external_context": {"url": "https://ok.example"}}]}]}
     assert facebook_posts([post])[0]["url"] == "https://ok.example"
+
+
+def test_repeat_orders_and_same_name_events_are_each_kept_and_counted_honestly(client):
+    orders = '"Order ID","Order Date","ASIN","Product Name"\n"1","2026-09-01","B0COFFEE","Coffee"\n"2","2026-10-01","B0COFFEE","Coffee"\n"3","2026-11-01","B0COFFEE","Coffee"\n'
+    assert client.post("/history", json={"name": "Retail.OrderHistory.1.csv", "text": orders}).json() == {"source_id": "history:amazon", "stored": 3}
+    events = {"event_responses_v2": {"events_joined": [{"name": "Book club", "start_timestamp": 1700000000}, {"name": "Book club", "start_timestamp": 1700600000}], "events_declined": [{"name": "Gala", "start_timestamp": 1}]}}
+    assert client.post("/history", json={"name": "your_event_responses.json", "text": json.dumps(events)}).json() == {"source_id": "history:facebook", "stored": 3}
+    assert client.app.state.brain.store.stats()["items"] == {"history:amazon": 3, "history:facebook": 3}
+    assert facebook_posts([{"timestamp": 1, "data": None, "title": "Shared a memory"}])[0]["title"] == "Shared a memory"

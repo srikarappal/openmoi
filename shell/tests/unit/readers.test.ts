@@ -674,3 +674,26 @@ describe("ReaderPool feeds and captured JSON", () => {
     }
   })
 })
+
+describe("ReaderPool after the L1 review", () => {
+  it("closes a page no spec could read instead of leaving it open in the background", async () => {
+    vi.useFakeTimers()
+    const page = new FakeFeed()
+    const drifted = { ...SPEC, version: 4, domain: "feed.example.com", path_pattern: "/", item_root: "nothing" } as ExtractorSpec
+    const brain = {
+      report_extractor: vi.fn(async () => ({ healthy: false, status: "failing", problem: "found no items" })),
+      generate_extractor: vi.fn(async () => {
+        throw new Error("model down")
+      }),
+    }
+    const pool = make_pool(page, brain as unknown as Partial<BrainClient>)
+    for (let fill = 0; fill < 3; fill++) {
+      const filling = pool.fill(source(undefined, { spec: drifted }), 5, new Delivered().take, true)
+      await pass_time(12_000)
+      expect((await filling).status).toBe("failed")
+    }
+    expect(page.opens).toBe(3)
+    expect(page.closes).toBe(3)
+    expect(pool.open_tabs()).toEqual([])
+  })
+})

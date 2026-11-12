@@ -327,15 +327,19 @@ class Brain:
             if judgment.name in shared and shared[judgment.name] != judgment
         ]
 
+    def usable_versions(self, url: str) -> list[ExtractorSpec]:
+        """A page's specs, newest first, without those the oracle rejected for reading something else."""
+        return [spec for spec in self.extractors.versions(url) if not self.health.health(spec.domain, spec.path_pattern, spec.version).rejected]
+
     def best_spec(self, url: str) -> ExtractorSpec | None:
-        """The newest spec for a page that is not failing its health check, else the newest one."""
-        versions = self.extractors.versions(url)
+        """The newest spec for a page that is not failing its health check, else the newest one not rejected."""
+        versions = self.usable_versions(url)
         healthy = [spec for spec in versions if self.health.health(spec.domain, spec.path_pattern, spec.version).status != "failing"]
         return (healthy or versions or [None])[0]
 
     def previous_specs(self, url: str, version: int) -> list[ExtractorSpec]:
         """Earlier versions of a page's spec, newest first, at most two: the first fallback when a spec drifts."""
-        return [spec for spec in self.extractors.versions(url) if spec.version < version][:2]
+        return [spec for spec in self.usable_versions(url) if spec.version < version][:2]
 
     def report_extractor(self, report: RunReport) -> Verdict:
         """One run of a spec, judged. A new spec's first run also goes to the model, which says whether its items are
@@ -555,7 +559,7 @@ class Brain:
             if not rules:
                 continue
             for item, seen_at in self.store.items_with_seen(compiled.source_ids(), now - CONTENT_WINDOW):
-                if seen_at or "summary" in item.extra or recently_failed(item, now) or not self.readable_in_a_tab(item.url):
+                if seen_at or "summary" in item.extra or recently_failed(item, now) or item.source_id.startswith("history:") or not self.readable_in_a_tab(item.url):
                     continue
                 if any(applies(rule, item, now, circles) for rule in rules):
                     found[item.item_id] = (item.published_at or item.fetched_at, ContentWanted(item_id=item.item_id, url=item.url, video=is_video(item.url)))
@@ -861,7 +865,7 @@ class Brain:
             raise BadInput("That file is not a data export openMoi knows: Facebook's your_posts or your_events JSON, or Amazon's order history CSV.")
         kind, records = found
         items = self.store_records(SOURCE_IDS[kind], records)
-        return SOURCE_IDS[kind], len(items)
+        return SOURCE_IDS[kind], len({item.item_id for item in items})
 
     def subscriptions(self) -> list[str]:
         """The channels "YouTube: subscriptions" means: your Google account's (refreshed daily), else a Takeout file's."""

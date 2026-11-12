@@ -24,16 +24,16 @@ function usable(records: RawRecord[]): number {
   return records.filter((record) => record.url && (record.title || record.text)).length
 }
 
-export function run_report(spec: ExtractorSpec, records: RawRecord[]): RunReport {
+export function run_report(spec: ExtractorSpec, records: RawRecord[], page: string): RunReport {
   const missing = Object.fromEntries(CHECKED_FIELDS.map((field) => [field, records.filter((record) => !record[field]).length]))
   const samples = records.slice(0, SAMPLES).map((record) => ({ title: (record.title || record.text || "").slice(0, 200), url: record.url ?? "" }))
-  return { domain: spec.domain, path_pattern: spec.path_pattern, version: spec.version, count: records.length, missing, samples }
+  return { domain: spec.domain, path_pattern: spec.path_pattern, version: spec.version, count: records.length, missing, samples, page }
 }
 
 // Runs a spec and its health check; the problem is empty when it read the page well.
-async function checked_run(brain: BrainClient, driver: PageDriver, handle: string, spec: ExtractorSpec): Promise<{ records: RawRecord[]; problem: string }> {
+async function checked_run(brain: BrainClient, driver: PageDriver, handle: string, spec: ExtractorSpec, url: string): Promise<{ records: RawRecord[]; problem: string }> {
   const records = await driver.run<RawRecord[]>(handle, "extract", { spec })
-  const verdict = await brain.report_extractor(run_report(spec, records))
+  const verdict = await brain.report_extractor(run_report(spec, records, url))
   const problem = verdict.healthy ? (is_good_extraction(records) ? "" : `found ${usable(records)} items with a title and url`) : verdict.problem
   return { records, problem }
 }
@@ -52,7 +52,7 @@ export async function find_listing_spec(
   const tried = failed ? [] : saved ? [saved] : []
   const candidates = [...tried, ...(latest ? await brain.previous_extractors(url, latest.version) : [])]
   for (const spec of candidates) {
-    const { records, problem } = await checked_run(brain, driver, handle, spec)
+    const { records, problem } = await checked_run(brain, driver, handle, spec, url)
     if (!problem) return { spec, records }
     last_error = `the saved spec v${spec.version} ${problem}`
   }
@@ -64,7 +64,7 @@ export async function find_listing_spec(
       const records = await driver.run<RawRecord[]>(handle, "extract", { spec })
       if (is_good_extraction(records)) {
         const accepted = await brain.accept_extractor(spec)
-        const verdict = await brain.report_extractor(run_report(accepted, records))
+        const verdict = await brain.report_extractor(run_report(accepted, records, url))
         if (verdict.healthy) return { spec: accepted, records }
         last_error = `the new spec ${verdict.problem}`
         continue

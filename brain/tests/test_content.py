@@ -169,3 +169,10 @@ def test_a_failed_summary_is_tried_again_a_day_later(paths, settings, services):
         assert [entry["item_id"] for entry in client.get("/content/wanted").json()] == [item_id]
     finally:
         brain.http.close()
+
+
+def test_your_old_history_is_never_queued_to_be_read_in_full(client, paths):
+    (paths.views / "past.md").write_text("# Past\n\n## Sources\n* History: amazon\n\n## Rules\n* Summarize everything.\n")
+    orders = '"Order ID","Order Date","ASIN","Product Name"\n"1","2026-09-01","B0COFFEE","Coffee"\n'
+    client.post("/history", json={"name": "Retail.OrderHistory.1.csv", "text": orders})
+    assert client.get("/content/wanted").json() == []

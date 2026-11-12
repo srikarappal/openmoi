@@ -214,7 +214,14 @@ export class ReaderPool {
     if (existing) await this.close(source.source_id)
     await this.make_room()
     const handle = await driver.open(source.start_url, true, source.capture)
-    const first = await this.first_records(driver, handle, source)
+    let first: Awaited<ReturnType<ReaderPool["first_records"]>>
+    try {
+      first = await this.first_records(driver, handle, source)
+    } catch (error) {
+      // No spec could read the page: its tab is not kept, so it is closed here rather than left open in the background.
+      await driver.close(handle).catch(ignore)
+      throw error
+    }
     if (first === null) {
       const challenge = await driver.url(handle)
       await driver.close(handle).catch(ignore)
@@ -265,7 +272,7 @@ export class ReaderPool {
       if (this.clock() >= deadline) break
       await sleep(POLL_MS)
     }
-    const verdict = await this.brain.report_extractor(run_report(source.spec, records))
+    const verdict = await this.brain.report_extractor(run_report(source.spec, records, source.start_url))
     if (verdict.healthy) return { spec: source.spec, records }
     return found_spec(await find_listing_spec(this.brain, driver, handle, source.start_url, null, { spec: source.spec, problem: verdict.problem }), source)
   }
