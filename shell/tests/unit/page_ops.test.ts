@@ -50,3 +50,22 @@ describe("run_page_op", () => {
     expect(() => run_page_op("delete" as never, {})).toThrow("unknown page op delete")
   })
 })
+
+describe("the text page operation", () => {
+  it("reads the main area when the page has one, else the body, with the title", () => {
+    document.title = "Visa slots"
+    document.body.innerHTML = "<nav>Menu Home About</nav><main><h1>Appointments</h1><p>No slots</p></main><footer>Contact</footer>"
+    expect(run_page_op("text", {})).toEqual({ title: "Visa slots", text: "AppointmentsNo slots" })
+    document.body.innerHTML = "<div>Just a body</div>"
+    expect(run_page_op("text", {})).toEqual({ title: "Visa slots", text: "Just a body" })
+    document.body.innerHTML = `<article>${"x".repeat(25_000)}</article>`
+    expect((run_page_op("text", {}) as { text: string }).text).toHaveLength(20_000)
+  })
+
+  it("prefers what the browser shows over hidden markup text where it can", () => {
+    document.body.innerHTML = '<div role="main">Shown</div>'
+    const main = document.querySelector("[role=main]") as HTMLElement
+    Object.defineProperty(main, "innerText", { configurable: true, value: "Shown as rendered" })
+    expect((run_page_op("text", {}) as { text: string }).text).toBe("Shown as rendered")
+  })
+})

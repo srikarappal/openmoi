@@ -20,6 +20,7 @@ import type {
   StopScreen,
   ViewInfo,
   ViewSchedule,
+  WatchAlert,
 } from "../shared/types"
 import type { BrainClient } from "./brain"
 import { format_mirror } from "../shared/commands"
@@ -139,6 +140,7 @@ export class Shell implements ViewHost {
       echo: (text) => this.chat.say(text),
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
       lens_stale: (view_id, layout_hash) => this.lens_gen.ensure(view_id, "feed", layout_hash),
+      alert: (alert) => this.alert(alert),
       track: (label, work) => this.activity.track(label, work),
     })
     this.mine = new MineController(brain, this.lenses, {
@@ -151,6 +153,8 @@ export class Shell implements ViewHost {
       brain,
       {
         read: (view_id) => this.views.read_for_edition(view_id),
+        // Not forced: a page that keeps failing is tried at most every 10 minutes, not every minute.
+        watch: (source) => this.views.check_watch(source, false),
         edition_out: (schedule) => this.edition_out(schedule),
         failed: (text) => this.notify(text),
       },
@@ -269,6 +273,18 @@ export class Shell implements ViewHost {
       next_edition: this.schedule_of(visit.view_id)?.next_edition ?? null,
     }
     this.activate(this.active)
+  }
+
+  // A watched page changed in a way you care about: a notice here, and a system notification while you are elsewhere.
+  private alert(alert: WatchAlert): void {
+    this.notify(`${alert.title}: ${alert.text}`, undefined, { label: "Show", command: { type: "open_view", view_id: alert.view_id } })
+    if (this.window.isVisible() && this.window.isFocused()) return
+    const notification = new Notification({ title: alert.title, body: alert.text })
+    notification.on("click", () => {
+      this.show()
+      this.run({ type: "open_view", view_id: alert.view_id }).catch((error) => this.notify(String(error)))
+    })
+    notification.show()
   }
 
   // An edition that came out while the window is away from you shows as a system notification; click it to read.

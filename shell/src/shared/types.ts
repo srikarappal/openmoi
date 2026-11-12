@@ -67,7 +67,8 @@ export interface PageSource {
   // Posts come newest first: reaching what was read before means nothing newer was missed.
   chronological?: boolean
   // "follows": a page listing the accounts you follow, read into who you know rather than into items.
-  purpose?: "items" | "follows"
+  // "watch": a page whose text is compared with its last look.
+  purpose?: "items" | "follows" | "watch"
 }
 
 export interface ViewPage {
@@ -181,7 +182,25 @@ export type LensToHost =
   | { type: "seen"; item_ids: string[] }
   | { type: "less_like_this"; item_id: string }
 
-export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability"
+export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability" | "text"
+
+// A watched page's text, read by the "text" page operation.
+export interface PageText {
+  title: string
+  text: string
+}
+
+// A watched page changed in a way a view's rules keep.
+export interface WatchAlert {
+  view_id: string
+  title: string
+  text: string
+}
+
+export interface WatchReport {
+  changed: boolean
+  alert: WatchAlert | null
+}
 
 export interface PageRequest {
   request_id: number

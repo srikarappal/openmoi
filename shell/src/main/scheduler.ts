@@ -1,12 +1,14 @@
 // Runs the reads editions need when they are due and says when an edition comes out. It looks every minute and
 // whenever the Mac wakes; a read the Mac slept through is due late and runs then. Reads go one view at a time each.
-import type { ViewSchedule } from "../shared/types"
+import type { PageSource, ViewSchedule } from "../shared/types"
 import type { BrainClient } from "./brain"
 
 const TICK_MS = 60_000
 
 export interface SchedulerHooks {
   read(view_id: string): Promise<void>
+  // A watched page is due for another look.
+  watch(source: PageSource): Promise<void>
   // An edition came out while openMoi was running.
   edition_out(schedule: ViewSchedule): void
   failed(text: string): void
@@ -63,6 +65,27 @@ export class Scheduler {
       const previous = this.editions.get(schedule.view_id)
       if (schedule.edition && previous !== undefined && previous !== schedule.edition) this.hooks.edition_out(schedule)
       if (schedule.edition) this.editions.set(schedule.view_id, schedule.edition)
+    }
+    await this.look_at_watches()
+  }
+
+  // Each due watched page gets one look at a time; a failed look waits for the next minute.
+  private async look_at_watches(): Promise<void> {
+    let due: PageSource[]
+    try {
+      due = await this.brain.watches_due()
+    } catch (error) {
+      this.hooks.failed(`Watched pages could not be checked: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+    for (const source of due) {
+      const key = `watch:${source.start_url}`
+      if (this.running.has(key)) continue
+      const run = this.hooks
+        .watch(source)
+        .catch((error) => this.hooks.failed(`Looking at ${source.start_url} failed: ${error instanceof Error ? error.message : String(error)}`))
+        .finally(() => this.running.delete(key))
+      this.running.set(key, run)
     }
   }
 

@@ -6,6 +6,14 @@ import { skeleton } from "./skeleton"
 import type { ExtractorSpec, PageOp } from "./types"
 
 const DEFAULT_SCROLL_PX = 900
+const MAX_PAGE_TEXT = 20_000
+
+// The page's main text, for watching it: its main area when it has one, the whole body otherwise.
+function page_text(): { title: string; text: string } {
+  const main = document.querySelector("main, [role=main], article") ?? document.body
+  const text = (main as HTMLElement).innerText ?? main.textContent ?? ""
+  return { title: document.title, text: text.slice(0, MAX_PAGE_TEXT) }
+}
 
 export function run_page_op(op: PageOp, args: Record<string, unknown>): unknown {
   switch (op) {
@@ -22,6 +30,8 @@ export function run_page_op(op: PageOp, args: Record<string, unknown>): unknown 
       return skeleton(document.body)
     case "readability":
       return read_article(document, location.href)
+    case "text":
+      return page_text()
     default:
       throw new Error(`unknown page op ${op}`)
   }

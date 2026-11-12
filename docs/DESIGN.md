@@ -296,6 +296,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 | X | Handwritten extractor spec for the home timeline, run in a reader tab in your Chrome (or openMoi's session) | 3 |
 | Any website ("Mine") | Readability for articles; generated extractor spec for listings | 3 |
 | Any site's feed page (`* Page: <url>` in Sources) | A reader tab that keeps scrolling as you do: Instagram, Facebook, a YouTube home, any listing; its extractor is generated from the page the first time. `(newest first)` after the address marks a page whose posts come in order, read until it reaches what was read before (34.6) | 3 |
+| A page you watch (`* Watch: <url> [every 30 minutes]` in Sources) | Looked at about hourly (never more often than every 5 minutes) in a quiet tab that closes again; a change becomes the page's one change item, and an alert when a view's rules keep it (34.6) | 3 |
 | Who you follow (`* Following: <url>` in Sources) | A page listing the accounts you follow, read about once a week into who you know (34.4); never shown as items | 3 |
 
 ### 9.3 Brain (Python 3.12, sync)
@@ -581,6 +582,7 @@ CREATE TABLE events (
 CREATE TABLE follows (host TEXT NOT NULL, handle TEXT NOT NULL, list_url TEXT NOT NULL, seen_at TEXT NOT NULL, PRIMARY KEY (host, handle, list_url));
 CREATE TABLE follow_lists (list_url TEXT PRIMARY KEY, read_at TEXT NOT NULL);
 CREATE TABLE moments (ts TEXT NOT NULL, view_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('visit', 'extended', 'early')));
+CREATE TABLE watches (url TEXT PRIMARY KEY, text TEXT NOT NULL, checked_at TEXT NOT NULL, changed_at TEXT);
 ```
 
 Items expire after 30 days unless opened; an account no following list named for 30 days is dropped. Everything else the MVP stores is a file.
@@ -594,6 +596,7 @@ Items expire after 30 days unless opened; an account no following list named for
 | `POST /ingest {source_id, records, page_url, view_id?, kind?}` | Raw records to items; with a view id, also the Mine page ranked in page order and whether its lens is stale |
 | `POST /view/{view_id} {exclude_ids}` | Ranked page with reasons, excluding what the lens already shows, plus `refreshing`, `version`, `lens_stale` and `keep_rate` (per source, the share its rules let through, which sizes read ahead) |
 | `POST /follows {list_url, records}` | Accounts from a page listing who you follow (34.4) |
+| `GET /watches/due`, `POST /watches/report {url, title, text}` | Watched pages due for a look; a look's text, answered with whether it changed and any alert (34.6) |
 | `GET /mirror?days=`, `GET /mirror/weekly`, `POST /moments {view_id, kind}`, `POST /view/{view_id}/early` | The algorithm mirror, once a week; a visit or five more minutes; an edition opened early (34.6) |
 | `GET /schedule`, `POST /schedule/done {view_id, edition}` | Views with a Time section, their editions and any read due now (never asks the model); a finished edition read |
 | `POST /events {events}` | `open`, `seen`, `less_like_this`; opens also go into the journal |
@@ -808,7 +811,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 508 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 392 shell and extension unit (97% of lines), 31 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 521 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 403 shell and extension unit (97% of lines), 32 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -1351,7 +1354,7 @@ Sites tune their feeds for their own goals: time on site, ads, outrage. openMoi 
 | 4 | Unbundled platforms | Facebook -> only events and birthdays; LinkedIn -> only job changes of people you know; YouTube -> new uploads from subscriptions, no sidebar; Instagram -> close friends, no Reels | `Page:` sources, rules and judgments built; Facebook and Instagram untested |
 | 5 | Notification firewall | reader opens each site's notifications page -> replies from people you know pass, likes and "trending" drop -> one batch at noon -> every app's push turned off | `Page:` sources built; batching not built |
 | 6 | Algorithm mirror | keep rate and topics per source -> weekly "X showed you 600 posts, 7% passed your rules, a third were anger" -> X earns your time or loses its place | built |
-| 7 | Watch for me | visa slot page, school portal, a Marketplace seller -> reader checks at human pace -> one notice when it changes -> no more compulsive checking | not built |
+| 7 | Watch for me | visa slot page, school portal, a Marketplace seller -> reader checks at human pace -> one notice when it changes -> no more compulsive checking | built |
 | 8 | Hunts across sites | Zillow, Craigslist and Facebook Marketplace -> "pets ok, not ground floor, under $3k" -> one listing on 3 sites merged -> only new matches; the same for jobs, used cars and deals | `Page:` sources, rules and judgments built; merging not built |
 | 9 | Watch before you watch | 40 minute video -> transcript summary plus the 6 minutes worth watching -> watch those or nothing | not built |
 | 10 | Your reading as memory | every article you open -> 3 line note in the journal -> "what was that lithium piece?" answered from what you actually read | journal of opens built; notes not built |
@@ -1425,8 +1428,8 @@ item kept by the rules -> its page opened by the reader driver within the page l
 | Piece | Missing | Design | Unlocks |
 |---|---|---|---|
 | Completeness `[built]` | `caught_up` means openMoi has nothing more stored, not that the platform has nothing new | A `Page:` source marked `(newest first)` (X Following, Instagram Following) reads from the top until it reaches two posts in a row read before (one pinned post does not count), here or in an earlier run as the brain remembers; then, once you are caught up, "Nothing missed: everything new on <page> since <time> is in this view". A ranked feed never claims it | 2 |
-| Page watch | Every source is a listing of items | `Watch: <url>` in Sources: the reader reads the page's main text at the source's pace, compares it with the last read and raises a notice when it changed in a way the view's Rules care about | 7 |
-| History `[built]` | Keep rate is computed per render and never stored | As built, no new table for items: items live 30 days with their first read time, so the mirror is computed from them by today's rules (listed, kept by some view, seen, opened, from strangers, judged yes). A small `moments` table counts visits, five more minutes and early openings. `/mirror [days]` shows it in chat and it comes by itself once a week | 6 |
+| Page watch `[built]` | Every source is a listing of items | `Watch: <url>` in Sources: the reader reads the page's main text at the source's pace, compares it with the last read and raises a notice when it changed in a way the view's Rules care about. As built: the first look is the baseline; spacing and relative times ("3 minutes ago") are not changes; a change is one item per page ("Visa slots changed", what was added and removed) that replaces the last; the alert waits for each watching view's rules (tagging the change at once when they test topics or judgments), shows as a notice with Show, and as a system notification while you are elsewhere. A refresh looks at once; a page that keeps failing is tried at most every 10 minutes | 7 |
+| History `[built]` | Keep rate is computed per render and never stored | As built, no new table for items: items live 30 days with their first read time, so the mirror is computed from them by today's rules (listed, kept by some view, seen, opened, from strangers, judged yes). A small `moments` table counts visits, five more minutes and early openings. `/mirror [days]` shows it in chat and it comes by itself once a week (the first launch starts the week; a week with nothing to show stays quiet) | 6 |
 | Import | A shared view file has no way in | Drop a view file in chat -> untrusted text -> a proposal you confirm like any edit -> its lens regenerated from Layout, never copied; people and personal rules stripped (L7 guardrails) | 12 |
 
 ### 34.7 Reading risk
@@ -1442,10 +1445,10 @@ Facebook and Instagram through reader tabs are untested on the real sites (4, 5)
 | L6 scheduling (22) | Rung 2 and 3 sources read only while you use the app | Done: also read on a view's schedule (34.1); still read only |
 | L1 Facebook (17) | Assist mode by default | Chosen per source in the site policy (34.7) |
 | View file (9.4) | Sources, Rules, Layout | Done: adds an optional Time section |
-| Sources (9.2) | RSS, YouTube, X, `Page:` | Adds `Watch:` and (done) a `(newest first)` mark on `Page:` |
+| Sources (9.2) | RSS, YouTube, X, `Page:` | Done: adds `Watch:`, `Following:` and a `(newest first)` mark on `Page:` |
 | Condition (11.4) | 6 fields | Done: adds `judged:<name>` and `author_in` |
 | Store (11.2) | 2 tables | Done: adds `follows`, `follow_lists` and `moments` |
-| Page operations | extract, scroll, challenge, skeleton, readability | Adds transcript |
+| Page operations | extract, scroll, challenge, skeleton, readability | Adds text (done, for watched pages) and transcript |
 
 ## 36. Order
 

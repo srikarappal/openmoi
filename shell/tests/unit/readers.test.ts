@@ -397,3 +397,65 @@ describe("ReaderPool newest first pages", () => {
     expect(await pool.fill(LIST, 30, new Delivered().take, true, true)).toEqual({ status: "complete", delivered: 0, driver: "chrome", since: null })
   })
 })
+
+// A watched page: its text, a sign in wall or a broken tab, and what openMoi did to it.
+class WatchedPage implements PageDriver {
+  readonly kind = "chrome" as const
+  opened: string[] = []
+  closed = 0
+  wall = false
+  broken = false
+
+  async open(url: string): Promise<string> {
+    if (this.broken) throw new Error("tab crashed")
+    this.opened.push(url)
+    return "tab1"
+  }
+
+  async run<T>(_handle: string, op: string): Promise<T> {
+    if (op === "challenge") return this.wall as T
+    return { title: "Visa slots", text: "No slots" } as T
+  }
+
+  async url(): Promise<string> {
+    return "https://visa.example.gov/login"
+  }
+
+  async close(): Promise<void> {
+    this.closed += 1
+  }
+}
+
+describe("ReaderPool watched pages", () => {
+  const WATCHED = source("watch:visa.example.gov/slots", { start_url: "https://visa.example.gov/slots", purpose: "watch", spec: null })
+
+  it("reads a page's text in a tab it closes again, at the reader's pace unless forced", async () => {
+    vi.useFakeTimers()
+    const page = new WatchedPage()
+    const pool = make_pool(page)
+    const reading = pool.read_text(WATCHED, false)
+    await pass_time(2_100)
+    expect(await reading).toEqual({ status: "read", page: { title: "Visa slots", text: "No slots" }, driver: "chrome" })
+    expect([page.opened, page.closed]).toEqual([["https://visa.example.gov/slots"], 1])
+    expect(await pool.read_text(WATCHED, false)).toEqual({ status: "skipped" })
+    const forced = pool.read_text(WATCHED, true)
+    await pass_time(2_100)
+    expect((await forced).status).toBe("read")
+    expect(pool.steps_used(WATCHED.source_id)).toBe(2)
+  })
+
+  it("says when a sign in is in the way or the tab broke, and keeps to the daily budget", async () => {
+    vi.useFakeTimers()
+    const page = new WatchedPage()
+    page.wall = true
+    const pool = make_pool(page)
+    const walled = pool.read_text(WATCHED, true)
+    await pass_time(2_100)
+    expect(await walled).toEqual({ status: "challenge", url: "https://visa.example.gov/login", driver: "chrome" })
+    expect(page.closed).toBe(1)
+    page.broken = true
+    expect(await pool.read_text(WATCHED, true)).toEqual({ status: "failed", error: "tab crashed", driver: "chrome" })
+    const thrifty = { ...WATCHED, budget: { ...WATCHED.budget, daily_steps: 0 } }
+    expect(await make_pool(new WatchedPage()).read_text(thrifty, true)).toEqual({ status: "failed", error: "today's budget for this page is used", driver: "chrome" })
+  })
+})

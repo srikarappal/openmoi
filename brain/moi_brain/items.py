@@ -15,7 +15,7 @@ ItemKind = Literal["post", "article", "video", "product", "link"]
 EventKind = Literal["open", "seen", "less_like_this"]
 
 ITEM_KINDS = set(get_args(ItemKind))
-DEFAULT_KINDS: dict[str, ItemKind] = {"x": "post", "youtube": "video", "rss": "article", "site": "link", "page": "post"}
+DEFAULT_KINDS: dict[str, ItemKind] = {"x": "post", "youtube": "video", "rss": "article", "site": "link", "page": "post", "watch": "link"}
 TRACKING_PARAMS = {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref", "ref_src", "si"}
 HOST_NOISE = {"www", "feeds", "feed", "rss", "m"}
 WEB_SCHEMES = {"http", "https"}
@@ -159,6 +159,11 @@ def profile_handle(record: dict[str, Any], base_url: str | None) -> tuple[str, s
         handle = parts[0] if parts and parts[0].lower() not in NOT_HANDLES else None
     handle = handle.lstrip("@/").lower() if handle else ""
     return (site_host(url), handle) if handle else None
+
+
+def watch_source_id(url: str) -> str:
+    """A page watched for changes: named like a page source, so two watched pages of one site stay apart."""
+    return f"watch:{page_source_id(url).removeprefix('page:')}"
 
 
 def youtube_source_id(channel: str) -> str:

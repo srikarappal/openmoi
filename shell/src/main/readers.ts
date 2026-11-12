@@ -5,7 +5,7 @@
 // newer than them was missed. One old post alone (a pinned one) does not count.
 import { record_key } from "../shared/extract"
 import { Throttle, sleep } from "../shared/timing"
-import type { ExtractorSpec, PageSource, RawRecord } from "../shared/types"
+import type { ExtractorSpec, PageSource, PageText, RawRecord } from "../shared/types"
 import type { BrainClient } from "./brain"
 import type { DriverKind, PageDriver } from "./drivers"
 import { find_listing_spec } from "./listing_spec"
@@ -35,6 +35,8 @@ export type FillOutcome =
   | { status: "challenge"; url: string; driver: DriverKind }
   // final: retrying cannot help (the page has no items a spec can find), so no second attempt is made.
   | { status: "failed"; error: string; driver: DriverKind; final?: boolean }
+
+export type TextOutcome = { status: "read"; page: PageText; driver: DriverKind } | { status: "skipped" } | { status: "challenge"; url: string; driver: DriverKind } | { status: "failed"; error: string; driver: DriverKind }
 
 // Receives each batch of new records as soon as it is extracted, so the first items show before scrolling ends.
 // It may answer with the positions of records the brain had stored before.
@@ -87,6 +89,25 @@ export class ReaderPool {
     await this.close(source.source_id)
     await sleep(RETRY_PAUSE_MS)
     return this.attempt(source, wanted, on_batch, from_top)
+  }
+
+  // One look at a watched page: opened in its own quiet tab, given a moment to load, its text read, the tab closed.
+  // It spends one step of the source's daily budget; automatic looks keep to the 10 minute pace.
+  async read_text(source: PageSource, force: boolean): Promise<TextOutcome> {
+    if (!this.throttle.allow(source.source_id, force)) return { status: "skipped" }
+    const driver = await this.driver_for()
+    if (!this.spend_step(source)) return { status: "failed", error: "today's budget for this page is used", driver: driver.kind }
+    let handle: string | null = null
+    try {
+      handle = await driver.open(source.start_url, true)
+      await sleep(SPEC_SETTLE_MS)
+      if (await driver.run<boolean>(handle, "challenge")) return { status: "challenge", url: await driver.url(handle), driver: driver.kind }
+      return { status: "read", page: await driver.run<PageText>(handle, "text"), driver: driver.kind }
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : String(error), driver: driver.kind }
+    } finally {
+      if (handle) await driver.close(handle).catch(ignore)
+    }
   }
 
   async close_all(): Promise<void> {

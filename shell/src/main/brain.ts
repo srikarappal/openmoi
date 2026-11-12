@@ -22,6 +22,7 @@ import type {
   ViewSchedule,
   Mirror,
   MomentKind,
+  WatchReport,
 } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
@@ -116,6 +117,14 @@ export class BrainClient {
 
   follows(list_url: string, records: RawRecord[]): Promise<{ stored: number }> {
     return this.request("POST", "/follows", { list_url, records })
+  }
+
+  watches_due(): Promise<PageSource[]> {
+    return this.request("GET", "/watches/due")
+  }
+
+  watch_report(url: string, title: string, text: string): Promise<WatchReport> {
+    return this.request("POST", "/watches/report", { url, title, text })
   }
 
   open_early(view_id: string): Promise<{ status: string }> {

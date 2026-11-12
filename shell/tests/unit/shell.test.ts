@@ -37,6 +37,8 @@ function fake_brain(fields: Record<string, unknown> = {}) {
     ingest: vi.fn(async () => ({ items: [], view_items: [], lens_stale: false, layout_hash: "h" })),
     schedule: vi.fn(async () => []),
     schedule_done: vi.fn(async () => ({ status: "done" })),
+    watches_due: vi.fn(async () => []),
+    watch_report: vi.fn(async () => ({ changed: false, alert: null })),
     weekly_mirror: vi.fn(async () => null),
     moment: vi.fn(async () => ({ status: "recorded" })),
     open_early: vi.fn(async () => ({ status: "open" })),
@@ -615,5 +617,35 @@ describe("Shell mirror and early openings", () => {
     expect(brain.open_early).toHaveBeenCalledWith("feed")
     expect(state_of(shell).notices.some((entry) => entry.tag === "edition:feed")).toBe(false)
     expect(brain.view_page.mock.calls.length).toBeGreaterThan(renders)
+  })
+})
+
+describe("Shell watch alerts", () => {
+  const ALERT = { view_id: "tech", title: "Visa slots changed", text: "Added: Slot available" }
+
+  it("puts an alert in the notices and a system notification while you are elsewhere", async () => {
+    const { shell, window } = await started()
+    ;(shell as unknown as { alert(alert: typeof ALERT): void }).alert(ALERT)
+    const notice = state_of(shell).notices.at(-1)
+    expect(notice?.text).toBe("Visa slots changed: Added: Slot available")
+    expect(notice?.action).toEqual({ label: "Show", command: { type: "open_view", view_id: "tech" } })
+    const [notification] = FakeNotification.shown
+    expect(notification.options).toEqual({ title: "Visa slots changed", body: "Added: Slot available" })
+    notification.emit("click")
+    await wait(5)
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "tech" })
+    window.show()
+    window.focus()
+    ;(shell as unknown as { alert(alert: typeof ALERT): void }).alert({ ...ALERT, text: "Added: another" })
+    expect(FakeNotification.shown).toHaveLength(1)
+  })
+
+  it("looks at watched pages from the scheduler without forcing past the reader's pace", async () => {
+    const WATCHED = { source_id: "watch:a", start_url: "https://a.example/", purpose: "watch" }
+    const { shell } = await started({ watches_due: vi.fn(async () => [WATCHED]) })
+    const check = vi.spyOn(shell.views, "check_watch").mockResolvedValue()
+    await shell.scheduler.tick()
+    await shell.scheduler.idle()
+    expect(check).toHaveBeenCalledWith(WATCHED, false)
   })
 })

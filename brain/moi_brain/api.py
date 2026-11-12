@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import Brain, MineRequest, MomentKind, Overview, PageSource, ViewPage, ViewSchedule
+from moi_brain.brain import Brain, MineRequest, MomentKind, Overview, PageSource, ViewPage, ViewSchedule, WatchReport
+from moi_brain.watch import MAX_WATCH_TEXT
 from moi_brain.mirror import Mirror
 from moi_brain.compile import BadInput, ViewInfo
 from moi_brain.config import ModelChange, ModelInfo
@@ -135,6 +136,12 @@ class ProposalRequest(BaseModel):
     proposal_id: str
 
 
+class WatchReportRequest(BaseModel):
+    url: str
+    title: str = Field(default="", max_length=500)
+    text: str = Field(max_length=MAX_WATCH_TEXT * 5)
+
+
 class MomentRequest(BaseModel):
     view_id: str
     kind: MomentKind
@@ -204,6 +211,16 @@ def view_page(view_id: str, body: ViewRequest, brain: BrainDep) -> ViewPage:
 def open_early(view_id: str, brain: BrainDep) -> dict[str, str]:
     brain.open_early(view_id)
     return {"status": "open"}
+
+
+@router.get("/watches/due")
+def watches_due(brain: BrainDep) -> list[PageSource]:
+    return brain.watches_due()
+
+
+@router.post("/watches/report")
+def watch_report(body: WatchReportRequest, brain: BrainDep) -> WatchReport:
+    return brain.watch_report(body.url, body.title, body.text)
 
 
 @router.post("/moments")

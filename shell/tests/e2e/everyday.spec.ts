@@ -175,3 +175,25 @@ test("only people I know: a following list read once turns strangers away", asyn
     await harness.close()
   }
 })
+
+test("watch for me: a watched page that changes the way your rules want alerts you", async () => {
+  const page = `${world.base_url}/watched?visa=${Date.now()}`
+  const visa = `# Visa\n\n## Sources\n* Watch: ${page}\n\n## Rules\n* Only when it mentions available.\n`
+  const harness = await Harness.launch(world, { views: { visa } })
+  try {
+    await eventually(
+      async () => ((await harness.lens_text()).length > 0 ? (await harness.brain<unknown[]>("/watches/due")).length : -1),
+      (due) => due === 0,
+    )
+    await harness.chrome.locator("button.action", { hasText: "Refresh" }).click()
+    const notice = harness.chrome.locator(".notice", { hasText: "Visa slots changed" })
+    await expect(notice).toContainText("Added: Slot available on December 12", { timeout: 30_000 })
+    await expect(notice.getByRole("button", { name: "Show" })).toBeVisible()
+    await eventually(
+      () => harness.lens_text(),
+      (text) => text.includes("Slot available on December 12"),
+    )
+  } finally {
+    await harness.close()
+  }
+})

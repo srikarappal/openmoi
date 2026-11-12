@@ -20,7 +20,7 @@ function make_views(outcomes: FillOutcome[], pages: ViewPage[] = [], page_source
   const sources = { fill: vi.fn(async (..._args: unknown[]) => outcomes.shift() ?? ({ status: "skipped" } as FillOutcome)) }
   const lenses = { get: (key: string) => (key === context.key ? context : undefined) }
   const { labels, track } = new Tracked()
-  const hooks = { open_original: vi.fn(), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), track, labels }
+  const hooks = { open_original: vi.fn(), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), alert: vi.fn(), track, labels }
   const views = new ViewController(brain as unknown as BrainClient, lenses as unknown as LensManager, sources as unknown as ReaderPool, hooks)
   return { views, context, sources, hooks, brain }
 }
@@ -440,5 +440,52 @@ describe("ViewController open anyway", () => {
     const [, , tag, action] = hooks.notify.mock.calls.find((call) => call[2] === "edition:feed") ?? []
     expect(tag).toBe("edition:feed")
     expect(action).toEqual({ label: "Open anyway", command: { type: "open_early", view_id: "feed" } })
+  })
+})
+
+describe("ViewController watched pages", () => {
+  const WATCHED = { source_id: "watch:visa.example.gov/slots", start_url: "https://visa.example.gov/slots", purpose: "watch" } as PageSource
+  const ALERT = { view_id: "feed", title: "Visa slots changed", text: "Added: Slot available" }
+
+  function watch_views(outcome: unknown, report: unknown) {
+    const made = make_views([], Array(6).fill(PAGE), [WATCHED, X_SOURCE])
+    Object.assign(made.sources, { read_text: vi.fn(async () => outcome) })
+    Object.assign(made.brain, { watch_report: vi.fn(async () => report) })
+    return made
+  }
+
+  it("looks at a watched page on a refresh, shows a change in the open lens and alerts", async () => {
+    const { views, context, hooks, brain, sources } = watch_views({ status: "read", page: { title: "Visa slots", text: "Slot available" }, driver: "chrome" }, { changed: true, alert: ALERT })
+    await views.refresh(context, true)
+    expect((sources as unknown as { read_text: ReturnType<typeof vi.fn> }).read_text).toHaveBeenCalledWith(WATCHED, true)
+    expect((brain as unknown as { watch_report: ReturnType<typeof vi.fn> }).watch_report).toHaveBeenCalledWith("https://visa.example.gov/slots", "Visa slots", "Slot available")
+    expect(hooks.alert).toHaveBeenCalledWith(ALERT)
+    expect(fills(sources)).toEqual([["x", 30, true, true]])
+    expect(hooks.labels).toContain("Looking at https://visa.example.gov/slots")
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(fills(sources).every((fill) => fill[0] === "x")).toBe(true)
+  })
+
+  it("stays quiet when the page did not change, or changed in a way no view keeps", async () => {
+    const unchanged = watch_views({ status: "read", page: { title: "Visa", text: "No slots" }, driver: "chrome" }, { changed: false, alert: null })
+    await unchanged.views.check_watch(WATCHED, false)
+    expect(unchanged.hooks.alert).not.toHaveBeenCalled()
+    expect(unchanged.hooks.retract).toHaveBeenCalledWith("source:watch:visa.example.gov/slots")
+    const ignored = watch_views({ status: "read", page: { title: "Visa", text: "No slots this week" }, driver: "chrome" }, { changed: true, alert: null })
+    await ignored.views.check_watch(WATCHED, false)
+    expect(ignored.hooks.alert).not.toHaveBeenCalled()
+  })
+
+  it("says why a look failed and skips a look that is not due", async () => {
+    const walled = watch_views({ status: "challenge", url: "https://visa.example.gov/login", driver: "chrome" }, null)
+    await walled.views.check_watch(WATCHED, false)
+    expect(walled.hooks.notify).toHaveBeenCalledWith(expect.stringContaining("needs you in Chrome"), "https://visa.example.gov/login", "source:watch:visa.example.gov/slots")
+    const broken = watch_views({ status: "failed", error: "tab crashed", driver: "chrome" }, null)
+    await broken.views.check_watch(WATCHED, false)
+    expect(broken.hooks.notify).toHaveBeenCalledWith("https://visa.example.gov/slots could not be looked at: tab crashed", undefined, "source:watch:visa.example.gov/slots")
+    const skipped = watch_views({ status: "skipped" }, null)
+    await skipped.views.check_watch(WATCHED, false)
+    expect(skipped.hooks.notify).not.toHaveBeenCalled()
+    expect((skipped.brain as unknown as { watch_report: ReturnType<typeof vi.fn> }).watch_report).not.toHaveBeenCalled()
   })
 })

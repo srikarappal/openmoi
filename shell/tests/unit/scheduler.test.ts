@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { BrainClient } from "../../src/main/brain"
 import { Scheduler } from "../../src/main/scheduler"
-import type { ViewSchedule } from "../../src/shared/types"
+import type { PageSource, ViewSchedule } from "../../src/shared/types"
 
 const SEVEN = "2026-11-10T07:00:00Z"
 const SIX_PM = "2026-11-10T18:00:00Z"
@@ -18,8 +18,9 @@ function make_scheduler(answers: Array<ViewSchedule[] | Error>, read: (view_id: 
       return answer ?? []
     }),
     schedule_done: vi.fn(async () => ({ status: "done" })),
+    watches_due: vi.fn(async (): Promise<PageSource[]> => []),
   }
-  const hooks = { read: vi.fn(read), edition_out: vi.fn(), failed: vi.fn() }
+  const hooks = { read: vi.fn(read), watch: vi.fn(async (_source: PageSource) => {}), edition_out: vi.fn(), failed: vi.fn() }
   const scheduler = new Scheduler(brain as unknown as BrainClient, hooks, 1_000)
   return { scheduler, brain, hooks }
 }
@@ -118,5 +119,34 @@ describe("Scheduler", () => {
     scheduler.stop()
     await vi.advanceTimersByTimeAsync(5_000)
     expect(brain.schedule).toHaveBeenCalledTimes(4)
+  })
+})
+
+describe("Scheduler watched pages", () => {
+  const WATCHED = { source_id: "watch:visa.example.gov/slots", start_url: "https://visa.example.gov/slots", purpose: "watch" } as PageSource
+
+  it("looks at each due watched page once at a time", async () => {
+    const held = new HeldRead()
+    const { scheduler, brain, hooks } = make_scheduler([[]])
+    brain.watches_due.mockResolvedValue([WATCHED])
+    hooks.watch.mockImplementation(() => held.run())
+    await scheduler.tick()
+    await scheduler.tick()
+    expect(hooks.watch).toHaveBeenCalledTimes(1)
+    held.release()
+    await scheduler.idle()
+    await scheduler.tick()
+    expect(hooks.watch).toHaveBeenCalledTimes(2)
+  })
+
+  it("reports a look or a due list that failed", async () => {
+    const { scheduler, brain, hooks } = make_scheduler([[]])
+    brain.watches_due.mockRejectedValueOnce(new Error("brain restarting")).mockResolvedValue([WATCHED])
+    hooks.watch.mockRejectedValue(new Error("tab crashed"))
+    await scheduler.tick()
+    expect(hooks.failed).toHaveBeenCalledWith("Watched pages could not be checked: brain restarting")
+    await scheduler.tick()
+    await scheduler.idle()
+    expect(hooks.failed).toHaveBeenCalledWith("Looking at https://visa.example.gov/slots failed: tab crashed")
   })
 })

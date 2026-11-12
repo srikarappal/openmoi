@@ -97,11 +97,17 @@ def test_a_week_of_x_in_the_mirror(timed, paths, clock):
     assert timed.get("/mirror", params={"days": 0}).json()["days"] == 1
 
 
-def test_the_weekly_mirror_comes_once_a_week(timed, paths, clock):
-    assert timed.get("/mirror/weekly").json()["days"] == 7
+def test_the_weekly_mirror_comes_once_a_week_once_there_is_something_to_show(timed, paths, clock):
+    """The first launch starts the week; a week with nothing read stays quiet; a damaged state file starts over."""
     assert timed.get("/mirror/weekly").json() is None
     clock.moment += timedelta(days=7)
-    assert timed.get("/mirror/weekly").json() is not None
+    assert timed.get("/mirror/weekly").json() is None
+    (paths.views / "feed.md").write_text("# Feed\n\n## Sources\n* X home timeline\n")
+    x_posts(timed, clock, [("maya", "Hello")])
+    assert timed.get("/mirror/weekly").json() is None
+    clock.moment += timedelta(days=7)
+    assert timed.get("/mirror/weekly").json()["sources"][0]["listed"] == 1
+    assert timed.get("/mirror/weekly").json() is None
     paths.mirror_state.write_text('{"shown_at": "a while ago"}')
     assert timed.get("/mirror/weekly").json() is not None
     paths.mirror_state.write_text("[]")

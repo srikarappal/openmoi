@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 from moi_brain.config import Paths
 from moi_brain.feeds import CHANNEL_ID, read_takeout
 from moi_brain.files import read_text, write_atomic
-from moi_brain.items import JUDGED_PREFIX, page_source_id, rss_source_id, youtube_source_id
+from moi_brain.items import JUDGED_PREFIX, page_source_id, rss_source_id, watch_source_id, youtube_source_id
 from moi_brain.lenses import SITE_PREFIX
 from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import bullets, parse_sections, section_text
@@ -25,7 +25,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "8"
+COMPILER_VERSION = "9"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
@@ -39,6 +39,10 @@ CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s*([ap])\.?m\b\.?|\b(\d{1,2}):(\d{2})\b
 EDITION_COUNT = re.compile(r"\b(\d+)\s+(?:items|posts|stories|things|cards)\b")
 DURATION = re.compile(r"\b(\d+)\s*(minutes?|mins?|hours?|hrs?)\b")
 MAX_EDITION_SIZE = 500
+# A watched page is looked at this often unless its line says otherwise, and never more often than every five minutes.
+WATCH_EVERY_MINUTES = 60
+MIN_WATCH_MINUTES = 5
+EVERY = re.compile(r"\bevery\s+(\d+)?\s*(minutes?|mins?|hours?|hrs?|days?)\b", re.IGNORECASE)
 MAX_VISIT_MINUTES = 600
 RETRY_AFTER_SECONDS = 60.0
 RULES_PROMPT = """You turn rules written in plain words into JSON for openMoi, a personal feed reader.
@@ -134,6 +138,21 @@ class TimeSpec(BaseModel):
     visit_minutes: int | None = None
 
 
+class WatchRef(BaseModel):
+    url: str
+    every_minutes: int = WATCH_EVERY_MINUTES
+
+
+def watch_minutes(rest: str) -> int:
+    """"every 30 minutes", "every 2 hours", "every day" or nothing (once an hour)."""
+    match = EVERY.search(rest)
+    if match is None:
+        return WATCH_EVERY_MINUTES
+    unit = match.group(2).lower()
+    scale = 60 * 24 if unit.startswith("d") else 60 if unit.startswith("h") else 1
+    return max(int(match.group(1) or 1) * scale, MIN_WATCH_MINUTES)
+
+
 class SourceRef(BaseModel):
     source_id: Literal["x", "youtube", "rss", "page"]
     page_type: str | None = None
@@ -145,6 +164,8 @@ class SourceRef(BaseModel):
     ordered: list[str] = Field(default_factory=list)
     # Pages listing the accounts you follow, read about once a week to know who is a stranger.
     following: list[str] = Field(default_factory=list)
+    # Pages watched for changes: a change becomes an item your rules judge, and an alert if they keep it.
+    watches: list[WatchRef] = Field(default_factory=list)
 
 
 class CompiledView(BaseModel):
@@ -186,7 +207,7 @@ def check_view_id(view_id: str) -> str:
 
 def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRef], list[str]]:
     """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://... (newest first)' or a bare feed URL."""
-    has_x, channels, feeds, pages, ordered, following, warnings = False, [], [], [], [], [], []
+    has_x, channels, feeds, pages, ordered, following, watches, warnings = False, [], [], [], [], [], [], []
     for line in bullets(body):
         label, _, rest = line.partition(":")
         key = label.strip().lower()
@@ -204,6 +225,11 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
                 ordered += found_pages
             if not found_pages:
                 warnings.append(f"No page address found in: {line}")
+        elif key == "watch":
+            found_watches = URL.findall(rest)
+            watches += [WatchRef(url=url, every_minutes=watch_minutes(URL.sub("", rest))) for url in found_watches]
+            if not found_watches:
+                warnings.append(f"No page address found in: {line}")
         elif key == "following":
             found_lists = URL.findall(rest)
             following += found_lists
@@ -218,8 +244,11 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
         sources.append(SourceRef(source_id="youtube", channels=list(dict.fromkeys(channels))))
     if feeds:
         sources.append(SourceRef(source_id="rss", feeds=list(dict.fromkeys(feeds))))
-    if pages or following:
-        sources.append(SourceRef(source_id="page", pages=list(dict.fromkeys(pages)), ordered=list(dict.fromkeys(ordered)), following=list(dict.fromkeys(following))))
+    if pages or following or watches:
+        unique_watches = list({watch.url: watch for watch in watches}.values())
+        sources.append(
+            SourceRef(source_id="page", pages=list(dict.fromkeys(pages)), ordered=list(dict.fromkeys(ordered)), following=list(dict.fromkeys(following)), watches=unique_watches)
+        )
     return sources, warnings
 
 
@@ -272,6 +301,7 @@ def source_ids(sources: list[SourceRef]) -> list[str]:
         ids += [youtube_source_id(channel) for channel in source.channels]
         ids += [rss_source_id(feed) for feed in source.feeds]
         ids += [page_source_id(page) for page in source.pages]
+        ids += [watch_source_id(watch.url) for watch in source.watches]
     return list(dict.fromkeys(ids))
 
 
@@ -310,6 +340,8 @@ def describe_sources(sources: list[SourceRef]) -> str:
             parts.append(f"{len(source.pages)} page{'s' if len(source.pages) != 1 else ''}")
         if source.following:
             parts.append(f"{len(source.following)} following list{'s' if len(source.following) != 1 else ''}")
+        if source.watches:
+            parts.append(f"{len(source.watches)} watched page{'s' if len(source.watches) != 1 else ''}")
     if not parts:
         return "No sources yet."
     listed = parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"

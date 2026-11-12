@@ -21,6 +21,7 @@ HIDE_TOPIC = re.compile(r"\b(?:hide|no)\s+(\w+)")
 UNLESS = re.compile(r"\b(?:unless|except)\b.*\bfrom\s+(\w+)")
 FIRST = re.compile(r"@?(\w+) (?:always )?first")
 UNDER = re.compile(r"under \$([\d,.]+)(k?)")
+MENTIONS = re.compile(r"only when it (?:mentions|says) (\w+)")
 PRICE = re.compile(r"\$[\d,]+(?:\.\d+)?k?")
 # Phrases that need a judgment: the question the fake model declares and the rule that tests its answer.
 JUDGED_PHRASES = (
@@ -92,6 +93,8 @@ def judged_rule(text: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
 
 def view_rule(line: str) -> dict[str, Any] | None:
     text = line.lower()
+    if (match := MENTIONS.search(text)) is not None:
+        return {"when": condition("source_id", "eq", "watch"), "unless": condition("text", "contains", match.group(1)), "do": "hide"}
     if any(phrase in text for phrase in ("people i know", "people i follow", "no strangers")):
         return {"when": condition("author_in", "eq", "stranger"), "do": "hide"}
     if "short" in text:

@@ -22,7 +22,7 @@ from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.files import read_json, write_atomic
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
-from moi_brain.items import HANDLE, Event, Item, ViewItem, normalize, page_source_id, profile_handle, rss_source_id, youtube_source_id
+from moi_brain.items import HANDLE, Event, Item, ViewItem, normalize, page_source_id, profile_handle, rss_source_id, watch_source_id, youtube_source_id
 from moi_brain.lens_gen import generate_lens
 from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway
@@ -33,6 +33,7 @@ from moi_brain.rank import PAGE_SIZE, Circles, Order, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
+from moi_brain.watch import change_item, changed_lines, watch_lines
 
 # A read scrolls a source page step by step at human pace; daily_steps caps how far it scrolls each source per day.
 PILOT_BUDGET = {"page_loads": 1, "scroll_steps": 5, "min_step_interval_ms": 1500, "daily_steps": 200}
@@ -64,7 +65,19 @@ class PageSource(BaseModel):
     # Posts come newest first, so reaching what was read before means nothing newer was missed.
     chronological: bool = False
     # "follows": a page listing accounts you follow, read into who you know rather than into items.
-    purpose: Literal["items", "follows"] = "items"
+    # "watch": a page whose text is compared with its last look.
+    purpose: Literal["items", "follows", "watch"] = "items"
+
+
+class WatchAlert(BaseModel):
+    view_id: str
+    title: str
+    text: str
+
+
+class WatchReport(BaseModel):
+    changed: bool
+    alert: WatchAlert | None = None
 
 
 class ViewPage(BaseModel):
@@ -267,6 +280,8 @@ class Brain:
                         chronological=page in source.ordered,
                     )
                 )
+            for watch in source.watches:
+                found.append(PageSource(source_id=watch_source_id(watch.url), page_type="watch", start_url=watch.url, spec=None, budget=PILOT_BUDGET, purpose="watch"))
             for page in source.following:
                 read_at = self.store.list_read_at(page)
                 if read_at is None or self.clock() - read_at >= FOLLOWS_EVERY:
@@ -385,6 +400,52 @@ class Brain:
         """Accounts from a page listing who you follow; each becomes known on its own site."""
         accounts = [account for record in records if (account := profile_handle(record, list_url))]
         return self.store.add_follows(list_url, accounts, self.clock())
+
+    def watches_due(self) -> list[PageSource]:
+        """Watched pages whose time for another look has come, once each however many views watch them."""
+        now = self.clock()
+        due: dict[str, PageSource] = {}
+        for compiled in self.compiler.all_compiled(use_model=False):
+            for source in compiled.sources:
+                for watch in source.watches:
+                    last = self.store.watch_text(watch.url)
+                    if last is None or now - last[1] >= timedelta(minutes=watch.every_minutes):
+                        due[watch.url] = PageSource(source_id=watch_source_id(watch.url), page_type="watch", start_url=watch.url, spec=None, budget=PILOT_BUDGET, purpose="watch")
+        return list(due.values())
+
+    def watch_report(self, url: str, title: str, text: str) -> WatchReport:
+        """A watched page's text now. The first look is the baseline; a change becomes the page's one change item, and an
+        alert when a view that watches the page lets that item through its rules."""
+        now = self.clock()
+        lines = watch_lines(text)
+        last = self.store.watch_text(url)
+        before = last[0].splitlines() if last else None
+        changed = before is not None and lines != before
+        self.store.save_watch(url, "\n".join(lines), now, changed)
+        if not changed:
+            return WatchReport(changed=False)
+        source_id = watch_source_id(url)
+        added, removed = changed_lines(before or [], lines)
+        item = change_item(source_id, url, title, added, removed, now)
+        self.store.replace_item(item)
+        alert = self.alert_for(item)
+        self.tagger.enqueue([item])
+        return WatchReport(changed=True, alert=alert)
+
+    def alert_for(self, item: Item) -> WatchAlert | None:
+        """The first view watching the page whose rules keep the change; topic and judged rules get it tagged at once.
+        Each view's rules are waited for, so a compile running in another thread never lets an alert through unjudged."""
+        watching = [view.view_id for view in self.compiler.all_compiled(use_model=False) if item.source_id in view.source_ids()]
+        for view_id in watching:
+            compiled = self.compiler.compiled(view_id)
+            judged = item
+            if needs_tags(compiled):
+                [judged] = self.tagger.tag([item], self.watch_list(), self.watch_judgments())
+                self.store.update_tags([judged] if judged.tagged else [])
+            ranked, _ = rank([judged], compiled.rules, self.clock(), circles=self.circles())
+            if ranked:
+                return WatchAlert(view_id=compiled.view_id, title=item.title or "", text=item.text or "")
+        return None
 
     def circles(self) -> Circles:
         people = frozenset(handle.lstrip("@").lower() for handle in HANDLE.findall(self.memory.topic_text("people.md")))
@@ -508,17 +569,19 @@ class Brain:
         return build_mirror(days, now, self.store.fetched_since(since), self.store.opened_since(since), views, self.watch_judgments(), self.circles(), self.store.moment_counts(since))
 
     def weekly_mirror(self) -> Mirror | None:
-        """The last week's mirror, once a week: None until a week passed since it was last shown."""
-        state = read_json(self.paths.mirror_state, {})
+        """The last week's mirror, once a week. The first launch starts the week; a week with nothing to show stays quiet."""
+        state = read_json(self.paths.mirror_state, None)
         shown = state.get("shown_at") if isinstance(state, dict) else None
         now = self.clock()
         try:
-            if isinstance(shown, str) and now - datetime.fromisoformat(shown) < MIRROR_EVERY:
-                return None
+            started = datetime.fromisoformat(shown) if isinstance(shown, str) else None
         except ValueError:
-            pass
+            started = None
+        if started is not None and now - started < MIRROR_EVERY:
+            return None
         write_atomic(self.paths.mirror_state, json.dumps({"shown_at": now.isoformat()}))
-        return self.mirror(7)
+        mirror = self.mirror(7)
+        return mirror if state is not None and (mirror.sources or mirror.views) else None
 
     def schedule_done(self, view_id: str, edition: datetime) -> None:
         """The read for this edition finished; one that finished after the edition came out moves it to now."""

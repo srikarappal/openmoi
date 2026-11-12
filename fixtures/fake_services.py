@@ -145,6 +145,8 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(404, "text/html", "YouTube RSS Feeds server: not found")
         elif parts.path == "/rss/etag.xml":
             self.etag_feed(base)
+        elif parts.path == "/watched":
+            self.watched_page(parts.query)
         elif parts.path in ROUTES:
             content_type, render = ROUTES[parts.path]
             self.reply(200, content_type, render(base))
@@ -154,6 +156,13 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, "text/html", f"<html><head><title>{parts.path}</title></head><body><p>Article {parts.path}</p></body></html>")
         else:
             self.reply(404, "text/plain", "not found")
+
+    def watched_page(self, key: str) -> None:
+        """A page someone watches: no slots at the first look, a slot from the second look on (counted per query)."""
+        looks = self.server.services.count_look(key)
+        slot = "No slots this month" if looks == 1 else "Slot available on December 12"
+        page = f"<html><head><title>Visa slots</title></head><body><main><h1>Appointments</h1><p>{slot}</p><p>Updated {looks} minutes ago</p></main></body></html>"
+        self.reply(200, "text/html", page)
 
     def signed_in_page(self) -> None:
         """The X timeline only for a browser holding the session cookie; everyone else gets the login wall."""
@@ -219,6 +228,7 @@ class FakeServices:
         self.model_queue: dict[str, list[str | None]] = {}
         self.model_delay = 0.0
         self.youtube_feed_down = False
+        self.looks: dict[str, int] = {}
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     @property
@@ -236,6 +246,11 @@ class FakeServices:
     def record(self, method: str, path: str, headers: dict[str, str], payload: Any) -> None:
         with self.lock:
             self.requests.append({"method": method, "path": path, "headers": {key.lower(): value for key, value in headers.items()}, "payload": payload})
+
+    def count_look(self, key: str) -> int:
+        with self.lock:
+            self.looks[key] = self.looks.get(key, 0) + 1
+            return self.looks[key]
 
     def queue_model_reply(self, task: str, content: str | None) -> None:
         with self.lock:

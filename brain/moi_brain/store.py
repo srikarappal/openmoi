@@ -44,6 +44,15 @@ CREATE TABLE IF NOT EXISTS follows (
 )
 """
 FOLLOW_LISTS_TABLE = "CREATE TABLE IF NOT EXISTS follow_lists (list_url TEXT PRIMARY KEY, read_at TEXT NOT NULL)"
+# The last text of each watched page, to tell what changed.
+WATCHES_TABLE = """
+CREATE TABLE IF NOT EXISTS watches (
+    url TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    changed_at TEXT
+)
+"""
 # How you used a view: a visit started, five more minutes taken, an edition opened before it came out.
 MOMENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS moments (
@@ -81,6 +90,7 @@ class Store:
                 self.connection.execute(FOLLOWS_TABLE)
                 self.connection.execute(FOLLOW_LISTS_TABLE)
                 self.connection.execute(MOMENTS_TABLE)
+                self.connection.execute(WATCHES_TABLE)
                 for index in INDEXES:
                     self.connection.execute(index)
 
@@ -247,6 +257,29 @@ class Store:
         with self.lock:
             row = self.connection.execute("SELECT read_at FROM follow_lists WHERE list_url = ?", (list_url,)).fetchone()
         return datetime.fromisoformat(row[0]) if row else None
+
+    def watch_text(self, url: str) -> tuple[str, datetime] | None:
+        """The text a watched page had at its last look, and when that was."""
+        with self.lock:
+            row = self.connection.execute("SELECT text, checked_at FROM watches WHERE url = ?", (url,)).fetchone()
+        return (row[0], datetime.fromisoformat(row[1])) if row else None
+
+    def save_watch(self, url: str, text: str, now: datetime, changed: bool) -> None:
+        with self.lock, self.connection:
+            self.connection.execute(
+                "INSERT INTO watches (url, text, checked_at, changed_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (url) DO UPDATE SET text = excluded.text, checked_at = excluded.checked_at, changed_at = COALESCE(excluded.changed_at, watches.changed_at)",
+                (url, text, iso(now), iso(now) if changed else None),
+            )
+
+    def replace_item(self, item: Item) -> None:
+        """One item per source and URL that always holds the latest version, unseen again: the latest change of a watched page."""
+        with self.lock, self.connection:
+            self.connection.execute("DELETE FROM items WHERE source_id = ? AND url = ?", (item.source_id, item.url))
+            self.connection.execute(
+                f"INSERT INTO items ({ITEM_COLUMNS}, listed_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
+                (item.item_id, item.source_id, item.url, iso(item.published_at), iso(item.fetched_at), item.model_dump_json(), iso(item.fetched_at)),
+            )
 
     def add_moment(self, view_id: str, kind: str, now: datetime) -> None:
         with self.lock, self.connection:

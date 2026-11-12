@@ -2,7 +2,7 @@
 // Page sources read ahead of you: as you near the end of what is shown, their reader tabs scroll further, enough to
 // refill the view after your rules hide some, so the feed goes on like the site's own until a source ends.
 import { sleep } from "../shared/timing"
-import type { Item, LensToHost, Notice, PageSource, RawRecord, ViewPage } from "../shared/types"
+import type { Item, LensToHost, Notice, PageSource, RawRecord, ViewPage, WatchAlert } from "../shared/types"
 import type { Track } from "./activity"
 import type { BrainClient } from "./brain"
 import type { DriverKind } from "./drivers"
@@ -34,6 +34,8 @@ export interface ViewHooks {
   echo(text: string): void
   less_like_this(view_id: string, item: Item): void
   lens_stale(view_id: string, layout_hash: string): void
+  // A watched page changed in a way a view keeps.
+  alert(alert: WatchAlert): void
   track: Track
 }
 
@@ -179,10 +181,41 @@ export class ViewController {
     return [...new Set((this.seen_log.get(view_id) ?? []).filter((entry) => entry.at >= since).map((entry) => entry.label))]
   }
 
-  // Feed sources that may still give more; a following list is read once and never read ahead.
+  // Feed sources that may still give more; following lists and watched pages are looked at, never read ahead.
   private open_sources(view_id: string): PageSource[] {
     const finished = this.finished.get(view_id) ?? new Set<string>()
-    return (this.page_sources.get(view_id) ?? []).filter((source) => source.purpose !== "follows" && !finished.has(source.source_id))
+    return (this.page_sources.get(view_id) ?? []).filter((source) => (source.purpose ?? "items") === "items" && !finished.has(source.source_id))
+  }
+
+  // One look at a watched page: its text goes to the brain, which says whether it changed and whether a view keeps the
+  // change; an open lens shows it and the shell is told so it can alert you.
+  async check_watch(source: PageSource, force: boolean): Promise<void> {
+    const tag = source_tag(source.source_id)
+    const outcome = await this.hooks.track(`Looking at ${source.start_url}`, () => this.readers.read_text(source, force))
+    if (outcome.status === "skipped") return
+    if (outcome.status === "challenge") {
+      this.hooks.notify(challenge_text(source.source_id, outcome.driver), outcome.url, tag)
+      return
+    }
+    if (outcome.status === "failed") {
+      this.hooks.notify(`${source.start_url} could not be looked at: ${outcome.error}`, undefined, tag)
+      return
+    }
+    this.hooks.retract(tag)
+    const report = await this.brain.watch_report(source.start_url, outcome.page.title, outcome.page.text)
+    if (!report.changed) return
+    for (const context of this.lenses_reading(source.source_id)) await this.append_next(context)
+    if (report.alert) this.hooks.alert(report.alert)
+  }
+
+  // Open view lenses whose sources include this one.
+  private lenses_reading(source_id: string): LensContext[] {
+    const found: LensContext[] = []
+    for (const [view_id, sources] of this.page_sources) {
+      const context = this.lenses.get(view_lens_key(view_id))
+      if (context && sources.some((source) => source.source_id === source_id)) found.push(context)
+    }
+    return found
   }
 
   private wanted_first(sources: PageSource[], records: number): Map<string, number> {
@@ -292,6 +325,10 @@ export class ViewController {
   // A notice about a source is replaced by its latest read, so one that worked leaves nothing behind.
   private async read_sources(view_id: string, sources: PageSource[], force: boolean, wanted: Map<string, number>, from_top: boolean): Promise<void> {
     for (const source of sources) {
+      if (source.purpose === "watch") {
+        await this.check_watch(source, force)
+        continue
+      }
       const tag = source_tag(source.source_id)
       const outcome = await this.hooks.track(`Reading ${source.source_id}`, () =>
         this.readers.fill(
