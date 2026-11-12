@@ -180,6 +180,7 @@ export class Shell implements ViewHost {
       open_original: (key, url) => this.open_mine_original(key, url),
       lens_stale: (view_id, kind, layout_hash) => this.lens_gen.ensure(view_id, kind, layout_hash),
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
+      play: (item) => this.player.play(item),
     })
     this.scheduler = new Scheduler(
       brain,
@@ -202,6 +203,7 @@ export class Shell implements ViewHost {
     this.window.on("resize", () => this.layout())
     // With editions to read (or background reading on) closing the window only hides it; quitting closes it.
     this.window.on("close", (event) => {
+      this.player.close()
       if (this.quitting || !this.keeps_running()) return
       event.preventDefault()
       this.window.hide()

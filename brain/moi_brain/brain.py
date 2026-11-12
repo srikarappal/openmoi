@@ -840,19 +840,22 @@ class Brain:
         compiled = self.compiler.compiled(check_view_id(view_id))
         return self.lenses.is_stale(lens_key(view_id, kind), compiled.layout, compiled.layout_hash), compiled.layout_hash
 
-    def generate_lens(self, view_id: str, kind: str, last_error: str | None) -> str:
+    def generate_lens(self, view_id: str, kind: str, last_error: str | None) -> tuple[str, str]:
+        """A new lens for the view's Layout as it is now, and the hash of that Layout, to accept it under."""
         compiled = self.compiler.compiled(check_view_id(view_id))
         current = self.lenses.html(lens_key(view_id, kind))
         tokens = self.paths.lens_tokens.read_text() if self.paths.lens_tokens.exists() else ""
-        return generate_lens(self.gateway, compiled.layout, kind, self.paths.default_lens.read_text(), last_error, current, tokens)
+        html = generate_lens(self.gateway, compiled.layout, kind, self.paths.default_lens.read_text(), last_error, current, tokens)
+        return html, compiled.layout_hash
 
     def judge_lens(self, view_id: str, kind: str, screenshot: bytes) -> LensVerdict:
         compiled = self.compiler.compiled(check_view_id(view_id))
         return judge_lens(self.gateway, compiled.layout, kind, screenshot)
 
-    def accept_lens(self, view_id: str, kind: str, html: str) -> int:
+    def accept_lens(self, view_id: str, kind: str, html: str, layout_hash: str | None = None) -> int:
+        """Makes a lens live, marked with the Layout it was made for: a Layout edited meanwhile still shows as stale."""
         compiled = self.compiler.compiled(check_view_id(view_id))
-        return self.lenses.save(lens_key(view_id, kind), html, compiled.layout_hash)
+        return self.lenses.save(lens_key(view_id, kind), html, layout_hash or compiled.layout_hash)
 
     def generate_extractor(self, url: str, skeleton: str, last_error: str | None) -> ExtractorSpec:
         return generate_spec(self.gateway, url, skeleton, last_error)

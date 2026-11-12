@@ -133,7 +133,14 @@ describe("preloads", () => {
     const moi = exposed.moi as Record<string, (...args: unknown[]) => unknown>
     const rendered: unknown[] = []
     const appended: unknown[] = []
-    moi.on_render((items: unknown, cursor: unknown) => rendered.push([items, cursor]))
+    moi.on_render((items: unknown, cursor: unknown) => {
+      rendered.push([items, cursor])
+      for (const item_id of Array.isArray(items) ? items : []) {
+        const node = document.createElement("div")
+        node.dataset.itemId = String(item_id)
+        document.body.append(node)
+      }
+    })
     moi.on_append((items: unknown, cursor: unknown) => appended.push([items, cursor]))
     const updated: unknown[] = []
     moi.on_update((items: unknown) => updated.push(items))
@@ -161,6 +168,31 @@ describe("preloads", () => {
       { type: "less_like_this", item_id: "c" },
     ])
     expect(contextBridge).toBeDefined()
+  })
+
+  it("times a render until its items are in the page, however many frames the lens takes", async () => {
+    vi.useFakeTimers()
+    const frames: Array<() => void> = []
+    vi.stubGlobal("requestAnimationFrame", (callback: () => void) => frames.push(callback))
+    try {
+      await import("../../src/preload/lens")
+      const moi = exposed.moi as Record<string, (...args: unknown[]) => unknown>
+      moi.on_render(() => undefined)
+      document.body.textContent = ""
+      ipcRenderer.emit("moi:lens", {}, { type: "render", items: ["late"], cursor: null })
+      const timings = () => ipcRenderer.sent.filter(([channel]) => channel === "moi:lens_timing")
+      expect(timings()).toHaveLength(0)
+      frames.shift()?.()
+      expect(timings()).toHaveLength(0)
+      const node = document.createElement("div")
+      node.dataset.itemId = "late"
+      document.body.append(node)
+      frames.shift()?.()
+      expect(timings()).toHaveLength(1)
+    } finally {
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
   })
 
   it("ignores open and less like this that no click or key press asked for", async () => {

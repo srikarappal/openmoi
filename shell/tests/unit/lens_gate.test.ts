@@ -49,12 +49,18 @@ describe("the static lens gate", () => {
     ["node.innerHTML = item.text", "writes HTML from strings (set text with textContent)"],
     ["node.innerHTML += item.text", "writes HTML from strings (set text with textContent)"],
     ["node.insertAdjacentHTML('beforeend', item.text)", "writes HTML from strings (set text with textContent)"],
+    ["node.innerHTML = \"\" + item.title", "writes HTML from strings (set text with textContent)"],
+    ["node.outerHTML += item.title", "writes HTML from strings (set text with textContent)"],
+    ["Object.assign(node, { innerHTML: item.title })", "writes HTML from strings (set text with textContent)"],
+    ["node['inner' + 'HTML']; node.setHTMLUnsafe(item.title)", "writes HTML from strings (set text with textContent)"],
+    ["document.createRange().createContextualFragment(item.title)", "writes HTML from strings (set text with textContent)"],
+    ["new DOMParser().parseFromString(item.text, 'text/html')", "writes HTML from strings (set text with textContent)"],
   ])("refuses script that %s", (script, problem) => {
     expect(gate_problem(lens(script))).toBe(`the lens ${problem}, which lenses may not do`)
   })
 
   it("does not flag comparisons, method names or the lens's own open function", () => {
-    expect(gate_problem(lens("if (location == 'x' || node.innerHTML === '') moi.ready(); const reopen = (id) => moi.open(id)"))).toBeNull()
+    expect(gate_problem(lens("if (location == 'x' || node.textContent === '') moi.ready(); const reopen = (id) => moi.open(id)"))).toBeNull()
     expect(gate_problem(lens("const prefetch = 1; my.fetcher(); thing.eval_score = 2; moi.ready()"))).toBeNull()
   })
 
@@ -74,8 +80,10 @@ describe("the static lens gate", () => {
     expect(gate_problem(lens("moi.ready()", markup))).toBe(`the lens ${problem}, which lenses may not do`)
   })
 
-  it("checks inline event handlers too", () => {
-    expect(gate_problem(lens("moi.ready()", `<button onclick="fetch('/x')">x</button>`))).toBe("an inline event handler uses fetch, which lenses may not do")
+  it("refuses inline event handler attributes, whatever they do", () => {
+    expect(gate_problem(lens("moi.ready()", `<button onclick="moi.open('a')">x</button>`))).toBe("the lens has an inline event handler attribute (use addEventListener), which lenses may not do")
+    expect(gate_problem(lens("moi.ready()", `<img alt="" src="data:image/gif;base64,R0" ONERROR="x()">`))).toContain("inline event handler")
+    expect(gate_problem(lens("button.onclick = () => moi.open('a'); root.innerHTML = ''; moi.ready()"))).toBeNull()
   })
 
   it("refuses colors that do not come from the shared tokens", () => {

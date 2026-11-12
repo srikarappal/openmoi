@@ -6,13 +6,31 @@ type Listener = (items: ViewItem[], cursor: string | null) => void
 
 const listeners: Record<HostToLens["type"], Listener[]> = { render: [], append: [], update: [] }
 
+// A render is timed until its items are in the page and laid out, however the lens spreads its work over frames.
+const SETTLE_LIMIT_MS = 2_000
+
+function report_timing(type: string, count: number, started: number): void {
+  ipcRenderer.send("moi:lens_timing", { type, count, ms: performance.now() - started })
+}
+
+function report_when_shown(type: string, count: number, started: number): void {
+  if (document.querySelectorAll("[data-item-id]").length >= count || performance.now() - started > SETTLE_LIMIT_MS) {
+    document.body?.getBoundingClientRect()
+    report_timing(type, count, started)
+  } else {
+    requestAnimationFrame(() => report_when_shown(type, count, started))
+  }
+}
+
 // How long the lens took to handle each message, for the test gate's speed check.
 ipcRenderer.on("moi:lens", (_event, message: HostToLens) => {
   const started = performance.now()
+  const count = Array.isArray(message.items) ? message.items.length : 0
   try {
     for (const listener of listeners[message.type] ?? []) listener(message.items, message.cursor)
   } finally {
-    ipcRenderer.send("moi:lens_timing", { type: message.type, count: Array.isArray(message.items) ? message.items.length : 0, ms: performance.now() - started })
+    if (message.type === "render" && count > 0) report_when_shown(message.type, count, started)
+    else report_timing(message.type, count, started)
   }
 })
 

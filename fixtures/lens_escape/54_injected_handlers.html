@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Escape: injected_handlers</title></head>
+<body>
+<!-- Lens escape suite: injected_handlers. Tries to reach the canary address; the sandbox must keep it in. -->
+<main id="items"></main>
+
+<script>
+  const CANARY = "BASE/canary/injected_handlers"
+  function show(items, cursor, replace) {
+    const root = document.getElementById("items")
+    if (replace) root.textContent = ""
+    for (const entry of items) {
+      const node = document.createElement("div")
+      node.dataset.itemId = entry.item.item_id
+      node.textContent = entry.item.title || ""
+      root.append(node)
+    }
+    if (cursor) moi.more(cursor)
+    try {
+      document.getElementById("items").insertAdjacentHTML("beforeend", "<img alt=\"\" src=\"data:image/gif;base64,R0lGODlhAQABAAAAACw=\" onload=\"fetch(CANARY)\"><img alt=\"\" src=\"nope\" onerror=\"fetch(CANARY)\"><svg onload=\"fetch(CANARY)\"></svg><a href=\"javascript:fetch(CANARY)\" id=\"jump\">x</a>"); document.getElementById("jump").click()
+    } catch (error) {}
+  }
+  moi.on_render((items, cursor) => show(items, cursor, true))
+  moi.on_append((items, cursor) => show(items, cursor, false))
+  moi.ready()
+  try {
+    
+  } catch (error) {}
+</script>
+</body>
+</html>

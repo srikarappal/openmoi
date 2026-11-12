@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 import { normalize_address, site_domain, youtube_video_id } from "../../src/shared/address"
 import { looks_like_challenge } from "../../src/shared/challenge"
-import { LENS_CSP, lens_data_url, lens_request_allowed, parse_lens_message, with_media, wrap_lens } from "../../src/shared/lens_doc"
+import { LENS_CSP, lens_csp, lens_data_url, lens_request_allowed, parse_lens_message, with_media, wrap_lens } from "../../src/shared/lens_doc"
 import { PendingRequests } from "../../src/shared/pending"
 import { Throttle, sleep, wait_for } from "../../src/shared/timing"
 
@@ -91,13 +92,25 @@ describe("lens documents", () => {
   })
 
   it("wraps a fragment into a full document", () => {
-    expect(wrap_lens("<p>hi</p>")).toMatch(/^<!doctype html><meta http-equiv="Content-Security-Policy"[^>]*><p>hi<\/p>$/)
+    expect(wrap_lens("<p>hi</p>")).toMatch(/^<!doctype html><meta http-equiv="Content-Security-Policy"[^>]*><script>[^<]*<\/script><p>hi<\/p>$/)
+  })
+
+  it("lets only the lens's own scripts run, each by its hash, so a handler written into the page never does", () => {
+    const html = '<script>moi.ready()</script><script src="x.js"></script><div onclick="steal()"></div><SCRIPT type="module">go()</SCRIPT>'
+    const policy = lens_csp(html)
+    const hash = (script: string) => `'sha256-${createHash("sha256").update(script).digest("base64")}'`
+    expect(policy.startsWith(LENS_CSP)).toBe(true)
+    expect(policy).toContain(hash("moi.ready()"))
+    expect(policy).toContain(hash("go()"))
+    expect(policy).not.toContain("unsafe-inline'; script")
+    expect(policy.split("script-src ")[1].split(" ")).toHaveLength(3)
+    expect(wrap_lens(html)).toContain(`content="${policy}"`)
   })
 
   it("puts the CSP before a script placed ahead of head and is not fooled by a header tag", () => {
     for (const html of ["<!DOCTYPE html><script>early()</script><html><head></head></html>", "<header><script>x()</script></header>"]) {
       const wrapped = wrap_lens(html)
-      expect(wrapped.startsWith(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${LENS_CSP}">`)).toBe(true)
+      expect(wrapped.startsWith(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${lens_csp(html.replace(/^<!DOCTYPE html>/, ""))}"><script>`)).toBe(true)
       expect(wrapped.match(/<!doctype/gi)).toHaveLength(1)
     }
   })

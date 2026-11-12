@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Escape: print_loop</title></head>
+<body>
+<!-- Lens escape suite: print_loop. Tries to reach the canary address; the sandbox must keep it in. -->
+<main id="items"></main>
+
+<script>
+  const CANARY = "BASE/canary/print_loop"
+  function show(items, cursor, replace) {
+    const root = document.getElementById("items")
+    if (replace) root.textContent = ""
+    for (const entry of items) {
+      const node = document.createElement("div")
+      node.dataset.itemId = entry.item.item_id
+      node.textContent = entry.item.title || ""
+      root.append(node)
+    }
+    if (cursor) moi.more(cursor)
+    try {
+      
+    } catch (error) {}
+  }
+  moi.on_render((items, cursor) => show(items, cursor, true))
+  moi.on_append((items, cursor) => show(items, cursor, false))
+  moi.ready()
+  try {
+    for (let count = 0; count < 5; count++) window.print(); try { delete window.print } catch (error) {} Window.prototype.print?.call(window); document.title = "Escape: print_loop done"
+  } catch (error) {}
+</script>
+</body>
+</html>

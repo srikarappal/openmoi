@@ -37,8 +37,11 @@ export class FakeWebContents extends EventEmitter {
   }
 
   // Like Electron, the address changes as the load starts; a failure comes a moment later.
-  async loadURL(url: string): Promise<void> {
+  load_options: unknown[] = []
+
+  async loadURL(url: string, options?: unknown): Promise<void> {
     this.loads.push(url)
+    if (options !== undefined) this.load_options.push(options)
     this.url = url
     await Promise.resolve()
     if (this.load_error) throw this.load_error
@@ -195,7 +198,7 @@ class FakeIpcMain extends EventEmitter {
   }
 }
 
-export class FakeSession {
+export class FakeSession extends EventEmitter {
   user_agent = "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) openmoi_shell/0.1.0 Chrome/140.0.0.0 Electron/45.2.3 Safari/537.36"
   permission_handler: PermissionHandler | null = null
   request_handler: RequestHandler | null = null
@@ -219,6 +222,12 @@ export class FakeSession {
 
   setPermissionRequestHandler(handler: PermissionHandler): void {
     this.permission_handler = handler
+  }
+
+  check_handler: ((contents: unknown, permission: string) => boolean) | null = null
+
+  setPermissionCheckHandler(handler: (contents: unknown, permission: string) => boolean): void {
+    this.check_handler = handler
   }
 
   // Custom protocol handlers by scheme, and what fetch answers (a test sets it).

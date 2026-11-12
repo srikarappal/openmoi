@@ -34,7 +34,7 @@ Part 2: Later
 16. Later stages map
 17. L1 Robust reading `[built]`
 18. L2 Smarter brain `[built]`
-19. L3 Full lens engine `[partly built]`
+19. L3 Full lens engine `[built]`
 20. L4 Intent views `[not built]`
 21. L5 Actions and the policy gate `[not built]`
 22. L6 Agents `[not built]`
@@ -872,7 +872,7 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 |---|---|---|---|
 | L1 Robust reading | Facebook, Amazon, rung 2, assist mode, health monitor, packs, site policy | Source adapter | built |
 | L2 Smarter brain | Learned ranking, clusters, embeddings, search, richer rules | Event log, Item | built |
-| L3 Full lens engine | Test gate, visual judge, patch mode, media proxy, tokens, gesture binding | Lens contract | partly built |
+| L3 Full lens engine | Test gate, visual judge, patch mode, media proxy, tokens, gesture binding | Lens contract | built |
 | L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file | not built |
 | L5 Actions and gate | Tiers, executors, verify, audit, injection defense | Read only boundary, shell and brain split | not built |
 | L6 Agents | Runtime, tools, standing tasks | Brain, gate | not built |
@@ -975,9 +975,9 @@ do        := hide | boost(weight) | demote(weight) | limit(count, per) | group_b
 
 Reviewed after it was built: 11 bugs found and fixed with tests. Exit checks: the learned model beats recency by at least 15% NDCG@20 on a synthetic month of opens; the same story from 3 sources lands in one cluster in 19 of 20 labeled cases with hashed vectors and 20 of 20 with an embedding model (the fake model's synonyms), no story merged into another. The labeled set (`fixtures/clusters/labeled_stories.json`) is ours, not real traffic.
 
-## 19. L3 Full lens engine `[partly built]`
+## 19. L3 Full lens engine `[built]`
 
-**Built early:** a lens may load only the https images of items it was sent, enforced by its session and its CSP (a lighter stand in for the media proxy); opening an item or "less like this" needs a real click or key press in the lens and comes at most at the pace of clicks (a first form of gesture binding).
+**Built early:** a lens could load only the https images of items it was sent and opening an item needed a click; L3 replaced both with the media proxy and gesture binding below.
 
 **Adds**
 
@@ -999,6 +999,24 @@ request -> spec -> code
 * Escape suite: 50 adversarial lenses that must all stay contained.
 
 **Exit:** lens switch under 100 ms; escape suite contained; generation under 60 s with every gate green.
+
+**As built (Nov 12, 2026):**
+
+| Piece | Built | Not verified |
+|---|---|---|
+| Static gate | `lens_gate.ts` reads a lens before it runs and refuses fetch, XHR, WebSocket, EventSource, beacons, eval and Function, storage, cookies, window.open, navigation, workers, imports, Node and Electron names, HTML written from strings in any form (only `innerHTML = ""` to clear), inline event handler attributes, forms, frames, link and script file tags, meta refresh, addresses of other sites in markup or CSS, @import, colors not from the tokens, and lenses over 400 kB | |
+| Sandbox | A data URL document in the `lens` session with CSP `default-src 'none'` (nothing to connect to), images and media only from `moi-media:` and data URLs, and scripts only by the hash of the lens's own `<script>` blocks, so a handler written into the page (an item title set as HTML) never runs; a request filter refuses everything else and the test gate fails a lens that tried. Dialogs return at once, `print` does nothing, downloads are cancelled and every permission is refused. Not a `moi-lens://` scheme: the data URL already has no origin to reach | |
+| Test gate | No items, one, 50 timed, the hard cases (Arabic and Hebrew, a 10,000 character word, an item with nothing but an id, markup and emoji in text, every kind) and 500, in a hidden window: no script errors, every item rendered with `data-item-id`, 50 items shown in under 50 ms (timed by the preload from the message until the items are in the page and laid out, over as many frames as the lens takes), no serious or critical WCAG A or AA problem from axe-core, nothing loaded from outside | |
+| Visual judge | A screenshot of the 50 item render goes to the `vision` slot (any OpenAI compatible model taking images) with the layout words; made up items only, so a hosted model may see it. Without a vision slot the judge is skipped | A real vision model |
+| Fix loop | Up to three rounds; each round's model call gets what failed last (the gate's words, the test that failed, the judge's sentence); the lens that goes live keeps the hash of the Layout it was made for, and a Layout changed during a build is built next | |
+| Patch mode | The model answers with find and replace edits on the live lens (the default lens at first); an edit that does not apply, or a request it marks as needing a rewrite, falls back to a whole lens written from the example | |
+| Tokens | `lenses/tokens.css` (colors, shadow, radius, gap, fonts, light and dark) goes into every lens before its own styles; the default lens uses only tokens and the gate refuses colors written any other way | |
+| Media proxy | Every image of the items a lens is sent becomes `moi-media://m/<token>`, a random token for that lens. The host fetches each image when it hands the token out, once per address, without cookies, and keeps it (200 MB at most, oldest first out), so whether and how often a lens loads a token reaches no one; a token with anything added is refused. Only public https images under 25 MB: an address that is or resolves to a private, loopback or link local network, also at any redirect hop, is never fetched | A name that resolves differently between the check and the fetch |
+| Player | `moi.play(item_id)` (on a click) shows a YouTube video in the official embed (`youtube-nocookie.com`, with openMoi as the referring site, which YouTube requires) in a host view above the lens, in its own session that may go full screen and nothing else; what the embed opens goes where originals open; Close, Escape, switching views or closing the window ends it. The default lens offers "Play here" on YouTube videos, in views and in Mine | Live YouTube embeds |
+| Gesture binding | Open, play and less like this count only within 1 s of a real click, key press or touch the main process saw on that lens, on top of the preload's user activation check | |
+| Escape suite | `fixtures/lens_escape/`: 55 lenses trying the network every way (fetch to WebTransport, images to fonts, forms, workers, imports, eval), navigation, windows, downloads, dialog and print loops, handlers written into the page, reloading media tokens, Node, forged clicks and tampering with the helper, installed as generated lenses in the real app; none reaches the canary, opens anything, downloads, blocks the app or records an action, while a normal tab does reach the canary | |
+
+Reviewed after it was built: 10 problems found and fixed with tests, among them the media proxy reaching private addresses and an image token reload channel. Exit checks: a lens switch takes about 4 ms from the click to the view being marked active (which happens after the lens is in front); the 55 escape lenses stay contained; a generated lens goes live through every gate, visual judge included, in about 2.3 s with the fake model. Lenses stay plain JavaScript; Preact and htm were not needed.
 
 ## 20. L4 Intent views `[not built]`
 

@@ -224,16 +224,17 @@ export class BrainClient {
     return this.request("GET", `/lens/${encodeURIComponent(view_id)}?kind=${kind}`)
   }
 
-  async generate_lens(view_id: string, kind: LensKind, last_error?: string): Promise<string> {
-    return (await this.request<{ html: string }>("POST", "/lens/generate", { view_id, kind, last_error })).html
+  // A new lens and the hash of the Layout it was made for.
+  generate_lens(view_id: string, kind: LensKind, last_error?: string): Promise<{ html: string; layout_hash: string }> {
+    return this.request("POST", "/lens/generate", { view_id, kind, last_error })
   }
 
   judge_lens(view_id: string, kind: LensKind, screenshot: string): Promise<LensVerdict> {
     return this.request("POST", "/lens/judge", { view_id, kind, screenshot })
   }
 
-  async accept_lens(view_id: string, kind: LensKind, html: string): Promise<number> {
-    return (await this.request<{ version: number }>("POST", "/lens/accept", { view_id, kind, html })).version
+  async accept_lens(view_id: string, kind: LensKind, html: string, layout_hash?: string): Promise<number> {
+    return (await this.request<{ version: number }>("POST", "/lens/accept", { view_id, kind, html, layout_hash })).version
   }
 
   previous_extractors(url: string, version: number): Promise<ExtractorSpec[]> {

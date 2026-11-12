@@ -8,6 +8,7 @@ vi.mock("electron", async () => await import("./fake_electron"))
 const { GESTURE_WINDOW_MS, LensManager, LensContext } = await import("../../src/main/lenses")
 const { TabManager } = await import("../../src/main/tabs")
 const { configure_sessions, LENS_PARTITION } = await import("../../src/main/sessions")
+const { configure_media } = await import("../../src/main/media")
 
 class FakeHost implements ViewHost {
   readonly page_preload = "/dist/preload_page.js"
@@ -148,19 +149,23 @@ describe("LensContext", () => {
     const lens = session.fromPartition(LENS_PARTITION)
     const view = new FakeWebContentsView()
     const context = new LensContext("view:feed", "feed", view as never)
-    context.send({ type: "render", items: [view_item("a", "https://i/a.jpg")], cursor: null })
+    configure_media((url, init) => session.fromPartition("media").fetch(url, init), async () => ["93.184.216.34"])
+    session.fromPartition("media").fetch_answer = () => new Response(new Uint8Array([1, 2]), { headers: { "content-type": "image/jpeg" } })
+    context.send({ type: "render", items: [view_item("a", "https://i.example/a.jpg")], cursor: null })
     context.send({ type: "append", items: [view_item("b")], cursor: "more" })
     expect([...context.rendered.keys()]).toEqual(["a", "b"])
-    expect(context.rendered.get("a")?.image_url).toBe("https://i/a.jpg")
+    expect(context.rendered.get("a")?.image_url).toBe("https://i.example/a.jpg")
     const [first] = view.webContents.messages("moi:lens") as Array<{ items: ViewItem[] }>
     const token = first.items[0].item.image_url ?? ""
     expect(token).toMatch(/^moi-media:\/\/m\/[0-9a-f]{32}$/)
     expect(cancelled(lens, token, view.webContents.id)).toBe(false)
-    expect(cancelled(lens, "https://i/a.jpg", view.webContents.id)).toBe(true)
-    session.fromPartition("media").fetch_answer = () => new Response(new Uint8Array([1, 2]), { headers: { "content-type": "image/jpeg" } })
+    expect(cancelled(lens, "https://i.example/a.jpg", view.webContents.id)).toBe(true)
     const served = await lens.protocols.get("moi-media")?.(new Request(token))
     expect(served?.status).toBe(200)
-    expect(session.fromPartition("media").fetched).toEqual([["https://i/a.jpg", { credentials: "omit", redirect: "follow", headers: {} }]])
+    await lens.protocols.get("moi-media")?.(new Request(token))
+    const fetched = session.fromPartition("media").fetched
+    expect(fetched.map(([url]) => url)).toEqual(["https://i.example/a.jpg"])
+    expect(fetched[0][1]).toMatchObject({ credentials: "omit", redirect: "manual" })
     context.send({ type: "render", items: [view_item("c")], cursor: null })
     expect([...context.rendered.keys()]).toEqual(["c"])
   })

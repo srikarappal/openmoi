@@ -95,6 +95,13 @@ test("an item's image reaches the lens through the media proxy, fetched without 
     )
     expect(direct).toEqual([false])
     expect(await world.hits("/images/pixel.png?direct=1")).toEqual([])
+    const loaded_images = (await harness.in_lenses<Array<{ alt: string; width: number; card: string }>>(
+      `[...document.querySelectorAll("[data-item-id]")].map((card) => ({ alt: "", card: card.innerText, width: card.querySelector("img")?.naturalWidth ?? -1 }))`,
+    )).flat()
+    expect(loaded_images.find((image) => image.card.includes("Harbor lights"))?.width).toBe(1)
+    expect(loaded_images.find((image) => image.card.includes("Router admin"))?.width).toBe(0)
+    expect((await world.hits("/images/redirect")).length).toBe(1)
+    expect((await world.hits("/images/pixel.png?moved=1")).length).toBe(1)
   } finally {
     await harness.close()
   }

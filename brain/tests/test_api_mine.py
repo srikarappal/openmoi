@@ -117,3 +117,16 @@ def test_chat_on_a_site_view_creates_its_file(client, paths):
     assert change["file"] == "views/site_shop.example.md"
     client.post("/edit/apply", json={"proposal_id": proposal["proposal_id"]})
     assert (paths.views / "site_shop.example.md").read_text() == "# shop.example\n\n## Layout\nmake it a compact table\n"
+
+
+def test_a_lens_keeps_the_layout_it_was_made_for_when_the_layout_changed_before_it_was_accepted(client, paths):
+    set_layout(paths, "Two columns.")
+    made = client.post("/lens/generate", json={"view_id": "feed"}).json()
+    set_layout(paths, "Three columns.")
+    assert client.post("/lens/accept", json={"view_id": "feed", "html": made["html"], "layout_hash": made["layout_hash"]}).json() == {"version": 1}
+    assert client.post("/view/feed", json={}).json()["lens_stale"] is True
+    again = client.post("/lens/generate", json={"view_id": "feed"}).json()
+    assert again["layout_hash"] != made["layout_hash"]
+    client.post("/lens/accept", json={"view_id": "feed", "html": again["html"], "layout_hash": again["layout_hash"]})
+    assert client.post("/view/feed", json={}).json()["lens_stale"] is False
+    assert client.post("/lens/accept", json={"view_id": "feed", "html": "<p>x</p>", "layout_hash": "not a hash!"}).status_code == 422

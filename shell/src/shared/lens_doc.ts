@@ -1,19 +1,36 @@
 // Everything about turning untrusted lens HTML into a safe document and trusting nothing it sends back.
+import { createHash } from "node:crypto"
 import type { LensToHost, ViewItem } from "./types"
 
-export const LENS_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src moi-media: data:; font-src data:; media-src moi-media: data:"
+// What a lens may load: nothing to connect to, images and media only through the media proxy or data URLs. Scripts
+// run only when they are the lens's own <script> blocks, each allowed by its hash, so an event handler written into
+// the page (say from an item title set as HTML: <img onerror=...>) never runs.
+export const LENS_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src moi-media: data:; font-src data:; media-src moi-media: data:"
 const MAX_IDS_PER_MESSAGE = 200
 const MAX_ID_LENGTH = 200
 const MAX_TEXT_LENGTH = 5_000
+const INLINE_SCRIPT = /<script\b(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script\s*>/gi
+// Runs before the lens: printing would put up a native dialog the lens could repeat forever, so it does nothing.
+const GUARD_SCRIPT = `Object.defineProperty(window, "print", { value: function print() {}, writable: false, configurable: false })`
+
+function script_hash(script: string): string {
+  return `'sha256-${createHash("sha256").update(script, "utf-8").digest("base64")}'`
+}
+
+// The full policy for one lens: the base policy plus the hash of each of its own inline scripts and of the guard.
+export function lens_csp(html: string): string {
+  const hashes = [GUARD_SCRIPT, ...Array.from(html.matchAll(INLINE_SCRIPT), (match) => match[1])].map(script_hash)
+  return `${LENS_CSP}; script-src ${[...new Set(hashes)].join(" ")}`
+}
 
 // Puts the CSP before anything else in the document, right after the doctype, so it applies before any lens
-// script runs, then the shared design tokens, so the lens's own styles come after them; the parser files both into
-// head wherever the lens's own html and head tags come.
+// script runs, then the guard, then the shared design tokens, so the lens's own styles come after them; the parser
+// files them into head wherever the lens's own html and head tags come.
 export function wrap_lens(html: string, tokens = ""): string {
-  const meta = `<meta http-equiv="Content-Security-Policy" content="${LENS_CSP}">`
+  const lens = html.replace(/^\s*<!doctype[^>]*>/i, "")
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${lens_csp(lens)}">`
   const style = tokens ? `<style id="moi_tokens">${tokens.replace(/<\//g, "<\\/")}</style>` : ""
-  return `<!doctype html>${meta}${style}${html.replace(/^\s*<!doctype[^>]*>/i, "")}`
+  return `<!doctype html>${meta}<script>${GUARD_SCRIPT}</script>${style}${lens}`
 }
 
 export function lens_data_url(html: string, tokens = ""): string {

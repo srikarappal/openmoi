@@ -91,6 +91,8 @@ class LensAcceptRequest(BaseModel):
     view_id: str
     kind: LensKind = "feed"
     html: str = Field(min_length=1, max_length=MAX_LENS_HTML)
+    # The Layout hash the lens was generated for; without it, the Layout's hash now.
+    layout_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{8,64}$")
 
 
 class LensJudgeRequest(BaseModel):
@@ -425,7 +427,8 @@ def lens(view_id: str, brain: BrainDep, kind: LensKind = "feed") -> str:
 
 @router.post("/lens/generate")
 def generate_lens(body: LensGenerateRequest, brain: BrainDep) -> dict[str, str]:
-    return {"html": brain.generate_lens(body.view_id, body.kind, body.last_error)}
+    html, layout_hash = brain.generate_lens(body.view_id, body.kind, body.last_error)
+    return {"html": html, "layout_hash": layout_hash}
 
 
 @router.post("/lens/judge")
@@ -441,7 +444,7 @@ def judge_lens(body: LensJudgeRequest, brain: BrainDep) -> LensVerdict:
 
 @router.post("/lens/accept")
 def accept_lens(body: LensAcceptRequest, brain: BrainDep) -> dict[str, int]:
-    return {"version": brain.accept_lens(body.view_id, body.kind, body.html)}
+    return {"version": brain.accept_lens(body.view_id, body.kind, body.html, body.layout_hash)}
 
 
 @router.get("/extractor")

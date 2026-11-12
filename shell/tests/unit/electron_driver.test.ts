@@ -7,7 +7,7 @@ vi.mock("electron", async () => await import("./fake_electron"))
 
 const { ElectronDriver } = await import("../../src/main/drivers")
 const { call_page } = await import("../../src/main/page_rpc")
-const { blocked_lens_requests, configure_sessions, forget_lens, lens_preferences, web_preferences, LENS_PARTITION, MEDIA_PARTITION, WEB_PARTITION } = await import("../../src/main/sessions")
+const { blocked_lens_requests, configure_sessions, forget_lens, lens_preferences, web_preferences, LENS_PARTITION, PLAYER_PARTITION, WEB_PARTITION } = await import("../../src/main/sessions")
 const { media_url } = await import("../../src/main/media")
 const { session } = await import("./fake_electron")
 
@@ -119,13 +119,26 @@ describe("sessions", () => {
     expect(decisions).toEqual([false, true, true, true])
     expect(blocked_lens_requests(7)).toEqual(["https://pbs.twimg.com/media/a.jpg", "https://collector.example/p.gif?d=items", "https://evil.example/steal?data=1"])
     expect(lens.protocols.has("moi-media")).toBe(true)
-    expect(session.fromPartition(MEDIA_PARTITION).getUserAgent()).toBe(web.getUserAgent())
+    for (const partition of [LENS_PARTITION, PLAYER_PARTITION]) {
+      const sealed = session.fromPartition(partition)
+      const granted: boolean[] = []
+      sealed.permission_handler?.(null, "notifications", (allowed) => granted.push(allowed))
+      sealed.permission_handler?.(null, "midiSysex", (allowed) => granted.push(allowed))
+      expect(granted).toEqual([false, false])
+      expect(sealed.check_handler?.(null, "notifications")).toBe(false)
+      const download = { preventDefault: vi.fn() }
+      sealed.emit("will-download", download, {}, null)
+      expect(download.preventDefault).toHaveBeenCalled()
+    }
+    const fullscreen: boolean[] = []
+    session.fromPartition(PLAYER_PARTITION).permission_handler?.(null, "fullscreen", (allowed) => fullscreen.push(allowed))
+    expect(fullscreen).toEqual([true])
     forget_lens(7)
     expect(blocked_lens_requests(7)).toEqual([])
   })
 
   it("keeps lenses and pages sandboxed and isolated", () => {
-    expect(lens_preferences("/p.js")).toEqual({ partition: "lens", preload: "/p.js", sandbox: true, contextIsolation: true, nodeIntegration: false })
+    expect(lens_preferences("/p.js")).toEqual({ partition: "lens", preload: "/p.js", sandbox: true, contextIsolation: true, nodeIntegration: false, disableDialogs: true })
     expect(web_preferences("/p.js", false)).toMatchObject({ sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: true })
   })
 })

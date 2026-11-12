@@ -36,7 +36,8 @@ Rules:
 * Never use fetch, XMLHttpRequest, WebSocket, storage APIs, cookies, eval, forms or window.open.
 * Talk to the host only through the global moi helper described in the request.
 * Every item element carries data-item-id set to item.item_id; clicking it calls moi.open(item.item_id).
-* Set text with textContent, never innerHTML: item text comes from the web.
+* Set text with textContent, never innerHTML (except innerHTML = "" to clear): item text comes from the web.
+* No inline event handler attributes such as onclick="...": use addEventListener in your script.
 * Handle missing fields, long text and every item kind: post, article, video, product, link.
 * item.source_id is "x", "youtube:<channel>", "rss:<site>" or "site:<domain>"; the part before ":" names the source, for layouts that group or label by source.
 * One article item whose extra.blocks is a JSON list of {type: h | p | img | quote | li, text, src} renders as a reader.

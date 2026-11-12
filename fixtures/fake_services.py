@@ -94,14 +94,21 @@ def news_feed(base_url: str) -> str:
     return rss_feed(base_url, "News", NEWS_ITEMS)
 
 
+PHOTOS = [
+    ("photo1", "Sunset over the bay", "pixel.png", 1),
+    ("photo2", "Harbor lights moved", "redirect", 2),
+    ("photo3", "Router admin page", "to_private", 3),
+]
+
+
 def photos_feed(base_url: str) -> str:
-    """One post with an image in its description, served by this fake world."""
-    now = format_datetime(datetime.now(UTC) - timedelta(hours=1))
-    item = (
-        f"<item><guid>photo1</guid><title>Sunset over the bay</title><link>{base_url}/articles/photo1</link>"
-        f'<description>&lt;img src="{base_url}/images/pixel.png"&gt; A photo.</description><pubDate>{now}</pubDate></item>'
+    """Posts with an image in their description: one direct, one through a redirect, one redirecting somewhere private."""
+    items = "".join(
+        f"<item><guid>{guid}</guid><title>{title}</title><link>{base_url}/articles/{guid}</link>"
+        f'<description>&lt;img src="{base_url}/images/{image}"&gt; A photo.</description><pubDate>{format_datetime(datetime.now(UTC) - timedelta(hours=hours))}</pubDate></item>'
+        for guid, title, image, hours in PHOTOS
     )
-    return f'<?xml version="1.0"?><rss version="2.0"><channel><title>Photos</title>{item}</channel></rss>'
+    return f'<?xml version="1.0"?><rss version="2.0"><channel><title>Photos</title>{items}</channel></rss>'
 
 
 def broken_feed(base_url: str) -> str:
@@ -179,6 +186,10 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, "text/html", f"<!doctype html><title>Player {video_id}</title><p>Playing {video_id}</p>")
         elif parts.path == "/images/pixel.png":
             self.reply_bytes(200, "image/png", PIXEL_PNG)
+        elif parts.path == "/images/redirect":
+            self.redirect(f"{base}/images/pixel.png?moved=1")
+        elif parts.path == "/images/to_private":
+            self.redirect("http://10.255.255.1/router.png")
         elif parts.path.startswith("/canary/"):
             self.reply_bytes(200, "image/png", PIXEL_PNG)
         elif parts.path == "/pages/x_home_signed_in.html":
@@ -269,6 +280,12 @@ class Handler(BaseHTTPRequestHandler):
         self.reply_bytes(200, "text/plain", b"")
 
     do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = do_OTHER
+
+    def redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("location", location)
+        self.send_header("content-length", "0")
+        self.end_headers()
 
     def reply(self, status: int, content_type: str, text: str) -> None:
         self.reply_bytes(status, content_type, text.encode())

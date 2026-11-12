@@ -27,10 +27,11 @@ const SCRIPT_CHECKS: Check[] = [
   { pattern: /\bnew\s+(?:Shared)?Worker\b|\bserviceWorker\b/, problem: "starts workers" },
   { pattern: /(?<![\w$.])require\s*\(|\bipcRenderer\b|\bprocess\s*\.\s*(?:env|versions|binding|mainModule)\b/, problem: "reaches for Node or Electron" },
   { pattern: /\bdocument\s*\.\s*write(?:ln)?\s*\(/, problem: "uses document.write" },
-  { pattern: /\binsertAdjacentHTML\b|\bouterHTML\s*=(?!=)|\binnerHTML\s*(?:\+=|=(?!=)(?!\s*(["'`])\1))/, problem: "writes HTML from strings (set text with textContent)" },
+  { pattern: /\b(?:inner|outer)HTML\b|\binsertAdjacentHTML\b|\bsetHTMLUnsafe\b|\bcreateContextualFragment\b|\bparseFromString\b|\bsrcdoc\b/, problem: "writes HTML from strings (set text with textContent)" },
 ]
 
 const MARKUP_CHECKS: Check[] = [
+  { pattern: /<[a-z][^>]*\son[a-z]+\s*=/i, problem: "has an inline event handler attribute (use addEventListener)" },
   { pattern: /<\s*(?:form|iframe|frame|frameset|object|embed|portal|base|applet)\b/i, problem: "has a form, frame, object, embed or base tag" },
   { pattern: /<\s*link\b/i, problem: "has a link tag" },
   { pattern: /<\s*script\b[^>]*\bsrc\s*=/i, problem: "loads a script file" },
@@ -63,9 +64,12 @@ export function hardcoded_colors(css: string): string[] {
   return found
 }
 
-// Script text without its comments, so a word in a comment is not mistaken for a call.
+// Clearing an element with innerHTML = "" writes no HTML, so it is the one use of innerHTML a lens may make.
+const CLEARING = /\.innerHTML\s*=\s*(["'`])\1(?=\s*(?:[;,)}\n]|$))/g
+
+// Script text without its comments, so a word in a comment is not mistaken for a call, and without clearing.
 export function code_only(script: string): string {
-  return script.replace(/\/\*[\s\S]*?\*\/|(?<![:"'`\\])\/\/[^\n]*/g, " ")
+  return script.replace(/\/\*[\s\S]*?\*\/|(?<![:"'`\\])\/\/[^\n]*/g, " ").replace(CLEARING, ".cleared")
 }
 
 // The first problem with a lens, or null when it passes; the message is meant for the model to fix.
@@ -73,8 +77,6 @@ export function gate_problem(html: string): string | null {
   if (new TextEncoder().encode(html).length > MAX_LENS_BYTES) return `the lens is larger than ${MAX_LENS_BYTES / 1000} kB`
   const scripts = blocks(html, SCRIPT_BLOCK, 1).map(code_only).join("\n")
   for (const check of SCRIPT_CHECKS) if (check.pattern.test(scripts)) return `the lens ${check.problem}, which lenses may not do`
-  const handlers = Array.from(html.matchAll(/\bon[a-z]+\s*=\s*(["'])([\s\S]*?)\1/gi), (match) => match[2]).join("\n")
-  for (const check of SCRIPT_CHECKS) if (check.pattern.test(handlers)) return `an inline event handler ${check.problem}, which lenses may not do`
   for (const check of MARKUP_CHECKS) if (check.pattern.test(html)) return `the lens ${check.problem}, which lenses may not do`
   const css = [...blocks(html, STYLE_BLOCK, 1), ...blocks(html, STYLE_ATTRIBUTE, 2)].join("\n")
   const [color] = hardcoded_colors(css)

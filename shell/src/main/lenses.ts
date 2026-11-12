@@ -3,7 +3,7 @@ import { ipcMain, WebContentsView } from "electron"
 import { lens_data_url, parse_lens_message, with_media } from "../shared/lens_doc"
 import type { HostToLens, Item, LensToHost } from "../shared/types"
 import type { ViewHost } from "./host"
-import { media_url } from "./media"
+import { forget_media, media_url } from "./media"
 import { forget_lens, lens_preferences } from "./sessions"
 
 // A lens may open an item or ask for less like it at most this often: a click, not a script looping over items.
@@ -31,15 +31,16 @@ export class LensContext {
   ) {}
 
   send(message: HostToLens): void {
+    const contents_id = this.view.webContents.id
     if (message.type === "render") {
       this.rendered.clear()
       this.collections.clear()
+      forget_media(contents_id)
     }
     for (const view_item of message.items) {
       this.rendered.set(view_item.item.item_id, view_item.item)
       if (view_item.collections) this.collections.set(view_item.item.item_id, view_item.collections)
     }
-    const contents_id = this.view.webContents.id
     this.view.webContents.send("moi:lens", { ...message, items: with_media(message.items, (url) => media_url(contents_id, url)) })
   }
 

@@ -42,10 +42,13 @@ export class LensGenerator {
       return Promise.resolve()
     }
     this.running.add(running_key)
+    // The Layout the live lens was made for once this build is over: a queued Layout other than that is built next.
+    let made_for: string = layout_hash
     return this.hooks
       .track(`Designing a new look for ${view_label(view_id)}, usually under a minute`, () => this.build(view_id, kind))
       .then((built) => {
-        if (!built) this.failed.add(layout_key)
+        if (built === null) this.failed.add(layout_key)
+        else made_for = built
       })
       .catch((error) => {
         this.failed.add(layout_key)
@@ -55,7 +58,7 @@ export class LensGenerator {
         this.running.delete(running_key)
         const next = this.queued.get(running_key)
         this.queued.delete(running_key)
-        if (next !== undefined && next !== layout_hash) return this.ensure(view_id, kind, next)
+        if (next !== undefined && next !== made_for) return this.ensure(view_id, kind, next)
       })
   }
 
@@ -69,25 +72,25 @@ export class LensGenerator {
     return verdict.verdict === "differs" ? `it does not look the way the layout asks: ${verdict.problem}` : null
   }
 
-  // True when a lens passed every gate and went live.
-  private async build(view_id: string, kind: LensKind): Promise<boolean> {
+  // The Layout hash of the lens that passed every gate and went live, or null when none did.
+  private async build(view_id: string, kind: LensKind): Promise<string | null> {
     const started = Date.now()
     this.hooks.say(`Building a new look for ${view_label(view_id)}.`)
     let last_error: string | undefined
     for (let round = 0; round < ROUNDS; round++) {
-      const html = await this.brain.generate_lens(view_id, kind, last_error)
+      const { html, layout_hash } = await this.brain.generate_lens(view_id, kind, last_error)
       const problem = await this.problem(view_id, kind, html)
       if (!problem) {
-        const version = await this.brain.accept_lens(view_id, kind, html)
+        const version = await this.brain.accept_lens(view_id, kind, html, layout_hash)
         this.hooks.say(`New look for ${view_label(view_id)} is live (version ${version}, ${Math.round((Date.now() - started) / 1000)} s).`)
         await this.hooks
           .on_new_lens(view_id, kind)
           .catch((error) => this.hooks.say(`The new look is saved but could not be shown yet (${explain(error)}); reopen ${view_label(view_id)} to see it.`))
-        return true
+        return layout_hash
       }
       last_error = problem
     }
     this.hooks.say(`That look did not work (${last_error}). Keeping the current one.`)
-    return false
+    return null
   }
 }

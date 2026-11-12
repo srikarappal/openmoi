@@ -4,7 +4,8 @@ import { FakeWebContentsView, reset_electron } from "./fake_electron"
 
 vi.mock("electron", async () => await import("./fake_electron"))
 
-const { Player, PLAYER_PARTITION, embed_url } = await import("../../src/main/player")
+const { Player, embed_url, EMBED_REFERRER } = await import("../../src/main/player")
+const { PLAYER_PARTITION } = await import("../../src/main/sessions")
 
 function make_player() {
   const host = { attached: [] as unknown[], detached: [] as unknown[], attach: (view: unknown) => host.attached.push(view), detach: (view: unknown) => host.detached.push(view) }
@@ -23,7 +24,8 @@ describe("Player", () => {
     FakeWebContentsView.created = []
     expect(player.play(VIDEO)).toBe(true)
     const [view] = FakeWebContentsView.created
-    expect(view.options.webPreferences).toMatchObject({ partition: PLAYER_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false })
+    expect(view.options.webPreferences).toMatchObject({ partition: PLAYER_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false, disableDialogs: true })
+    expect(view.webContents.load_options).toEqual([{ httpReferrer: EMBED_REFERRER }])
     expect(view.webContents.loads).toEqual([embed_url("VIDEO00001A", "https://embed.example")])
     expect(view.webContents.loads[0]).toBe("https://embed.example/embed/VIDEO00001A?autoplay=1&rel=0&modestbranding=1")
     expect(host.attached).toEqual([view])

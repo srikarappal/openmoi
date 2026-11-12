@@ -109,6 +109,7 @@ export class Harness {
         MOI_ASSETS_DIR: assets,
         MOI_YOUTUBE_BASE: world.base_url,
         MOI_EMBED_BASE: world.base_url,
+        MOI_MEDIA_LOOPBACK: "1",
         MOI_HEADLESS: "1",
         MOI_BRAIN_PORT: String(brain_port),
         MOI_TOKEN: TOKEN,

@@ -8,7 +8,7 @@ import { lens_scenarios, type LensScenario } from "../shared/fixtures"
 import { lens_data_url, with_media } from "../shared/lens_doc"
 import { sleep, with_timeout } from "../shared/timing"
 import type { LensKind } from "../shared/types"
-import { media_url } from "./media"
+import { forget_media, media_url } from "./media"
 import { blocked_lens_requests, forget_lens, lens_preferences } from "./sessions"
 
 const READY_TIMEOUT_MS = 5_000
@@ -90,7 +90,8 @@ export class SmokeTester {
   }
 
   async check(html: string, kind: LensKind): Promise<LensCheck> {
-    const window = new BrowserWindow({ show: false, width: 1100, height: 800, webPreferences: lens_preferences(this.lens_preload) })
+    // Never throttled, so the frames a lens renders over are timed as they would run in front of you.
+    const window = new BrowserWindow({ show: false, width: 1100, height: 800, webPreferences: { ...lens_preferences(this.lens_preload), backgroundThrottling: false } })
     const contents = window.webContents
     contents.on("will-navigate", (event) => event.preventDefault())
     contents.setWindowOpenHandler(() => ({ action: "deny" }))
@@ -125,6 +126,7 @@ export class SmokeTester {
   private async scenario(window: BrowserWindow, scenario: LensScenario, errors: string[]): Promise<LensCheck> {
     const contents = window.webContents
     const timing = new Signal("moi:lens_timing", contents.id, render_ms, RENDER_TIMEOUT_MS)
+    forget_media(contents.id)
     contents.send("moi:lens", { type: "render", items: with_media(scenario.items, (url) => media_url(contents.id, url)), cursor: null })
     const ms = await timing.promise
     await sleep(RENDER_SETTLE_MS)

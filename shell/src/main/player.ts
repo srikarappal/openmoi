@@ -6,8 +6,11 @@ import { youtube_video_id } from "../shared/address"
 import type { Item, PlayerInfo } from "../shared/types"
 import { ignore_navigation_error, type ViewHost } from "./host"
 
-export const PLAYER_PARTITION = "player"
+import { PLAYER_PARTITION } from "./sessions"
+
 const DEFAULT_EMBED_BASE = "https://www.youtube-nocookie.com"
+// YouTube refuses an embed whose page names no site (its error 153); openMoi names itself, as apps embedding it must.
+export const EMBED_REFERRER = "https://openmoi.app/"
 
 export interface PlayerHooks {
   open_original(url: string): void
@@ -33,7 +36,7 @@ export class Player {
     const video_id = youtube_video_id(item.url)
     if (!video_id) return false
     this.close()
-    const view = new WebContentsView({ webPreferences: { partition: PLAYER_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false } })
+    const view = new WebContentsView({ webPreferences: { partition: PLAYER_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false, disableDialogs: true } })
     const contents = view.webContents
     const origin = new URL(this.embed_base).origin
     contents.on("will-navigate", (event, url) => {
@@ -55,7 +58,7 @@ export class Player {
     view.setVisible(true)
     this.view = view
     this.playing = { item_id: item.item_id, title: item.title || item.text || "Video", url: item.url }
-    contents.loadURL(embed_url(video_id, this.embed_base)).catch(ignore_navigation_error)
+    contents.loadURL(embed_url(video_id, this.embed_base), { httpReferrer: EMBED_REFERRER }).catch(ignore_navigation_error)
     this.hooks.changed()
     return true
   }

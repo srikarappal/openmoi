@@ -7,7 +7,11 @@ import { Tracked } from "./tracked"
 
 const SHOT = "iVBORw0KGgo="
 
-function make_generator(problems: Array<string | null>, generate = vi.fn(async () => "<html>lens</html>"), verdicts: LensVerdict[] = []) {
+function made(html: string, layout_hash = "layout1") {
+  return { html, layout_hash }
+}
+
+function make_generator(problems: Array<string | null>, generate = vi.fn(async () => made("<html>lens</html>")), verdicts: LensVerdict[] = []) {
   const brain = { generate_lens: generate, accept_lens: vi.fn(async () => 3), judge_lens: vi.fn(async () => verdicts.shift() ?? { verdict: "skipped", problem: "no vision model is set up" }) }
   const smoke = { check: vi.fn(async () => ({ problem: problems.shift() ?? null, screenshot: SHOT, render_ms: 4 })) }
   const { labels, track } = new Tracked()
@@ -27,7 +31,7 @@ describe("LensGenerator", () => {
     expect(brain.generate_lens).toHaveBeenCalledWith("feed", "feed", undefined)
     expect(smoke.check).toHaveBeenCalledWith("<html>lens</html>", "feed")
     expect(brain.judge_lens).toHaveBeenCalledWith("feed", "feed", SHOT)
-    expect(brain.accept_lens).toHaveBeenCalledWith("feed", "feed", "<html>lens</html>")
+    expect(brain.accept_lens).toHaveBeenCalledWith("feed", "feed", "<html>lens</html>", "layout1")
     expect(hooks.on_new_lens).toHaveBeenCalledWith("feed", "feed")
     expect(said(hooks)[1]).toMatch(/^New look for feed is live \(version 3, \d+ s\)\.$/)
     expect(hooks.labels).toEqual(["Designing a new look for feed, usually under a minute"])
@@ -61,12 +65,12 @@ describe("LensGenerator", () => {
   })
 
   it("refuses a lens the static gate catches without running it", async () => {
-    const generate = vi.fn().mockResolvedValueOnce("<script>fetch('https://evil.example')</script>").mockResolvedValue("<html>lens</html>")
+    const generate = vi.fn().mockResolvedValueOnce(made("<script>fetch('https://evil.example')</script>")).mockResolvedValue(made("<html>lens</html>"))
     const { generator, brain, smoke } = make_generator([null], generate)
     await generator.ensure("feed", "feed", "layout1")
     expect(brain.generate_lens).toHaveBeenNthCalledWith(2, "feed", "feed", "the lens uses fetch, which lenses may not do")
     expect(smoke.check).toHaveBeenCalledTimes(1)
-    expect(brain.accept_lens).toHaveBeenCalledWith("feed", "feed", "<html>lens</html>")
+    expect(brain.accept_lens).toHaveBeenCalledWith("feed", "feed", "<html>lens</html>", "layout1")
   })
 
   it("tries again when the visual judge says the look differs, and accepts when it matches or cannot judge", async () => {
@@ -86,7 +90,10 @@ describe("LensGenerator", () => {
 
   it("builds a layout that changed during a build once that build is done, and not the same layout twice", async () => {
     let release: () => void = () => {}
-    const generate = vi.fn().mockImplementationOnce(() => new Promise<string>((resolve) => (release = () => resolve("<html>first</html>")))).mockResolvedValue("<html>second</html>")
+    const generate = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve(made("<html>first</html>", "layout1")))))
+      .mockResolvedValue(made("<html>second</html>", "layout2"))
     const { generator, brain } = make_generator([null, null], generate)
     const first = generator.ensure("feed", "feed", "layout1")
     await generator.ensure("feed", "feed", "layout2")
@@ -96,11 +103,26 @@ describe("LensGenerator", () => {
     await first
     expect(brain.generate_lens).toHaveBeenCalledTimes(2)
     expect(brain.accept_lens.mock.calls.map((call) => (call as unknown[])[2])).toEqual(["<html>first</html>", "<html>second</html>"])
-    const again = make_generator([null])
+    const again = make_generator([null], vi.fn(async () => made("<html>lens</html>", "same")))
     const held = again.generator.ensure("feed", "feed", "same")
     await again.generator.ensure("feed", "feed", "same")
     await held
     expect(again.brain.generate_lens).toHaveBeenCalledTimes(1)
+  })
+
+  it("rebuilds when the lens that went live was made for another layout than the one queued last", async () => {
+    let release: () => void = () => {}
+    const generate = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve(made("<html>b</html>", "layoutB")))))
+      .mockResolvedValue(made("<html>a</html>", "layoutA"))
+    const { generator, brain } = make_generator([null, null], generate)
+    const first = generator.ensure("feed", "feed", "layoutA")
+    await generator.ensure("feed", "feed", "layoutB")
+    await generator.ensure("feed", "feed", "layoutA")
+    release()
+    await first
+    expect(brain.accept_lens.mock.calls.map((call) => (call as unknown[])[3])).toEqual(["layoutB", "layoutA"])
   })
 
   it("runs one build per view and kind at a time", async () => {
