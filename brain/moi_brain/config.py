@@ -224,6 +224,10 @@ class Paths:
         return self.state / "packs"
 
     @property
+    def ranker(self) -> Path:
+        return self.state / "ranker.json"
+
+    @property
     def google_tokens(self) -> Path:
         return self.state / "google_tokens.json"
 

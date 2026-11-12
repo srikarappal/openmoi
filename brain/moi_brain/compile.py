@@ -26,16 +26,18 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "13"
+COMPILER_VERSION = "14"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
 NEWEST_FIRST = re.compile(r"newest first|chronological|in order", re.IGNORECASE)
+# "No exploring" or "no surprises" in Rules turns off the explore slot (one in ten items from outside your top topics).
+NO_EXPLORE = re.compile(r"\b(?:no|without|stop|turn off)\s+(?:explor\w*|surprises?)", re.IGNORECASE)
 # "(assist)" reads a page only while you browse it yourself; "(pilot)" lets a reader tab read it.
 READ_MODE = re.compile(r"\b(assist|pilot)\b", re.IGNORECASE)
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
 DEFAULT_BOOST = 3.0
-FIXED_FIELDS = ("source_id", "author_handle", "author_in", "topic", "media_kind", "text", "age_hours")
+FIXED_FIELDS = ("source_id", "author_handle", "author_in", "topic", "media_kind", "text", "age_hours", "lang", "reading_minutes", "ragebait")
 JUDGMENT_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 MAX_QUESTION = 200
 CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s*([ap])\.?m\b\.?|\b(\d{1,2}):(\d{2})\b|\b(\d{1,2})\s*([ap])\.?m\b\.?|\b(noon|midnight)\b")
@@ -62,6 +64,9 @@ Fields:
 * media_kind: image, short_video, long_video or video. Shorts and reels are short_video.
 * text: words in the title or text; use op contains.
 * age_hours: hours since publishing; use gt or lt.
+* lang: the item's language as a two letter code such as en or es; use eq or in.
+* reading_minutes: minutes it takes to read; use gt or lt ("no long reads" hides reading_minutes gt 10).
+* ragebait: 0 to 1, how much it reads like rage bait; use gt ("hide rage bait" may hide ragebait gt 0.5).
 * judged:<name>: the answer to a question a model answers for every item, for what no field above can say: an event, a job
   change, a price or rent, pets allowed, written to make people angry. Declare each one you use in "judgments" as
   {"name": "<lowercase_name>", "question": "<a question about one item>", "answer": "yes_no" or "number"}.
@@ -206,6 +211,8 @@ class CompiledView(BaseModel):
     rules: list[Rule] = Field(default_factory=list)
     judgments: list[Judgment] = Field(default_factory=list)
     time: TimeSpec = Field(default_factory=TimeSpec)
+    # One item in ten from outside your top topics, once ranking has learned what you like.
+    explore: bool = True
     layout: str = ""
     summary: str = ""
     warnings: list[str] = Field(default_factory=list)
@@ -510,6 +517,7 @@ class Compiler:
             rules=rules,
             judgments=judgments,
             time=time,
+            explore=not any(NO_EXPLORE.search(line) for line in bullets(section_text(sections, "rules"))),
             layout=section_text(sections, "layout"),
             summary=" ".join(part for part in (describe_sources(sources), rules_summary) if part),
             warnings=warnings,

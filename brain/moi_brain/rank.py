@@ -7,12 +7,15 @@ from typing import Literal
 
 from moi_brain.compile import Condition, Rule
 from moi_brain.items import JUDGED_PREFIX, Item, ViewItem, site_host, source_matches
+from moi_brain.ranker import Ranker, features
 from moi_brain.stories import UPDATE_KEY, story_key
 
 PAGE_SIZE = 30
+EXPLORE_EVERY = 10
+EXTRA_FIELDS = ("lang", "reading_minutes", "ragebait")
 HALF_LIFE_HOURS = 24.0
 RECENT_HOURS = 6.0
-FIELD_LABELS = {"source_id": "source", "author_handle": "author", "author_in": "author", "media_kind": "media", "age_hours": "age"}
+FIELD_LABELS = {"source_id": "source", "author_handle": "author", "author_in": "author", "media_kind": "media", "age_hours": "age", "reading_minutes": "reading time"}
 Order = Literal["recency", "page"]
 Scored = tuple[float, Item, list[Rule]]
 
@@ -53,7 +56,7 @@ def wanted_values(condition: Condition) -> list[str]:
 
 
 def item_values(field: str, item: Item) -> list[str]:
-    if field.startswith(JUDGED_PREFIX):
+    if field.startswith(JUDGED_PREFIX) or field in EXTRA_FIELDS:
         return [item.extra.get(field, "").lower()]
     if field == "topic":
         return [topic.lower() for topic in item.topics]
@@ -93,7 +96,7 @@ def matches(condition: Condition | None, item: Item, now: datetime, circles: Cir
         return bool(circles.groups(item) & set(wanted))
     if condition.field == "age_hours":
         return bool(wanted) and compare_number(age_hours(item, now), condition.op, wanted[0])
-    if condition.field.startswith(JUDGED_PREFIX) and condition.op in ("gt", "lt"):
+    if (condition.field.startswith(JUDGED_PREFIX) or condition.field in EXTRA_FIELDS) and condition.op in ("gt", "lt"):
         return bool(wanted) and judged_number(item, condition.field, condition.op, wanted[0])
     if condition.field == "source_id":
         return any(source_matches(item.source_id, value) for value in wanted)
@@ -198,10 +201,14 @@ def rank(
     order: Order = "recency",
     circles: Circles = NO_CIRCLES,
     seen: set[str] | frozenset[str] = frozenset(),
+    learned: Ranker | None = None,
+    explore: bool = True,
 ) -> tuple[list[ViewItem], bool]:
     """A page of view items with reasons, plus whether more remain beyond it.
 
-    Order "recency" scores by a 24 h half life; order "page" keeps the given order. Boosts add on top of either.
+    Order "recency" scores by a 24 h half life, or by the learned model once it has learned enough; order "page" keeps
+    the given order. Boosts add on top of either. With the learned model, every tenth place goes to an item outside your
+    top topics unless the view turned exploring off.
     Excluded ids (already shown or seen) use up daily limits first: what you already read that day counts before
     anything newer competes for what is left. Seen ids, still shown, stay their story's copy.
     """
@@ -210,12 +217,47 @@ def rank(
         if any(rule.do == "hide" and applies(rule, item, now, circles) for rule in rules):
             continue
         boosts = [rule for rule in rules if rule.do == "boost" and applies(rule, item, now, circles)]
-        base = 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS) if order == "recency" else 1 - position / (len(items) + 1)
-        scored.append((base + sum(rule.weight for rule in boosts), item, boosts))
+        boost_total = sum(rule.weight for rule in boosts)
+        if order == "page":
+            base = 1 - position / (len(items) + 1)
+        elif learned is not None and learned.trained:
+            base = learned.score(features(item, now, boost_total))
+        else:
+            base = 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS)
+        scored.append((base + boost_total, item, boosts))
     scored.sort(key=itemgetter(0), reverse=True)
     scored, also = best_copy_per_story(scored, set(exclude_ids) | set(seen))
     already = [entry for entry in scored if entry[1].item_id in exclude_ids]
     candidates = [entry for entry in scored if entry[1].item_id not in exclude_ids]
     remaining = [entry for entry in apply_limits([*already, *candidates], rules, now, circles) if entry[1].item_id not in exclude_ids]
-    page = [ViewItem(item=item, reasons=story_reasons(item, also, reasons(item, boosts, now))) for _, item, boosts in remaining[:limit]]
+    trained = learned is not None and learned.trained and order == "recency"
+    explored: set[str] = set()
+    if trained and explore:
+        remaining, explored = with_explore(remaining, learned.top_topics())
+    page = []
+    for _, item, boosts in remaining[:limit]:
+        plain = reasons(item, boosts, now) + (learned.reasons(features(item, now)) if trained else [])
+        if item.item_id in explored:
+            plain.append("explore: outside your usual topics")
+        page.append(ViewItem(item=item, reasons=story_reasons(item, also, plain)))
     return page, len(remaining) > limit
+
+
+def with_explore(entries: list[Scored], top_topics: set[str]) -> tuple[list[Scored], set[str]]:
+    """Every tenth place goes to the best item none of whose topics is among your top ones, so your feed is not only
+    more of the same. Returns the new order and the items placed that way."""
+    if not top_topics:
+        return entries, set()
+    outside = [entry for entry in entries if not top_topics & set(entry[1].topics)]
+    inside = [entry for entry in entries if top_topics & set(entry[1].topics)]
+    ordered: list[Scored] = []
+    explored: set[str] = set()
+    while inside or outside:
+        if outside and (len(ordered) % EXPLORE_EVERY == EXPLORE_EVERY - 1 or not inside):
+            entry = outside.pop(0)
+            if inside:
+                explored.add(entry[1].item_id)
+        else:
+            entry = inside.pop(0)
+        ordered.append(entry)
+    return ordered, explored

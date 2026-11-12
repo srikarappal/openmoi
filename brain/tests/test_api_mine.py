@@ -83,7 +83,8 @@ def test_mine_ingest_keeps_page_order_and_applies_site_rules(client, paths):
     first = client.post("/ingest", json=body).json()
     assert [view_item["item"]["native_id"] for view_item in first["view_items"]] == ["B0001", "B0002", "B0003"]
     assert first["view_items"][0]["item"]["url"] == "https://shop.example/dp/B0001"
-    assert first["view_items"][0]["item"]["extra"] == {"price_text": "$24.99"}
+    assert first["view_items"][0]["item"]["extra"]["price_text"] == "$24.99"
+    assert first["view_items"][0]["item"]["extra"]["ragebait"] == "0.0"
     assert first["lens_stale"] is False
     (paths.views / "site_shop.example.md").write_text("# shop.example\n\n## Rules\n* Hide politics.\n\n## Layout\nCompact table.\n")
     second = client.post("/ingest", json={**body, "kind": "listing"}).json()

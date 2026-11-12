@@ -20,6 +20,7 @@ from moi_brain.compile import BadInput, CompiledView, Compiler, Judgment, Rule, 
 from moi_brain.content import ContentSummary, caption_allowed, is_video, summary_extra, summary_prompt, transcript_text
 from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, save_settings
 from moi_brain.editions import LEAD, LOCAL_LEAD, Edition, EditionBook
+from moi_brain.enrich import enriched
 from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
 from moi_brain.exports import SOURCE_IDS, read_export
@@ -51,6 +52,7 @@ from moi_brain.mirror import MAX_DAYS, Mirror, build_mirror
 from moi_brain.packs import PackError, install, installed_pack, merged_policy, public_key, verified_pack
 from moi_brain.policy import Mode, load_policy, policy_for
 from moi_brain.rank import PAGE_SIZE, Circles, Order, applies, kept_share, rank
+from moi_brain.ranker import Ranker, features
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
@@ -265,6 +267,7 @@ class Brain:
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors, paths.packs / "extractors")
         self.policies = merged_policy(load_policy(paths.site_policy), installed_pack(paths.packs))
         self.health = HealthBook(paths.extractor_health)
+        self.ranker = Ranker(paths.ranker)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
         self.relay = RelayHub(paths.relay_trust, self.queue_relay_event, self.relay_config)
         self.relay_events: deque[MineRequest] = deque(maxlen=MAX_RELAY_EVENTS)
@@ -493,7 +496,7 @@ class Brain:
         items = list({item.item_id: item for item in normalized if item}.values())
         known = self.store.get_items([item.item_id for item in items])
         recent = self.store.items_since(now - CLUSTER_WINDOW)
-        fresh = assign_clusters([item for item in items if item.item_id not in known], [item for item, _ in recent])
+        fresh = assign_clusters([enriched(item) for item in items if item.item_id not in known], [item for item, _ in recent])
         if tag_now:
             fresh, known = self.tag_now(fresh, known)
         stored = {item.item_id: item for item in self.store.upsert_items([*known.values(), *fresh], listed_at=now)}
@@ -716,7 +719,7 @@ class Brain:
         if edition and compiled.time.edition_size:
             items = edition_items(compiled.time.edition_size, edition, entries, items, exclude_ids, compiled.rules, now, long_seen, circles)
         seen = {item.item_id for item, seen_at in entries if seen_at}
-        ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles, seen)
+        ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles, seen, self.ranker, compiled.explore)
         with self.lock:
             reading = view_id in self.refreshing
             refreshing = reading or self.tagger.busy or self.updater.busy
@@ -807,9 +810,11 @@ class Brain:
         self.editions.done(check_view_id(view_id), edition, self.clock())
 
     def record_events(self, events: list[Event]) -> None:
-        """Store events; every item you open also gets a line in today's journal."""
+        """Store events, teach the ranker from them and give every item you open a line in today's journal."""
         now = self.clock()
         self.store.add_events(events, now)
+        taught = self.store.get_items([event.item_id for event in events if event.item_id])
+        self.ranker.learn((features(taught[event.item_id], now), event.event_kind) for event in events if event.item_id in taught)
         opened = self.store.get_items([event.item_id for event in events if event.event_kind == "open" and event.item_id])
         for item in opened.values():
             self.memory.append_journal(now, f"opened: {item.title or (item.text or '')[:80]} ({item.url})")
@@ -1002,6 +1007,7 @@ class Brain:
             "sources": self.status_by_source(),
             "tagging": self.tagger.status,
             "relay": self.relay_status(),
+            "ranker": {"events": self.ranker.state.events, "trained": self.ranker.trained},
             "refreshing": refreshing,
             "llm_calls": self.gateway.recent_calls(),
         }
