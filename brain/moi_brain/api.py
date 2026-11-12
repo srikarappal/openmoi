@@ -60,6 +60,8 @@ class IngestRequest(BaseModel):
 
 class IngestResponse(BaseModel):
     items: list[Item]
+    # Positions of records the source had stored before this call.
+    already: list[int] = Field(default_factory=list)
     view_items: list[ViewItem] = Field(default_factory=list)
     lens_stale: bool = False
     layout_hash: str = ""
@@ -170,7 +172,8 @@ def refresh(body: RefreshRequest, brain: BrainDep) -> RefreshResponse:
 @router.post("/ingest")
 def ingest(body: IngestRequest, brain: BrainDep) -> IngestResponse:
     if body.view_id is None:
-        return IngestResponse(items=brain.ingest(body.source_id, body.records, body.page_url))
+        already = brain.already_stored(body.source_id, body.records, body.page_url)
+        return IngestResponse(items=brain.ingest(body.source_id, body.records, body.page_url), already=already)
     items, view_items = brain.ingest_page(body.view_id, body.source_id, body.records, body.page_url)
     stale, layout_hash = brain.lens_state(body.view_id, body.kind)
     return IngestResponse(items=items, view_items=view_items, lens_stale=stale, layout_hash=layout_hash)

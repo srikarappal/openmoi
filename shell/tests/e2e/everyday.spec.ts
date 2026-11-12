@@ -142,3 +142,19 @@ test("a rule only a model can judge filters a page source in the real app", asyn
     await harness.close()
   }
 })
+
+test("a newest first page read again stops at what was read before and says nothing was missed", async () => {
+  const feed = `# Feed\n\n## Sources\n* Page: ${world.base_url}/pages/following.html (newest first)\n`
+  const harness = await Harness.launch(world, { views: { feed } })
+  try {
+    await eventually(
+      () => harness.lens_text(),
+      (text) => (text.match(/Following post \d+/g) ?? []).length === 12,
+      60_000,
+    )
+    await harness.chrome.locator("button.action", { hasText: "Refresh" }).click()
+    await expect(harness.chrome.locator(".notice", { hasText: "Nothing missed" })).toContainText("127.0.0.1/pages/following.html since", { timeout: 30_000 })
+  } finally {
+    await harness.close()
+  }
+})

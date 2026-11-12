@@ -25,9 +25,11 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "5"
+COMPILER_VERSION = "6"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
+# A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
+NEWEST_FIRST = re.compile(r"newest first|chronological|in order", re.IGNORECASE)
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
 DEFAULT_BOOST = 3.0
 FIXED_FIELDS = ("source_id", "author_handle", "topic", "media_kind", "text", "age_hours")
@@ -133,6 +135,8 @@ class SourceRef(BaseModel):
     feeds: list[str] = Field(default_factory=list)
     # Any site's feed page (Instagram, Facebook, a YouTube home): read in a tab that keeps scrolling as you do.
     pages: list[str] = Field(default_factory=list)
+    # The pages among them whose posts come newest first.
+    ordered: list[str] = Field(default_factory=list)
 
 
 class CompiledView(BaseModel):
@@ -173,8 +177,8 @@ def check_view_id(view_id: str) -> str:
 
 
 def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRef], list[str]]:
-    """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://...' or a bare feed URL."""
-    has_x, channels, feeds, pages, warnings = False, [], [], [], []
+    """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://... (newest first)' or a bare feed URL."""
+    has_x, channels, feeds, pages, ordered, warnings = False, [], [], [], [], []
     for line in bullets(body):
         label, _, rest = line.partition(":")
         key = label.strip().lower()
@@ -188,6 +192,8 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
         elif key == "page":
             found_pages = URL.findall(rest)
             pages += found_pages
+            if NEWEST_FIRST.search(URL.sub("", rest)):
+                ordered += found_pages
             if not found_pages:
                 warnings.append(f"No page address found in: {line}")
         elif X_LINE.match(line):
@@ -200,7 +206,7 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
     if feeds:
         sources.append(SourceRef(source_id="rss", feeds=list(dict.fromkeys(feeds))))
     if pages:
-        sources.append(SourceRef(source_id="page", pages=list(dict.fromkeys(pages))))
+        sources.append(SourceRef(source_id="page", pages=list(dict.fromkeys(pages)), ordered=list(dict.fromkeys(ordered))))
     return sources, warnings
 
 

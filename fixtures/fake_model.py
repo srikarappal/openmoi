@@ -197,6 +197,7 @@ ENDLESS_SPEC = {
         "title": {"select": "p", "take": "text"},
         "url": {"select": "a", "take": "attr:href", "transform": "absolute_url"},
         "author_handle": {"select": ".who", "take": "text", "optional": True},
+        "published_at": {"select": "time", "take": "attr:datetime", "optional": True},
     },
     "pagination": {"kind": "scroll", "step_px": 900},
 }

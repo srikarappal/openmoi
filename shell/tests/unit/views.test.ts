@@ -339,3 +339,52 @@ describe("ViewController editions", () => {
     ])
   })
 })
+
+describe("ViewController nothing missed", () => {
+  const LIST = { source_id: "page:x.com/i/lists/42", start_url: "https://x.com/i/lists/42", chronological: true } as PageSource
+  const OTHER = { source_id: "page:friends.example", start_url: "https://friends.example/", chronological: true } as PageSource
+  const CAUGHT_UP = { ...PAGE, caught_up: true } as ViewPage
+
+  function complete(since: string | null): FillOutcome {
+    return { status: "complete", delivered: 3, driver: "chrome", since }
+  }
+
+  it("says nothing was missed once caught up with every newest first source read back to an earlier read", async () => {
+    const since = new Date().toISOString()
+    const { views, context, hooks, sources } = make_views([complete(since), read(4)], Array(6).fill(CAUGHT_UP), [LIST, X_SOURCE])
+    await views.refresh(context, true)
+    const told = hooks.notify.mock.calls.filter((call) => call[2] === "complete:feed")
+    expect(told).toHaveLength(1)
+    expect(told[0][0]).toMatch(/^Nothing missed: everything new on x\.com\/i\/lists\/42 since \d.+ is in this view\.$/)
+    expect(fills(sources).map((fill) => fill[0])).toEqual(["page:x.com/i/lists/42", "x"])
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(fills(sources).at(-1)?.[0]).toBe("x")
+  })
+
+  it("waits for every newest first source and starts over on a refresh", async () => {
+    const { views, context, hooks } = make_views([complete(null), read(4), complete(null), complete("2026-01-05T09:00:00Z"), complete(null), complete(null)], Array(12).fill(CAUGHT_UP), [LIST, OTHER])
+    await views.refresh(context, true)
+    expect(hooks.notify.mock.calls.filter((call) => call[2] === "complete:feed")).toHaveLength(0)
+    await views.refresh(context, true)
+    expect(hooks.retract).not.toHaveBeenCalledWith("complete:feed")
+    const told = hooks.notify.mock.calls.filter((call) => call[2] === "complete:feed")
+    expect(told).toHaveLength(1)
+    expect(told[0][0]).toMatch(/^Nothing missed: everything new on x\.com\/i\/lists\/42 and friends\.example since \w+ .+ is in this view\.$/)
+    await views.refresh(context, true)
+    expect(hooks.retract).toHaveBeenCalledWith("complete:feed")
+    expect(hooks.notify.mock.calls.filter((call) => call[2] === "complete:feed").at(-1)?.[0]).toBe("Nothing missed: everything new on x.com/i/lists/42 and friends.example is in this view.")
+  })
+
+  it("passes the brain's memory of stored records back to the reader", async () => {
+    const { views, context, sources, brain } = make_views([], [CAUGHT_UP], [LIST])
+    brain.ingest.mockResolvedValueOnce({ already: [1] } as never).mockResolvedValueOnce(undefined as never)
+    const answers: unknown[] = []
+    sources.fill.mockImplementationOnce(async (...args: unknown[]) => {
+      const take = args[2] as (records: unknown[]) => Promise<number[]>
+      answers.push(await take([{ url: "a" }, { url: "b" }]), await take([{ url: "c" }]))
+      return read(3)
+    })
+    await views.refresh(context, true)
+    expect(answers).toEqual([[1], []])
+  })
+})

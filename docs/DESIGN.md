@@ -295,7 +295,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 | YouTube | Channel RSS feeds; channels listed in the view file by @handle (resolved to a channel id once, cached) or imported from a Takeout `subscriptions.csv` | 1 |
 | X | Handwritten extractor spec for the home timeline, run in a reader tab in your Chrome (or openMoi's session) | 3 |
 | Any website ("Mine") | Readability for articles; generated extractor spec for listings | 3 |
-| Any site's feed page (`* Page: <url>` in Sources) | A reader tab that keeps scrolling as you do: Instagram, Facebook, a YouTube home, any listing; its extractor is generated from the page the first time | 3 |
+| Any site's feed page (`* Page: <url>` in Sources) | A reader tab that keeps scrolling as you do: Instagram, Facebook, a YouTube home, any listing; its extractor is generated from the page the first time. `(newest first)` after the address marks a page whose posts come in order, read until it reaches what was read before (34.6) | 3 |
 
 ### 9.3 Brain (Python 3.12, sync)
 
@@ -798,7 +798,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 475 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 366 shell and extension unit (97% of lines), 29 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 482 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 376 shell and extension unit (97% of lines), 30 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -1336,7 +1336,7 @@ Sites tune their feeds for their own goals: time on site, ads, outrage. openMoi 
 | # | Scenario | Flow | Status |
 |---|---|---|---|
 | 1 | Editions | reader tabs scroll X, Instagram and LinkedIn before 7am -> your rules keep 15 -> 7am edition -> view closed until 6pm | built |
-| 2 | You missed nothing | reader follows a chronological Following feed down to the last post you saw -> "nothing else from your 40 people since yesterday" -> you stop because you know | seen tracking built; the claim not built |
+| 2 | You missed nothing | reader follows a chronological Following feed down to the last post you saw -> "nothing else from your 40 people since yesterday" -> you stop because you know | built |
 | 3 | Intent gate | open openMoi -> "why are you here?" -> a 5 minute break gets 10 items then a stop screen, research gets a deep list, friends gets only people | built |
 | 4 | Unbundled platforms | Facebook -> only events and birthdays; LinkedIn -> only job changes of people you know; YouTube -> new uploads from subscriptions, no sidebar; Instagram -> close friends, no Reels | `Page:` sources, rules and judgments built; Facebook and Instagram untested |
 | 5 | Notification firewall | reader opens each site's notifications page -> replies from people you know pass, likes and "trending" drop -> one batch at noon -> every app's push turned off | `Page:` sources built; batching not built |
@@ -1414,7 +1414,7 @@ item kept by the rules -> its page opened by the reader driver within the page l
 
 | Piece | Missing | Design | Unlocks |
 |---|---|---|---|
-| Completeness | `caught_up` means openMoi has nothing more stored, not that the platform has nothing new | A `Page:` source marked chronological (X Following, Instagram Following) reads down to the newest item you already saw, then says "complete since <time>"; a ranked feed never claims it | 2 |
+| Completeness `[built]` | `caught_up` means openMoi has nothing more stored, not that the platform has nothing new | A `Page:` source marked `(newest first)` (X Following, Instagram Following) reads from the top until it reaches two posts in a row read before (one pinned post does not count), here or in an earlier run as the brain remembers; then, once you are caught up, "Nothing missed: everything new on <page> since <time> is in this view". A ranked feed never claims it | 2 |
 | Page watch | Every source is a listing of items | `Watch: <url>` in Sources: the reader reads the page's main text at the source's pace, compares it with the last read and raises a notice when it changed in a way the view's Rules care about | 7 |
 | History | Keep rate is computed per render and never stored | A `source_days` table: per source and day, items listed, kept, judged angry and from strangers; a weekly report view | 6 |
 | Import | A shared view file has no way in | Drop a view file in chat -> untrusted text -> a proposal you confirm like any edit -> its lens regenerated from Layout, never copied; people and personal rules stripped (L7 guardrails) | 12 |
@@ -1432,7 +1432,7 @@ Facebook and Instagram through reader tabs are untested on the real sites (4, 5)
 | L6 scheduling (22) | Rung 2 and 3 sources read only while you use the app | Done: also read on a view's schedule (34.1); still read only |
 | L1 Facebook (17) | Assist mode by default | Chosen per source in the site policy (34.7) |
 | View file (9.4) | Sources, Rules, Layout | Done: adds an optional Time section |
-| Sources (9.2) | RSS, YouTube, X, `Page:` | Adds `Watch:` and a chronological mark on `Page:` |
+| Sources (9.2) | RSS, YouTube, X, `Page:` | Adds `Watch:` and (done) a `(newest first)` mark on `Page:` |
 | Condition (11.4) | 6 fields | Adds `judged:<name>` and `author_in` |
 | Store (11.2) | 2 tables | Adds `follows` and `source_days` |
 | Page operations | extract, scroll, challenge, skeleton, readability | Adds transcript |

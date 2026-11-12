@@ -52,6 +52,17 @@ export function clock_time(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
 }
 
+// A moment as your clock shows it, with the day when it is not today.
+function moment_text(iso: string): string {
+  const moment = new Date(iso)
+  if (moment.toDateString() === new Date().toDateString()) return clock_time(iso)
+  return moment.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })
+}
+
+function and_list(parts: string[]): string {
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts.join("")
+}
+
 function label_of(item: Item): string {
   return item.title || item.text?.slice(0, MAX_TITLE) || item.url
 }
@@ -82,6 +93,9 @@ export class ViewController {
   private readonly edition_told = new Set<string>()
   // What you saw in each view and when, for the end of a visit.
   private readonly seen_log = new Map<string, Array<{ at: number; label: string }>>()
+  // Per view, the newest first sources whose reader got back to what was read before, with since when.
+  private readonly complete = new Map<string, Map<string, string | null>>()
+  private readonly complete_told = new Set<string>()
 
   constructor(
     private readonly brain: BrainClient,
@@ -144,6 +158,19 @@ export class ViewController {
     )
   }
 
+  // Caught up, with every newest first source read back to where an earlier read was: say once that nothing was missed.
+  private completeness(page: ViewPage): void {
+    const ordered = (this.page_sources.get(page.view_id) ?? []).filter((source) => source.chronological)
+    const complete = this.complete.get(page.view_id) ?? new Map<string, string | null>()
+    if (!page.caught_up || !ordered.length || this.complete_told.has(page.view_id) || ordered.some((source) => !complete.has(source.source_id))) return
+    this.complete_told.add(page.view_id)
+    const parts = ordered.map((source) => {
+      const since = complete.get(source.source_id)
+      return `${source.source_id.replace(/^page:/, "")}${since ? ` since ${moment_text(since)}` : ""}`
+    })
+    this.hooks.notify(`Nothing missed: everything new on ${and_list(parts)} is in this view.`, undefined, `complete:${page.view_id}`)
+  }
+
   // Labels of the items you saw in a view since a moment, oldest first and each once.
   seen_since(view_id: string, since: number): string[] {
     return [...new Set((this.seen_log.get(view_id) ?? []).filter((entry) => entry.at >= since).map((entry) => entry.label))]
@@ -178,6 +205,8 @@ export class ViewController {
       const { page_sources } = await this.brain.refresh(context.view_id, force)
       this.page_sources.set(context.view_id, page_sources)
       this.finished.delete(context.view_id)
+      this.complete.delete(context.view_id)
+      if (this.complete_told.delete(context.view_id)) this.hooks.retract(`complete:${context.view_id}`)
       const reads = this.editioned.has(context.view_id) && !force ? [] : page_sources
       const wanted = new Map(reads.map((source) => [source.source_id, FIRST_FILL_RECORDS]))
       await Promise.all([this.settle(context), this.read_and_settle(context, reads, force, wanted, true)])
@@ -270,8 +299,9 @@ export class ViewController {
       )
       if (outcome.status === "skipped") continue
       this.hooks.retract(tag)
-      if (outcome.status === "ended" || outcome.status === "exhausted") {
+      if (outcome.status === "ended" || outcome.status === "exhausted" || outcome.status === "complete") {
         this.finished.set(view_id, (this.finished.get(view_id) ?? new Set<string>()).add(source.source_id))
+        if (outcome.status === "complete") this.complete.set(view_id, (this.complete.get(view_id) ?? new Map<string, string | null>()).set(source.source_id, outcome.since))
       } else if (outcome.status === "challenge") {
         if (outcome.driver === "openmoi") this.waiting_for_chrome.set(`${view_id}\0${source.source_id}`, { view_id, source })
         this.hooks.notify(challenge_text(source.source_id, outcome.driver), outcome.url, tag)
@@ -314,11 +344,13 @@ export class ViewController {
     return true
   }
 
-  // A lens open now (or opened during a scheduled read) gets what each batch adds.
-  private async ingest_batch(view_id: string, source: PageSource, records: RawRecord[]): Promise<void> {
-    await this.brain.ingest(source.source_id, records, source.start_url)
+  // A lens open now (or opened during a scheduled read) gets what each batch adds. The reader learns which records the
+  // brain had before, so a newest first page stops where an earlier read was.
+  private async ingest_batch(view_id: string, source: PageSource, records: RawRecord[]): Promise<number[]> {
+    const result = await this.brain.ingest(source.source_id, records, source.start_url)
     const context = this.lenses.get(view_lens_key(view_id))
     if (context) await this.append_next(context)
+    return result?.already ?? []
   }
 
   private append_next(context: LensContext): Promise<ViewPage> {
@@ -328,6 +360,7 @@ export class ViewController {
       if (page.items.length || !page.has_more) context.send({ type: "append", items: page.items, cursor: this.cursor_for(page) })
       this.report(page)
       this.edition_end(page)
+      this.completeness(page)
       return page
     })
   }

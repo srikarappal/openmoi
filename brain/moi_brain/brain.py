@@ -53,6 +53,8 @@ class PageSource(BaseModel):
     start_url: str
     spec: ExtractorSpec | None
     budget: dict[str, int]
+    # Posts come newest first, so reaching what was read before means nothing newer was missed.
+    chronological: bool = False
 
 
 class ViewPage(BaseModel):
@@ -244,7 +246,16 @@ class Brain:
                 found.append(PageSource(source_id="x", page_type=spec.page_type, start_url=spec.start_url, spec=spec, budget=PILOT_BUDGET))
         for source in compiled.sources:
             for page in source.pages:
-                found.append(PageSource(source_id=page_source_id(page), page_type="listing", start_url=page, spec=self.extractors.for_url(page), budget=PILOT_BUDGET))
+                found.append(
+                    PageSource(
+                        source_id=page_source_id(page),
+                        page_type="listing",
+                        start_url=page,
+                        spec=self.extractors.for_url(page),
+                        budget=PILOT_BUDGET,
+                        chronological=page in source.ordered,
+                    )
+                )
         return found
 
     def passive_sources(self) -> list[PageSource]:
@@ -339,6 +350,15 @@ class Brain:
 
     def retag_if_needed(self) -> None:
         self.tagger.ensure_current(self.watch_list(), self.clock(), self.watch_judgments())
+
+    def already_stored(self, source_id: str, records: list[dict[str, Any]], page_url: str | None = None) -> list[int]:
+        """Positions of the records this source had stored before, by id or by URL: a reader of a newest first page
+        stops once it reaches them."""
+        normalized = [normalize(source_id, record, self.clock(), page_url) for record in records]
+        items = [item for item in normalized if item]
+        known = set(self.store.get_items([item.item_id for item in items]))
+        known_urls = set(self.store.items_by_url(source_id, [item.url for item in items]))
+        return [index for index, item in enumerate(normalized) if item and (item.item_id in known or item.url in known_urls)]
 
     def ingest(self, source_id: str, records: list[dict[str, Any]], page_url: str | None = None) -> list[Item]:
         self.source_status[(source_id, source_id)] = "ok"

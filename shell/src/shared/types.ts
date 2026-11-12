@@ -64,6 +64,8 @@ export interface PageSource {
   // null until a spec for this page exists; the reader makes one from the page the first time.
   spec: ExtractorSpec | null
   budget: PilotBudget
+  // Posts come newest first: reaching what was read before means nothing newer was missed.
+  chronological?: boolean
 }
 
 export interface ViewPage {
@@ -115,6 +117,8 @@ export interface StopScreen {
 
 export interface IngestResult {
   items: Item[]
+  // Positions of records the source had stored before.
+  already?: number[]
   view_items: ViewItem[]
   lens_stale: boolean
   layout_hash: string

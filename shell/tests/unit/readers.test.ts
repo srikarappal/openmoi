@@ -273,3 +273,127 @@ describe("ReaderPool slow and vanished pages", () => {
   })
 })
 
+
+// A newest first page: posts listed newest first, five more after every scroll, new posts appear on top.
+class NewestFirst implements PageDriver {
+  readonly kind = "chrome" as const
+  posts: RawRecord[] = []
+  shown = 0
+  opens = 0
+
+  constructor(count: number, prefix = "p") {
+    this.add(count, prefix)
+  }
+
+  // count new posts on top, each a minute newer than the last.
+  add(count: number, prefix: string): void {
+    const start = Date.parse("2026-11-10T08:00:00Z") + this.posts.length * 60_000
+    const fresh = Array.from({ length: count }, (_, index) => ({
+      native_id: `${prefix}${index}`,
+      url: `https://x.com/p/${prefix}${index}`,
+      title: `Post ${prefix}${index}`,
+      published_at: new Date(start + index * 60_000).toISOString(),
+    }))
+    this.posts = [...fresh.reverse(), ...this.posts]
+  }
+
+  async open(): Promise<string> {
+    this.opens += 1
+    this.shown = 5
+    return `tab${this.opens}`
+  }
+
+  async run<T>(_handle: string, op: string): Promise<T> {
+    if (op === "challenge") return false as T
+    if (op === "scroll") {
+      this.shown += 5
+      return true as T
+    }
+    return this.posts.slice(0, this.shown) as T
+  }
+
+  async url(): Promise<string> {
+    return "https://x.com/i/lists/42"
+  }
+
+  async close(): Promise<void> {}
+}
+
+// The brain's answer to each batch: positions of records it had stored before.
+class StoredBefore {
+  readonly ids: string[] = []
+
+  constructor(private readonly stored: Set<string>) {}
+
+  readonly take = async (records: RawRecord[]): Promise<number[]> => {
+    this.ids.push(...records.map((record) => String(record.native_id)))
+    return records.flatMap((record, index) => (this.stored.has(String(record.native_id)) ? [index] : []))
+  }
+}
+
+const LIST = source("page:x.com/i/lists/42", { start_url: "https://x.com/i/lists/42", chronological: true })
+
+describe("ReaderPool newest first pages", () => {
+  it("reads from the top until it reaches two posts read before, and says when the newer one was posted", async () => {
+    const page = new NewestFirst(21)
+    const pool = make_pool(page)
+    const first = new Delivered()
+    expect(await pool.fill(LIST, 30, first.take, true, true)).toEqual({ status: "ended", delivered: 21, driver: "chrome" })
+    page.add(7, "n")
+    const second = new Delivered()
+    const outcome = await pool.fill(LIST, 30, second.take, true, true)
+    expect(outcome).toEqual({ status: "complete", delivered: 7, driver: "chrome", since: page.posts[7].published_at })
+    expect(second.ids).toEqual(["n6", "n5", "n4", "n3", "n2", "n1", "n0"])
+  })
+
+  it("does not stop at one old post pinned on top", async () => {
+    const page = new NewestFirst(10)
+    const pool = make_pool(page)
+    await pool.fill(LIST, 30, new Delivered().take, true, true)
+    page.add(6, "n")
+    const pinned = page.posts.splice(page.posts.findIndex((post) => post.native_id === "p3"), 1)
+    page.posts = [...pinned, ...page.posts]
+    const after = new Delivered()
+    const outcome = await pool.fill(LIST, 30, after.take, true, true)
+    expect(outcome.status).toBe("complete")
+    expect(after.ids).toEqual(["n5", "n4", "n3", "n2", "n1", "n0"])
+  })
+
+  it("after a restart learns from the brain what it stored before", async () => {
+    const page = new NewestFirst(12)
+    page.add(4, "n")
+    const brain_had = new StoredBefore(new Set(Array.from({ length: 12 }, (_, index) => `p${index}`)))
+    const outcome = await make_pool(page).fill(LIST, 30, brain_had.take, true, true)
+    expect(outcome).toEqual({ status: "complete", delivered: 10, driver: "chrome", since: page.posts[4].published_at })
+    expect(brain_had.ids).toEqual(["n3", "n2", "n1", "n0", "p11", "p10", "p9", "p8", "p7", "p6"])
+  })
+
+  it("never mistakes its own earlier reads in the same tab for old posts", async () => {
+    const page = new NewestFirst(40)
+    const pool = make_pool(page)
+    expect((await pool.fill(LIST, 5, new Delivered().take, true, false)).status).toBe("read")
+    expect(await pool.fill(LIST, 5, new Delivered().take, true, false)).toEqual({ status: "read", delivered: 5, driver: "chrome" })
+    expect(page.opens).toBe(1)
+  })
+
+  it("leaves pages that are not newest first to read as before", async () => {
+    const page = new NewestFirst(12)
+    const brain_had = new StoredBefore(new Set(["p11", "p10", "p9"]))
+    const outcome = await make_pool(page).fill({ ...LIST, chronological: false }, 5, brain_had.take, true, true)
+    expect(outcome).toEqual({ status: "read", delivered: 5, driver: "chrome" })
+  })
+
+  it("caps a read from the top that never reaches anything read before", async () => {
+    const page = new NewestFirst(400)
+    const outcome = await make_pool(page).fill(LIST, 30, new Delivered().take, true, true)
+    expect(outcome).toEqual({ status: "read", delivered: 300, driver: "chrome" })
+  })
+
+  it("says when an old pair has no time", async () => {
+    const page = new NewestFirst(6)
+    for (const post of page.posts) delete post.published_at
+    const pool = make_pool(page)
+    await pool.fill(LIST, 30, new Delivered().take, true, true)
+    expect(await pool.fill(LIST, 30, new Delivered().take, true, true)).toEqual({ status: "complete", delivered: 0, driver: "chrome", since: null })
+  })
+})

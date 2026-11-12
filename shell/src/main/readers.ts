@@ -1,6 +1,8 @@
 // Reader tabs: one tab per page source (the X timeline, an Instagram feed, any site's feed page) kept open in your
 // Chrome, or in openMoi's own session as a fallback and scrolled further each time a view needs more items.
 // Scrolling goes at human pace and within a daily budget per source; a feed that stops giving new items has ended.
+// A page whose posts come newest first is complete once its reader reaches two posts in a row read before: nothing
+// newer than them was missed. One old post alone (a pinned one) does not count.
 import { record_key } from "../shared/extract"
 import { Throttle, sleep } from "../shared/timing"
 import type { ExtractorSpec, PageSource, RawRecord } from "../shared/types"
@@ -18,6 +20,8 @@ const EMPTY_STEPS_TO_END = 3
 const RETRY_PAUSE_MS = 2_000
 const DEFAULT_DAILY_STEPS = 200
 const DEFAULT_STEP_PX = 900
+// Read from the top, a newest first page goes on past what was wanted, until it reaches what was read before; this caps it.
+const MAX_COMPLETE_RECORDS = 300
 // Each pause between scrolls is the source's interval plus up to half of it again, so the pace is never mechanical.
 const JITTER = 0.5
 
@@ -26,12 +30,15 @@ export type FillOutcome =
   | { status: "skipped" }
   | { status: "ended"; delivered: number; driver: DriverKind }
   | { status: "exhausted"; delivered: number; driver: DriverKind }
+  // A newest first page reached posts read before: since is when the newest of them was posted, if the page said.
+  | { status: "complete"; delivered: number; driver: DriverKind; since: string | null }
   | { status: "challenge"; url: string; driver: DriverKind }
   // final: retrying cannot help (the page has no items a spec can find), so no second attempt is made.
   | { status: "failed"; error: string; driver: DriverKind; final?: boolean }
 
 // Receives each batch of new records as soon as it is extracted, so the first items show before scrolling ends.
-export type BatchHandler = (records: RawRecord[]) => Promise<void>
+// It may answer with the positions of records the brain had stored before.
+export type BatchHandler = (records: RawRecord[]) => Promise<number[] | void>
 
 interface ReaderTab {
   source_id: string
@@ -40,6 +47,8 @@ interface ReaderTab {
   spec: ExtractorSpec
   last_used: number
   idle_timer: ReturnType<typeof setTimeout> | null
+  // Records read before this tab opened at the top, here or in an earlier run of openMoi: reaching them ends a newest first page.
+  read_before: Set<string>
 }
 
 type Opened = { tab: ReaderTab; first: RawRecord[] } | { challenge: string }
@@ -72,12 +81,12 @@ export class ReaderPool {
   async fill(source: PageSource, wanted: number, on_batch: BatchHandler, force: boolean, from_top = false): Promise<FillOutcome> {
     if (!this.throttle.allow(source.source_id, force)) return { status: "skipped" }
     if (from_top) await this.close(source.source_id)
-    const outcome = await this.attempt(source, wanted, on_batch)
+    const outcome = await this.attempt(source, wanted, on_batch, from_top)
     if (outcome.status !== "failed" || outcome.driver !== "chrome" || outcome.final) return outcome
     // Chrome may have restarted the extension mid read: try once more through the connection it has now.
     await this.close(source.source_id)
     await sleep(RETRY_PAUSE_MS)
-    return this.attempt(source, wanted, on_batch)
+    return this.attempt(source, wanted, on_batch, from_top)
   }
 
   async close_all(): Promise<void> {
@@ -93,24 +102,30 @@ export class ReaderPool {
     return today?.day === day_of(this.clock()) ? today.used : 0
   }
 
-  private async attempt(source: PageSource, wanted: number, on_batch: BatchHandler): Promise<FillOutcome> {
+  // From the top, a newest first page reads on past wanted until it reaches what was read before.
+  private async attempt(source: PageSource, wanted: number, on_batch: BatchHandler, from_top: boolean): Promise<FillOutcome> {
     const driver = await this.driver_for()
     try {
       const opened = await this.tab_for(source, driver)
       if ("challenge" in opened) return { status: "challenge", url: opened.challenge, driver: driver.kind }
       const { tab, first } = opened
-      let delivered = await this.deliver(source.source_id, first, on_batch)
+      const goal = source.chronological && from_top ? Math.max(wanted, MAX_COMPLETE_RECORDS) : wanted
+      let delivered = await this.deliver(tab, first, on_batch)
+      let reached = this.reached(source, tab, first)
       let empty = 0
-      while (delivered < wanted) {
+      while (reached === undefined && delivered < goal) {
         if (tab.spec.pagination.kind !== "scroll") return { status: "ended", delivered, driver: driver.kind }
         if (!this.spend_step(source)) return { status: "exhausted", delivered, driver: driver.kind }
         await driver.run(tab.handle, "scroll", { step_px: tab.spec.pagination.step_px || DEFAULT_STEP_PX })
         await sleep(source.budget.min_step_interval_ms * (1 + this.random() * JITTER))
-        const fresh = await this.deliver(source.source_id, await driver.run<RawRecord[]>(tab.handle, "extract", { spec: tab.spec }), on_batch)
+        const records = await driver.run<RawRecord[]>(tab.handle, "extract", { spec: tab.spec })
+        const fresh = await this.deliver(tab, records, on_batch)
         delivered += fresh
+        reached = this.reached(source, tab, records)
         empty = fresh ? 0 : empty + 1
-        if (empty >= EMPTY_STEPS_TO_END) return { status: "ended", delivered, driver: driver.kind }
+        if (reached === undefined && empty >= EMPTY_STEPS_TO_END) return { status: "ended", delivered, driver: driver.kind }
       }
+      if (reached !== undefined) return { status: "complete", delivered, driver: driver.kind, since: reached }
       return { status: "read", delivered, driver: driver.kind }
     } catch (error) {
       await this.close(source.source_id)
@@ -136,7 +151,8 @@ export class ReaderPool {
       await driver.close(handle).catch(ignore)
       return { challenge }
     }
-    const tab: ReaderTab = { source_id: source.source_id, driver, handle, spec: first.spec, last_used: this.clock(), idle_timer: null }
+    const read_before = new Set(this.known.get(source.source_id) ?? [])
+    const tab: ReaderTab = { source_id: source.source_id, driver, handle, spec: first.spec, last_used: this.clock(), idle_timer: null, read_before }
     this.tabs.set(source.source_id, tab)
     return { tab, first: first.records }
   }
@@ -169,13 +185,29 @@ export class ReaderPool {
     }
   }
 
-  private async deliver(source_id: string, records: RawRecord[], on_batch: BatchHandler): Promise<number> {
-    const known = this.known.get(source_id) ?? new Set<string>()
-    this.known.set(source_id, known)
+  // New records go to the brain; those it says it had stored before count as read before this tab opened.
+  private async deliver(tab: ReaderTab, records: RawRecord[], on_batch: BatchHandler): Promise<number> {
+    const known = this.known.get(tab.source_id) ?? new Set<string>()
+    this.known.set(tab.source_id, known)
     const fresh = records.filter((record) => !known.has(record_key(record)))
     for (const record of fresh) known.add(record_key(record))
-    if (fresh.length) await on_batch(fresh)
+    if (!fresh.length) return 0
+    const stored = await on_batch(fresh)
+    for (const index of stored ?? []) if (fresh[index]) tab.read_before.add(record_key(fresh[index]))
     return fresh.length
+  }
+
+  // On a newest first page, two records in a row read before mean the reader is back where an earlier read was:
+  // the answer is when the newer of the two was posted (null if the page did not say). undefined means not yet.
+  private reached(source: PageSource, tab: ReaderTab, records: RawRecord[]): string | null | undefined {
+    if (!source.chronological) return undefined
+    let previous: RawRecord | null = null
+    for (const record of records) {
+      const old = tab.read_before.has(record_key(record))
+      if (old && previous) return previous.published_at || null
+      previous = old ? record : null
+    }
+    return undefined
   }
 
   private spend_step(source: PageSource): boolean {
