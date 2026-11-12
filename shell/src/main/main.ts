@@ -1,12 +1,17 @@
 // Electron entry: start the brain, configure sessions, open the window.
 import path from "node:path"
-import { app, dialog } from "electron"
+import { app, dialog, protocol } from "electron"
 import { BrainProcess } from "./brain"
+import { MEDIA_SCHEME } from "./media"
 import { configure_sessions } from "./sessions"
 import { Shell } from "./shell"
 
 const DIST_DIR = __dirname
 const REPO_DIR = path.resolve(__dirname, "..", "..")
+
+// The media proxy's scheme is standard and secure, so lens images load from it like https ones; this must come before
+// the app is ready.
+protocol.registerSchemesAsPrivileged([{ scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true } }])
 
 let brain_process: BrainProcess | null = null
 let window_shell: Shell | null = null

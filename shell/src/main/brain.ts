@@ -28,6 +28,7 @@ import type {
   HealthVerdict,
   RunReport,
   SearchHit,
+  LensVerdict,
 } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
@@ -199,6 +200,10 @@ export class BrainClient {
 
   async generate_lens(view_id: string, kind: LensKind, last_error?: string): Promise<string> {
     return (await this.request<{ html: string }>("POST", "/lens/generate", { view_id, kind, last_error })).html
+  }
+
+  judge_lens(view_id: string, kind: LensKind, screenshot: string): Promise<LensVerdict> {
+    return this.request("POST", "/lens/judge", { view_id, kind, screenshot })
   }
 
   async accept_lens(view_id: string, kind: LensKind, html: string): Promise<number> {

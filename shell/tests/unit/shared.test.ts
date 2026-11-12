@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
-import { normalize_address, site_domain } from "../../src/shared/address"
+import { normalize_address, site_domain, youtube_video_id } from "../../src/shared/address"
 import { looks_like_challenge } from "../../src/shared/challenge"
-import { LENS_CSP, item_images, lens_data_url, lens_request_allowed, parse_lens_message, wrap_lens } from "../../src/shared/lens_doc"
+import { LENS_CSP, lens_data_url, lens_request_allowed, parse_lens_message, with_media, wrap_lens } from "../../src/shared/lens_doc"
 import { PendingRequests } from "../../src/shared/pending"
 import { Throttle, sleep, wait_for } from "../../src/shared/timing"
 
@@ -86,6 +86,8 @@ describe("lens documents", () => {
     const wrapped = wrap_lens("<html><head><script>x()</script></head><body></body></html>")
     expect(wrapped.indexOf("Content-Security-Policy")).toBeLessThan(wrapped.indexOf("<script>"))
     expect(wrapped).toContain(LENS_CSP)
+    expect(LENS_CSP).toContain("img-src moi-media: data:")
+    expect(LENS_CSP).not.toContain("https:")
   })
 
   it("wraps a fragment into a full document", () => {
@@ -108,10 +110,21 @@ describe("lens documents", () => {
     expect(lens_data_url("<p>x</p>", ":root { --bg: #fff }")).not.toBe(lens_data_url("<p>x</p>"))
   })
 
-  it("lists the item images a lens may load, reader images included", () => {
-    const article = { item: { item_id: "a", image_url: "https://i/a.jpg", extra: { blocks: JSON.stringify([{ type: "img", src: "https://i/b.jpg" }, { type: "p", text: "x" }]) } } }
-    const broken = { item: { item_id: "b", image_url: null, extra: { blocks: "not json" } } }
-    expect(item_images([article, broken] as never)).toEqual(["https://i/a.jpg", "https://i/b.jpg"])
+  it("hands a lens its items' images through the media proxy only, leaving out what the proxy will not take", () => {
+    const blocks = [{ type: "img", src: "https://i/b.jpg" }, { type: "img", src: "file:///etc/passwd" }, { type: "p", text: "x" }]
+    const article = { item: { item_id: "a", url: "https://a.example/1", image_url: "https://i/a.jpg", extra: { blocks: JSON.stringify(blocks), site: "a" } }, reasons: [] }
+    const broken = { item: { item_id: "b", image_url: "javascript:alert(1)", extra: { blocks: "not json" } }, reasons: [] }
+    const plain = { item: { item_id: "c", image_url: null, extra: {} }, reasons: ["recent"] }
+    const to_media = (url: string) => (url.startsWith("https://") ? `moi-media://m/${url.slice(-5)}` : null)
+    const [first, second, third] = with_media([article, broken, plain] as never, to_media)
+    expect(first.item.image_url).toBe("moi-media://m/a.jpg")
+    expect(first.item.url).toBe("https://a.example/1")
+    expect(JSON.parse(first.item.extra.blocks)).toEqual([{ type: "img", src: "moi-media://m/b.jpg" }, { type: "p", text: "x" }])
+    expect(first.item.extra.site).toBe("a")
+    expect(second.item.image_url).toBeNull()
+    expect(second.item.extra.blocks).toBe("not json")
+    expect(third).toEqual(plain)
+    expect(article.item.image_url).toBe("https://i/a.jpg")
   })
 
   it("encodes as a base64 data url", () => {
@@ -120,21 +133,16 @@ describe("lens documents", () => {
     expect(Buffer.from(url.split(",")[1], "base64").toString("utf-8")).toContain("<p>é</p>")
   })
 
-  const SENT = new Set(["https://pbs.twimg.com/a.jpg", "https://cdn.example/v.mp4", "http://insecure.example/a.jpg"])
-
   it.each([
-    ["data:text/html;base64,AA", "mainFrame", true],
-    ["https://pbs.twimg.com/a.jpg", "image", true],
-    ["https://cdn.example/v.mp4", "media", true],
-    ["https://pbs.twimg.com/a.jpg?d=your_items", "image", false],
-    ["https://collector.example/p.gif", "image", false],
-    ["http://insecure.example/a.jpg", "image", false],
-    ["https://evil.example/collect", "xhr", false],
-    ["https://evil.example/script.js", "script", false],
-    ["https://evil.example/frame", "subFrame", false],
-  ])("lens request %s as %s", (url, resource_type, allowed) => {
-    expect(lens_request_allowed(url, resource_type, SENT)).toBe(allowed)
-    if (!url.startsWith("data:")) expect(lens_request_allowed(url, resource_type, undefined)).toBe(false)
+    ["data:text/html;base64,AA", true],
+    ["moi-media://m/0123abcd", true],
+    ["https://pbs.twimg.com/a.jpg", false],
+    ["https://pbs.twimg.com/a.jpg?d=your_items", false],
+    ["http://127.0.0.1:9/a.png", false],
+    ["https://evil.example/collect", false],
+    ["file:///etc/passwd", false],
+  ])("lens request %s", (url, allowed) => {
+    expect(lens_request_allowed(url)).toBe(allowed)
   })
 })
 
@@ -181,5 +189,22 @@ describe("addresses", () => {
   it("site_domain", () => {
     expect(site_domain("https://www.amazon.com/s?k=lamp")).toBe("amazon.com")
     expect(site_domain("nonsense")).toBe("")
+  })
+})
+
+describe("youtube_video_id", () => {
+  it.each([
+    ["https://www.youtube.com/watch?v=VIDEO00001A", "VIDEO00001A"],
+    ["https://m.youtube.com/watch?v=dQw4w9WgXcQ&t=30", "dQw4w9WgXcQ"],
+    ["https://youtu.be/dQw4w9WgXcQ?si=x", "dQw4w9WgXcQ"],
+    ["https://www.youtube.com/shorts/SHORT00001B", "SHORT00001B"],
+    ["https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ"],
+    ["https://www.youtube.com/watch?v=short", null],
+    ["https://www.youtube.com/@veritasium", null],
+    ["https://evil.example/watch?v=dQw4w9WgXcQ", null],
+    ["https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ", null],
+    ["not a url", null],
+  ])("%s", (url, id) => {
+    expect(youtube_video_id(url)).toBe(id)
   })
 })

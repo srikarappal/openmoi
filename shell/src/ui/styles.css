@@ -86,3 +86,6 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .stop_actions .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .chat.dragging { outline: 2px dashed var(--accent); outline-offset: -6px; }
 .drop_hint { padding: 8px 12px; color: var(--accent); font-weight: 600; }
+
+.player_bar { display: flex; gap: 6px; align-items: center; padding: 8px 10px; margin: 6px 8px; border-radius: 8px; background: var(--chip, #eef0fb); font-size: 12.5px; }
+.player_title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }

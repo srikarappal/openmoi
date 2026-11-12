@@ -1,46 +1,36 @@
-// The two browser sessions: your web session (shared by tabs and source views) and the locked down lens session.
+// The browser sessions: your web session (shared by tabs and source views), the locked down lens session and the
+// cookieless session the media proxy fetches lens images in.
 import { session, type WebPreferences } from "electron"
-import { image_key, lens_request_allowed } from "../shared/lens_doc"
+import { lens_request_allowed } from "../shared/lens_doc"
+import { MEDIA_SCHEME, forget_media, serve_media } from "./media"
 
-// Per lens web contents: the item images it may load and what it tried to load besides (the smoke test fails on that).
-const lens_images = new Map<number, Set<string>>()
+// Per lens web contents, what it tried to load besides its document, data URLs and its media tokens (the test gate
+// fails a lens on that).
 const lens_blocked = new Map<number, string[]>()
-
-export function allow_lens_images(contents_id: number, urls: string[]): void {
-  const allowed = lens_images.get(contents_id) ?? new Set<string>()
-  for (const url of urls) {
-    const key = image_key(url)
-    if (key) allowed.add(key)
-  }
-  lens_images.set(contents_id, allowed)
-}
 
 export function blocked_lens_requests(contents_id: number): string[] {
   return lens_blocked.get(contents_id) ?? []
 }
 
 export function forget_lens(contents_id: number): void {
-  lens_images.delete(contents_id)
   lens_blocked.delete(contents_id)
+  forget_media(contents_id)
 }
 
-// An item image that redirects (a CDN moving it) may load where it lands; nothing else gains a way out.
-function follow_redirect(details: { url: string; redirectURL: string; webContentsId?: number }): void {
-  const allowed = lens_images.get(details.webContentsId ?? -1)
-  const from = image_key(details.url)
-  const to = image_key(details.redirectURL)
-  if (allowed && from && to && allowed.has(from)) allowed.add(to)
-}
-
-function lens_request(details: { url: string; resourceType: string; webContentsId?: number }): boolean {
+function lens_request(details: { url: string; webContentsId?: number }): boolean {
   const contents_id = details.webContentsId ?? -1
-  const allowed = lens_request_allowed(details.url, details.resourceType, lens_images.get(contents_id))
+  const allowed = lens_request_allowed(details.url)
   if (!allowed) lens_blocked.set(contents_id, [...blocked_lens_requests(contents_id), details.url].slice(-20))
   return allowed
 }
 
 export const WEB_PARTITION = "persist:web"
 export const LENS_PARTITION = "lens"
+export const MEDIA_PARTITION = "media"
+
+function media_fetch(url: string, init: RequestInit): Promise<Response> {
+  return session.fromPartition(MEDIA_PARTITION).fetch(url, init)
+}
 
 // Present the standard Chromium user agent, like other Chromium based browsers; deny permissions by default.
 export function configure_sessions(): void {
@@ -49,8 +39,11 @@ export function configure_sessions(): void {
   web.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === "fullscreen"))
   const lens = session.fromPartition(LENS_PARTITION)
   lens.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !lens_request(details) }))
-  lens.webRequest.onBeforeRedirect((details) => follow_redirect(details))
   lens.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+  lens.protocol.handle(MEDIA_SCHEME, (request) => serve_media(request, media_fetch))
+  const media = session.fromPartition(MEDIA_PARTITION)
+  media.setUserAgent(web.getUserAgent())
+  media.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
 }
 
 export function web_preferences(preload: string, background: boolean): WebPreferences {

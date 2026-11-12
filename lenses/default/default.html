@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <title>openMoi</title>
@@ -25,7 +25,8 @@
   .chips { display: flex; flex-wrap: wrap; gap: 4px; }
   .chip { background: var(--chip); color: var(--muted); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; }
   .less { border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
-  .less:hover { color: var(--accent); }
+  .less:hover, .play:hover { color: var(--accent); }
+  .play { border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
   footer { text-align: center; color: var(--muted); padding: 24px 16px 40px; font-size: 13px; }
   article.reader { max-width: 700px; margin: 0 auto; padding: 32px 20px 60px; font-size: 18px; line-height: 1.65; }
   article.reader h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; }
@@ -79,10 +80,14 @@
     }
   }
 
+  // Text from the web may be in any script: dir auto lets Arabic and Hebrew run right to left.
   function element(tag, class_name, text) {
     const node = document.createElement(tag)
     if (class_name) node.className = class_name
-    if (text) node.textContent = text
+    if (text) {
+      node.textContent = text
+      node.dir = "auto"
+    }
     return node
   }
 
@@ -116,6 +121,7 @@
     if (view_item.summary_only) node.dataset.summaryOnly = "1"
     if (item.image_url) {
       const image = element("img", "thumb")
+      image.alt = ""
       image.src = item.image_url
       image.loading = "lazy"
       image.referrerPolicy = "no-referrer"
@@ -132,12 +138,22 @@
     const row = element("div", "row")
     const chips = element("div", "chips")
     for (const reason of view_item.reasons.filter((reason) => !reason.startsWith("from "))) chips.append(element("span", "chip", reason))
+    // A YouTube video plays here, in the host's player above the lens.
+    const actions = []
+    if (/^https:\/\/(www\.|m\.)?(youtube\.com\/(watch|shorts\/)|youtu\.be\/)/.test(item.url)) {
+      const play = element("button", "play", "Play here")
+      play.addEventListener("click", (event) => {
+        event.stopPropagation()
+        moi.play(item.item_id)
+      })
+      actions.push(play)
+    }
     const less = element("button", "less", "less like this")
     less.addEventListener("click", (event) => {
       event.stopPropagation()
       moi.less_like_this(item.item_id)
     })
-    row.append(chips, less)
+    row.append(chips, ...actions, less)
     body.append(row)
     node.append(body)
     node.addEventListener("click", () => moi.open(item.item_id))
@@ -155,6 +171,7 @@
     for (const block of blocks) {
       if (block.type === "img" && block.src) {
         const image = element("img")
+        image.alt = block.alt || ""
         image.src = block.src
         image.referrerPolicy = "no-referrer"
         node.append(image)

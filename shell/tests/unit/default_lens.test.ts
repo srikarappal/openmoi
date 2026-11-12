@@ -32,6 +32,15 @@ describe("default lens", () => {
     expect(card_ids(dom.window.document)).toEqual(["z"])
   })
 
+  it("offers Play here only on YouTube videos, and playing does not open the original", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    moi.render([view_item("v", { kind: "video", url: "https://www.youtube.com/watch?v=VIDEO00001A" }), view_item("a", { url: "https://evil.example/watch?v=VIDEO00001A" })], null)
+    const document = dom.window.document
+    expect(document.querySelectorAll(".play")).toHaveLength(1)
+    ;(document.querySelector("[data-item-id='v'] .play") as HTMLElement).click()
+    expect(moi.sent.slice(1)).toEqual([{ type: "play", item_id: "v" }])
+  })
+
   it("opens on click and sends less like this without opening", () => {
     const { dom, moi } = run_lens(DEFAULT_LENS)
     moi.render([view_item("a")], null)

@@ -22,6 +22,17 @@ export interface Item {
   extra: Record<string, string>
 }
 
+export interface PlayerInfo {
+  item_id: string
+  title: string
+  url: string
+}
+
+export interface LensVerdict {
+  verdict: "matches" | "differs" | "skipped"
+  problem: string
+}
+
 export interface SearchHit {
   item: Item
   score: number
@@ -195,6 +206,7 @@ export type LensToHost =
   | { type: "more"; cursor: string }
   | { type: "seen"; item_ids: string[] }
   | { type: "less_like_this"; item_id: string }
+  | { type: "play"; item_id: string }
 
 export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability" | "text" | "transcript" | "structured"
 
@@ -394,12 +406,14 @@ export interface ShellState {
   relay: RelayInfo
   gate: GateChoice[] | null
   stop: StopScreen | null
+  player: PlayerInfo | null
 }
 
 export type ShellCommand =
   | { type: "open_view"; view_id: string }
   | { type: "open_tab"; url: string }
   | { type: "open_link"; url: string }
+  | { type: "close_player" }
   | { type: "select_tab"; tab_id: number }
   | { type: "close_tab"; tab_id: number }
   | { type: "navigate"; url: string }

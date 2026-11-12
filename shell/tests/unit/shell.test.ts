@@ -717,3 +717,17 @@ describe("Shell system browser", () => {
     expect(external_urls).toHaveLength(1)
   })
 })
+
+describe("Shell player", () => {
+  it("closes the player from its bar and whenever another view or tab comes to the front", async () => {
+    const { shell, window } = await started()
+    const video = { item_id: "v1", url: "https://www.youtube.com/watch?v=VIDEO00001A", title: "Sky" } as never
+    expect(shell.player.play(video)).toBe(true)
+    expect(state_of(shell).player).toEqual({ item_id: "v1", title: "Sky", url: "https://www.youtube.com/watch?v=VIDEO00001A" })
+    await command(window, { type: "close_player" })
+    expect(state_of(shell).player).toBeNull()
+    shell.player.play(video)
+    await command(window, { type: "open_tab", url: "https://a.example/" })
+    expect(state_of(shell).player).toBeNull()
+  })
+})

@@ -5,6 +5,8 @@ Used in process by the brain's pytest suite and as a subprocess by the shell's E
 """
 
 import argparse
+import base64
+import html
 import json
 import threading
 import time
@@ -18,6 +20,8 @@ from urllib.parse import parse_qs, urlparse
 from fake_model import embeddings, model_reply
 
 PAGES_DIR = Path(__file__).resolve().parent / "pages"
+# A 1 by 1 PNG, for lens images that go through the media proxy.
+PIXEL_PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
 CHANNEL_ID = "UCfakechannel00000000001"
 TECH_ITEMS = [
     ("tech1", "New laptop chip doubles battery life", "Engineers explain the new design.", 1),
@@ -90,6 +94,16 @@ def news_feed(base_url: str) -> str:
     return rss_feed(base_url, "News", NEWS_ITEMS)
 
 
+def photos_feed(base_url: str) -> str:
+    """One post with an image in its description, served by this fake world."""
+    now = format_datetime(datetime.now(UTC) - timedelta(hours=1))
+    item = (
+        f"<item><guid>photo1</guid><title>Sunset over the bay</title><link>{base_url}/articles/photo1</link>"
+        f'<description>&lt;img src="{base_url}/images/pixel.png"&gt; A photo.</description><pubDate>{now}</pubDate></item>'
+    )
+    return f'<?xml version="1.0"?><rss version="2.0"><channel><title>Photos</title>{item}</channel></rss>'
+
+
 def broken_feed(base_url: str) -> str:
     return "this is not a feed"
 
@@ -135,6 +149,7 @@ ROUTES = {
     "/rss/tech.xml": ("application/rss+xml", tech_feed),
     "/rss/news.xml": ("application/rss+xml", news_feed),
     "/rss/broken.xml": ("application/rss+xml", broken_feed),
+    "/rss/photos.xml": ("application/rss+xml", photos_feed),
     "/@veritasium": ("text/html", channel_page),
     "/feeds/videos.xml": ("application/atom+xml", youtube_feed),
     f"/channel/{CHANNEL_ID}/videos": ("text/html", channel_videos_page),
@@ -150,12 +165,22 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         services = self.server.services
         parts = urlparse(self.path)
-        if not self.path.startswith("/__requests"):
+        if not self.path.startswith(("/__requests", "/__hits")):
             services.record("GET", self.path, dict(self.headers), None)
         base = services.base_url
         if parts.path == "/__requests":
             task = parse_qs(parts.query).get("task", [None])[0]
             self.reply(200, "application/json", json.dumps([{"path": call["path"], "payload": call["payload"]} for call in services.model_calls(task)]))
+        elif parts.path == "/__hits":
+            prefix = parse_qs(parts.query).get("prefix", ["/"])[0]
+            self.reply(200, "application/json", json.dumps(services.hits(prefix)))
+        elif parts.path.startswith("/embed/"):
+            video_id = html.escape(parts.path.removeprefix("/embed/"))
+            self.reply(200, "text/html", f"<!doctype html><title>Player {video_id}</title><p>Playing {video_id}</p>")
+        elif parts.path == "/images/pixel.png":
+            self.reply_bytes(200, "image/png", PIXEL_PNG)
+        elif parts.path.startswith("/canary/"):
+            self.reply_bytes(200, "image/png", PIXEL_PNG)
         elif parts.path == "/pages/x_home_signed_in.html":
             self.signed_in_page()
         elif parts.path == "/feeds/videos.xml" and services.youtube_feed_down:
@@ -238,8 +263,17 @@ class Handler(BaseHTTPRequestHandler):
         body = {"choices": [{"message": {"role": "assistant", "content": content}}], "usage": {"prompt_tokens": 100, "completion_tokens": 20}}
         self.reply(200, "application/json", json.dumps(body))
 
+    def do_OTHER(self) -> None:
+        """Any other method is recorded, so a test sees whatever reached this world, and answered empty."""
+        self.server.services.record(self.command, self.path, dict(self.headers), None)
+        self.reply_bytes(200, "text/plain", b"")
+
+    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = do_OTHER
+
     def reply(self, status: int, content_type: str, text: str) -> None:
-        body = text.encode()
+        self.reply_bytes(status, content_type, text.encode())
+
+    def reply_bytes(self, status: int, content_type: str, body: bytes) -> None:
         self.send_response(status)
         self.send_header("content-type", content_type)
         self.send_header("content-length", str(len(body)))
@@ -297,6 +331,11 @@ class FakeServices:
             if queued:
                 return queued.pop(0)
         return model_reply(task, payload, self.base_url)
+
+    def hits(self, prefix: str) -> list[dict[str, Any]]:
+        """Every request whose path starts with prefix, with its method and headers: what reached this world."""
+        with self.lock:
+            return [{"method": request["method"], "path": request["path"], "headers": request["headers"]} for request in self.requests if request["path"].startswith(prefix)]
 
     def model_calls(self, task: str | None = None) -> list[dict[str, Any]]:
         with self.lock:

@@ -6,8 +6,14 @@ type Listener = (items: ViewItem[], cursor: string | null) => void
 
 const listeners: Record<HostToLens["type"], Listener[]> = { render: [], append: [], update: [] }
 
+// How long the lens took to handle each message, for the test gate's speed check.
 ipcRenderer.on("moi:lens", (_event, message: HostToLens) => {
-  for (const listener of listeners[message.type] ?? []) listener(message.items, message.cursor)
+  const started = performance.now()
+  try {
+    for (const listener of listeners[message.type] ?? []) listener(message.items, message.cursor)
+  } finally {
+    ipcRenderer.send("moi:lens_timing", { type: message.type, count: Array.isArray(message.items) ? message.items.length : 0, ms: performance.now() - started })
+  }
 })
 
 function send(message: LensToHost): void {
@@ -32,5 +38,8 @@ contextBridge.exposeInMainWorld("moi", {
   seen: (item_ids: string[]) => send({ type: "seen", item_ids: Array.from(item_ids, String) }),
   less_like_this: (item_id: string) => {
     if (by_you()) send({ type: "less_like_this", item_id: String(item_id) })
+  },
+  play: (item_id: string) => {
+    if (by_you()) send({ type: "play", item_id: String(item_id) })
   },
 })

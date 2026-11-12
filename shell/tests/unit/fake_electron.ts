@@ -78,9 +78,19 @@ export class FakeWebContents extends EventEmitter {
     this.open_handler = handler
   }
 
+  // Answers for scripts that start with a given text, before the general script_result.
+  script_answers: Array<[string, unknown]> = []
+  captured_png: Buffer | null = Buffer.from("png")
+
   async executeJavaScript(code: string): Promise<unknown> {
     this.scripts.push(code)
-    return this.script_result
+    const answer = this.script_answers.find(([start]) => code.startsWith(start))
+    return answer ? answer[1] : this.script_result
+  }
+
+  async capturePage(): Promise<{ isEmpty(): boolean; toPNG(): Buffer }> {
+    const png = this.captured_png
+    return { isEmpty: () => png === null, toPNG: () => png ?? Buffer.alloc(0) }
   }
 
   messages(channel: string): unknown[] {
@@ -210,6 +220,21 @@ export class FakeSession {
   setPermissionRequestHandler(handler: PermissionHandler): void {
     this.permission_handler = handler
   }
+
+  // Custom protocol handlers by scheme, and what fetch answers (a test sets it).
+  readonly protocols = new Map<string, (request: Request) => Promise<Response> | Response>()
+  readonly protocol = {
+    handle: (scheme: string, handler: (request: Request) => Promise<Response> | Response): void => {
+      this.protocols.set(scheme, handler)
+    },
+  }
+  fetched: Array<[string, RequestInit | undefined]> = []
+  fetch_answer: (url: string) => Response = () => new Response("missing", { status: 404 })
+
+  async fetch(url: string, init?: RequestInit): Promise<Response> {
+    this.fetched.push([url, init])
+    return this.fetch_answer(url)
+  }
 }
 
 const sessions = new Map<string, FakeSession>()
@@ -314,6 +339,12 @@ export const nativeImage = {
   },
 }
 export const powerMonitor = new EventEmitter()
+export const privileged_schemes: Array<{ scheme: string; privileges: Record<string, boolean> }> = []
+export const protocol = {
+  registerSchemesAsPrivileged: (schemes: Array<{ scheme: string; privileges: Record<string, boolean> }>): void => {
+    privileged_schemes.push(...schemes)
+  },
+}
 export const BrowserWindow = FakeBrowserWindow
 export const session = {
   fromPartition(partition: string): FakeSession {

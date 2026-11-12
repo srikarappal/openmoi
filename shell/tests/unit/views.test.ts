@@ -20,7 +20,7 @@ function make_views(outcomes: FillOutcome[], pages: ViewPage[] = [], page_source
   const sources = { fill: vi.fn(async (..._args: unknown[]) => outcomes.shift() ?? ({ status: "skipped" } as FillOutcome)) }
   const lenses = { get: (key: string) => (key === context.key ? context : undefined), all: () => [context] }
   const { labels, track } = new Tracked()
-  const hooks = { open_original: vi.fn(), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), alert: vi.fn(), track, labels }
+  const hooks = { open_original: vi.fn(), play: vi.fn((_item: { url: string }) => false), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), alert: vi.fn(), track, labels }
   const views = new ViewController(brain as unknown as BrainClient, lenses as unknown as LensManager, sources as unknown as ReaderPool, hooks)
   return { views, context, sources, hooks, brain }
 }
@@ -254,7 +254,22 @@ describe("ViewController rendering", () => {
     await views.on_event(context, { type: "seen", item_ids: ["a", "ghost"] })
     await views.on_event(context, { type: "seen", item_ids: ["ghost"] })
     await views.on_event(context, { type: "open", item_id: "ghost" })
+    await views.on_event(context, { type: "play", item_id: "ghost" })
     expect(brain.events.mock.calls).toEqual([[[{ view_id: "feed", item_id: "a", event_kind: "seen" }]]])
+  })
+
+  it("plays a video in the host's player, counting it as opened, and opens anything it cannot play", async () => {
+    const { views, context, brain, hooks } = render_setup([])
+    context.rendered.set("v", { item_id: "v", url: "https://www.youtube.com/watch?v=VIDEO00001A" } as never)
+    context.rendered.set("p", { item_id: "p", url: "https://a.com/p" } as never)
+    hooks.play.mockImplementation((item: { url: string }) => item.url.includes("youtube"))
+    await views.on_event(context, { type: "play", item_id: "v" })
+    await views.on_event(context, { type: "play", item_id: "p" })
+    expect(brain.events.mock.calls.map((call) => (call as unknown as [Array<Record<string, string>>])[0][0])).toEqual([
+      { view_id: "feed", item_id: "v", event_kind: "open" },
+      { view_id: "feed", item_id: "p", event_kind: "open" },
+    ])
+    expect(hooks.open_original.mock.calls).toEqual([["https://a.com/p"]])
   })
 })
 

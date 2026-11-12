@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 // One fake Electron for every fresh import of main.ts and the preloads, so the test sees what they did.
 const fake = await vi.hoisted(async () => await import("./fake_electron"))
-const { app, contextBridge, error_boxes, exposed, ipcRenderer, reset_electron } = fake
+const { app, contextBridge, error_boxes, exposed, ipcRenderer, privileged_schemes, reset_electron } = fake
 
 vi.mock("electron", () => fake)
 
@@ -68,6 +68,7 @@ describe("main", () => {
     process.env.MOI_HEADLESS = "1"
     await launch()
     expect(started.sessions).toBe(1)
+    expect(privileged_schemes).toEqual([{ scheme: "moi-media", privileges: { standard: true, secure: true, stream: true } }])
     expect(started.shells).toHaveLength(1)
     expect(started.shells[0].headless).toBe(true)
     expect(started.shells[0].start_hidden).toBe(false)
@@ -140,7 +141,8 @@ describe("preloads", () => {
     ipcRenderer.emit("moi:lens", {}, { type: "append", items: ["b"], cursor: "more" })
     ipcRenderer.emit("moi:lens", {}, { type: "update", items: ["c"], cursor: null })
     ipcRenderer.emit("moi:lens", {}, { type: "unknown", items: [], cursor: null })
-    expect(rendered).toEqual([[["a"], null]])
+    ipcRenderer.emit("moi:lens", {}, { type: "render", cursor: null })
+    expect(rendered).toEqual([[["a"], null], [undefined, null]])
     expect(appended).toEqual([[["b"], "more"]])
     expect(updated).toEqual([["c"]])
     moi.ready()
@@ -148,7 +150,10 @@ describe("preloads", () => {
     moi.more({ toString: () => "deeper" })
     moi.seen(new Set([1, "b"]))
     moi.less_like_this("c")
-    expect(ipcRenderer.sent.map(([, message]) => message)).toEqual([
+    const timings = ipcRenderer.sent.filter(([channel]) => channel === "moi:lens_timing").map(([, message]) => message as { type: string; count: number; ms: number })
+    expect(timings.map((timing) => `${timing.type} ${timing.count}`)).toEqual(["render 1", "append 1", "update 1", "unknown 0", "render 0"])
+    expect(timings.every((timing) => timing.ms >= 0)).toBe(true)
+    expect(ipcRenderer.sent.filter(([channel]) => channel === "moi:lens_event").map(([, message]) => message)).toEqual([
       { type: "ready" },
       { type: "open", item_id: "42" },
       { type: "more", cursor: "deeper" },
@@ -165,7 +170,7 @@ describe("preloads", () => {
     moi.open("a")
     moi.less_like_this("a")
     moi.seen(["a"])
-    expect(ipcRenderer.sent.map(([, message]) => (message as { type: string }).type)).toEqual(["seen"])
+    expect(ipcRenderer.sent.filter(([channel]) => channel === "moi:lens_event").map(([, message]) => (message as { type: string }).type)).toEqual(["seen"])
   })
 
   it("answers page operations in openMoi's own pages, errors included", async () => {

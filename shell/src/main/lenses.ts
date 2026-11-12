@@ -1,20 +1,21 @@
 // Lens views: each shows one view (or one Mine page) through sandboxed generated HTML.
 import { ipcMain, WebContentsView } from "electron"
-import { item_images, lens_data_url, parse_lens_message } from "../shared/lens_doc"
+import { lens_data_url, parse_lens_message, with_media } from "../shared/lens_doc"
 import type { HostToLens, Item, LensToHost } from "../shared/types"
 import type { ViewHost } from "./host"
-import { allow_lens_images, forget_lens, lens_preferences } from "./sessions"
+import { media_url } from "./media"
+import { forget_lens, lens_preferences } from "./sessions"
 
 // A lens may open an item or ask for less like it at most this often: a click, not a script looping over items.
 // Less like this is paced per item (2 s) and per lens (one every 500 ms), so two different items in a row both count
 // but a lens firing it for every item does not.
-const ACTION_INTERVAL_MS: Partial<Record<LensToHost["type"], number>> = { open: 800, less_like_this: 2_000 }
+const ACTION_INTERVAL_MS: Partial<Record<LensToHost["type"], number>> = { open: 800, play: 800, less_like_this: 2_000 }
 const LESS_LIKE_THIS_PER_LENS_MS = 500
 // Gesture binding: opening an item or less like this counts only this soon after a real click, key press or touch on
 // that lens, as the main process saw it. A lens script can fire its own events but cannot fake these.
 export const GESTURE_WINDOW_MS = 1_000
 const REAL_INPUT = new Set(["mouseDown", "mouseUp", "keyDown", "rawKeyDown", "touchStart", "touchEnd", "gestureTap"])
-const NEEDS_GESTURE = new Set<LensToHost["type"]>(["open", "less_like_this"])
+const NEEDS_GESTURE = new Set<LensToHost["type"]>(["open", "play", "less_like_this"])
 
 export class LensContext {
   readonly rendered = new Map<string, Item>()
@@ -30,8 +31,8 @@ export class LensContext {
   send(message: HostToLens): void {
     if (message.type === "render") this.rendered.clear()
     for (const view_item of message.items) this.rendered.set(view_item.item.item_id, view_item.item)
-    allow_lens_images(this.view.webContents.id, item_images(message.items))
-    this.view.webContents.send("moi:lens", message)
+    const contents_id = this.view.webContents.id
+    this.view.webContents.send("moi:lens", { ...message, items: with_media(message.items, (url) => media_url(contents_id, url)) })
   }
 
   // Runs page fetches one at a time so concurrent refreshes and scrolls never append the same items twice.

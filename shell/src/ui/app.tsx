@@ -299,10 +299,24 @@ function Stop({ stop }: { stop: StopScreen }) {
   )
 }
 
+function PlayerBar({ state }: { state: ShellState }) {
+  if (!state.player) return null
+  return (
+    <div className="player_bar">
+      <span className="player_title">Playing: {state.player.title}</span>
+      <button onClick={() => send({ type: "open_link", url: state.player?.url ?? "" })}>Open on YouTube</button>
+      <button className="close_player" onClick={() => send({ type: "close_player" })}>
+        Close
+      </button>
+    </div>
+  )
+}
+
 function SidePanel({ state }: { state: ShellState }) {
   return (
     <aside className="side">
       <StatusLine activities={state.activities} />
+      <PlayerBar state={state} />
       <section className="notices">
         {state.notices.map((notice) => (
           <div key={notice.notice_id} className="notice">

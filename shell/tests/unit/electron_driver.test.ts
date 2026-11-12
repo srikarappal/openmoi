@@ -7,7 +7,8 @@ vi.mock("electron", async () => await import("./fake_electron"))
 
 const { ElectronDriver } = await import("../../src/main/drivers")
 const { call_page } = await import("../../src/main/page_rpc")
-const { allow_lens_images, blocked_lens_requests, configure_sessions, forget_lens, lens_preferences, web_preferences, LENS_PARTITION, WEB_PARTITION } = await import("../../src/main/sessions")
+const { blocked_lens_requests, configure_sessions, forget_lens, lens_preferences, web_preferences, LENS_PARTITION, MEDIA_PARTITION, WEB_PARTITION } = await import("../../src/main/sessions")
+const { media_url } = await import("../../src/main/media")
 const { session } = await import("./fake_electron")
 
 function make_host(): ViewHost & { behind: unknown[]; detached: unknown[] } {
@@ -110,18 +111,17 @@ describe("sessions", () => {
     lens.permission_handler?.(null, "fullscreen", (allowed) => answers.push(allowed))
     expect(answers).toEqual([true, false, false])
     const decisions: boolean[] = []
-    const image = "https://pbs.twimg.com/media/a.jpg"
-    allow_lens_images(7, [image])
-    ask_lens(lens, decisions, image, "image", 7)
-    ask_lens(lens, decisions, image, "image", 8)
+    const token = media_url(7, "https://pbs.twimg.com/media/a.jpg") ?? ""
+    ask_lens(lens, decisions, token, "image", 7)
+    ask_lens(lens, decisions, "https://pbs.twimg.com/media/a.jpg", "image", 7)
     ask_lens(lens, decisions, "https://collector.example/p.gif?d=items", "image", 7)
     ask_lens(lens, decisions, "https://evil.example/steal?data=1", "xhr", 7)
     expect(decisions).toEqual([false, true, true, true])
-    expect(blocked_lens_requests(7)).toEqual(["https://collector.example/p.gif?d=items", "https://evil.example/steal?data=1"])
+    expect(blocked_lens_requests(7)).toEqual(["https://pbs.twimg.com/media/a.jpg", "https://collector.example/p.gif?d=items", "https://evil.example/steal?data=1"])
+    expect(lens.protocols.has("moi-media")).toBe(true)
+    expect(session.fromPartition(MEDIA_PARTITION).getUserAgent()).toBe(web.getUserAgent())
     forget_lens(7)
     expect(blocked_lens_requests(7)).toEqual([])
-    ask_lens(lens, decisions, image, "image", 7)
-    expect(decisions.at(-1)).toBe(true)
   })
 
   it("keeps lenses and pages sandboxed and isolated", () => {
@@ -161,24 +161,6 @@ describe("ElectronDriver loads", () => {
     await expect(failing).rejects.toThrow("ERR_NAME_NOT_RESOLVED")
     expect(host.detached).toEqual([second])
     expect(second.webContents.isDestroyed()).toBe(true)
-  })
-})
-
-describe("lens images", () => {
-  beforeEach(() => reset_electron())
-
-  it("match the way Chromium requests them and follow an allowed image's redirect only", () => {
-    configure_sessions()
-    const lens = session.fromPartition(LENS_PARTITION)
-    allow_lens_images(9, ["https://cdn.example/my photo.jpg", "https://cdn.example/Café.jpg#top"])
-    const decisions: boolean[] = []
-    ask_lens(lens, decisions, "https://cdn.example/my%20photo.jpg", "image", 9)
-    ask_lens(lens, decisions, "https://cdn.example/Caf%C3%A9.jpg", "image", 9)
-    lens.redirect_handler?.({ url: "https://cdn.example/my%20photo.jpg", redirectURL: "https://images.cdn.example/1.jpg", webContentsId: 9 })
-    lens.redirect_handler?.({ url: "https://collector.example/a", redirectURL: "https://collector.example/b", webContentsId: 9 })
-    ask_lens(lens, decisions, "https://images.cdn.example/1.jpg", "image", 9)
-    ask_lens(lens, decisions, "https://collector.example/b", "image", 9)
-    expect(decisions).toEqual([false, false, false, true])
   })
 })
 

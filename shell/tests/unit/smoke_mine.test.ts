@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BrainClient } from "../../src/main/brain"
 import type { PageDriver } from "../../src/main/drivers"
@@ -14,6 +17,11 @@ const { configure_sessions, LENS_PARTITION } = await import("../../src/main/sess
 
 interface LensScript {
   ready?: boolean
+  // How long each render takes; the 50 item render may take longer.
+  render_ms?: number
+  slow_at?: number
+  // A lens stuck in its render listener never reports back.
+  hangs?: boolean
   console_error?: string
   rendered?: "all" | "half"
   load_error?: Error
@@ -29,7 +37,9 @@ function script_lens(script: LensScript): void {
     contents.on_send = (channel, message) => {
       if (channel !== "moi:lens") return
       const ids = (message as { items: Array<{ item: { item_id: string } }> }).items.map((entry) => entry.item.item_id)
-      contents.script_result = script.rendered === "half" ? ids.slice(0, ids.length / 2) : ids
+      contents.script_result = script.rendered === "half" ? ids.slice(0, Math.floor(ids.length / 2)) : ids
+      const ms = script.slow_at === ids.length ? 80 : (script.render_ms ?? 3)
+      if (!script.hangs) ipcMain.emit("moi:lens_timing", ipc_event(contents), { type: "render", count: ids.length, ms })
       if (script.stray_request) session.fromPartition(LENS_PARTITION).request_handler?.({ url: script.stray_request, resourceType: "image", webContentsId: contents.id } as never, ignore)
     }
     const original = contents.loadURL.bind(contents)
@@ -46,7 +56,13 @@ function ignore(): void {}
 
 async function smoke(kind: "feed" | "article" = "feed"): Promise<string | null> {
   const checking = new SmokeTester("/dist/preload_lens.js").problem("<p>lens</p>", kind)
-  await vi.advanceTimersByTimeAsync(6_000)
+  await vi.advanceTimersByTimeAsync(12_000)
+  return checking
+}
+
+async function full_check(axe_path: string | null = null, kind: "feed" | "article" = "feed") {
+  const checking = new SmokeTester("/dist/preload_lens.js", ":root { --text: #111 }", axe_path).check("<p>lens</p>", kind)
+  await vi.advanceTimersByTimeAsync(12_000)
   return checking
 }
 
@@ -79,12 +95,56 @@ describe("SmokeTester", () => {
     ["throws before ready", { ready: false, console_error: "moi is not defined" }, "script error: moi is not defined"],
     ["throws after ready", { console_error: "cannot read item.title" }, "script error: cannot read item.title"],
     ["crashes", { crash: true }, "script error: the lens crashed: oom"],
-    ["drops items", { rendered: "half" }, "15 of 30 items were not rendered with data-item-id"],
+    ["drops items", { rendered: "half" }, "1 of 1 items were not rendered with data-item-id (one item)"],
+    ["renders 50 items slowly", { slow_at: 50 }, "rendering 50 items took 80 ms; it must take under 50 ms"],
+    ["never finishes a render", { hangs: true }, "the lens did not finish rendering no items"],
+    ["reports a broken timing", { render_ms: Number.NaN }, "the lens did not finish rendering no items"],
     ["fails to load", { load_error: new Error("bad data url") }, "bad data url"],
-    ["loads something that is not an item image", { stray_request: "https://collector.example/p.gif?d=1" }, "the lens tried to load https://collector.example/p.gif?d=1, which is not an item image"],
+    ["loads something that is not an item image", { stray_request: "https://collector.example/p.gif?d=1" }, "the lens tried to load https://collector.example/p.gif?d=1, which is not an item's image"],
   ])("fails a lens that %s", async (_label, script, problem) => {
     script_lens(script)
     expect(await smoke()).toBe(problem)
+  })
+
+  it("renders every scenario in turn and hands back a screenshot of the timed one", async () => {
+    script_lens({})
+    const check = await full_check()
+    expect(check).toEqual({ problem: null, screenshot: Buffer.from("png").toString("base64"), render_ms: 3 })
+    const renders = FakeBrowserWindow.created[0].webContents.messages("moi:lens") as Array<{ items: unknown[] }>
+    expect(renders.map((render) => render.items.length)).toEqual([0, 1, 50, 10, 500])
+    const document = Buffer.from(FakeBrowserWindow.created[0].webContents.loads[0].split(",")[1], "base64").toString("utf-8")
+    expect(document).toContain('<style id="moi_tokens">:root { --text: #111 }</style>')
+  })
+
+  it("runs the accessibility check on the timed render and fails on what it finds", async () => {
+    const axe = path.join(mkdtempSync(path.join(tmpdir(), "axe")), "axe.min.js")
+    writeFileSync(axe, "window.axe = {}")
+    FakeBrowserWindow.on_created = null
+    script_lens({})
+    const created = FakeBrowserWindow.on_created as unknown as (window: InstanceType<typeof FakeBrowserWindow>) => void
+    FakeBrowserWindow.on_created = (window) => {
+      created(window)
+      window.webContents.script_answers = [["axe.run", ["image-alt: Images must have alternate text (3 elements)"]], ["window.axe", undefined]]
+    }
+    expect((await full_check(axe)).problem).toBe("an accessibility problem with 50 items: image-alt: Images must have alternate text (3 elements)")
+  })
+
+  it("checks an article lens with an article, a right to left one and nothing", async () => {
+    script_lens({})
+    const check = await full_check(null, "article")
+    expect(check.problem).toBeNull()
+    const renders = FakeBrowserWindow.created[0].webContents.messages("moi:lens") as Array<{ items: Array<{ item: { item_id: string } }> }>
+    expect(renders.map((render) => render.items.map((entry) => entry.item.item_id))).toEqual([[], ["article0"], ["article_rtl"]])
+  })
+
+  it("passes without a screenshot when the window paints nothing", async () => {
+    script_lens({})
+    const created = FakeBrowserWindow.on_created as unknown as (window: InstanceType<typeof FakeBrowserWindow>) => void
+    FakeBrowserWindow.on_created = (window) => {
+      created(window)
+      window.webContents.captured_png = null
+    }
+    expect(await full_check()).toEqual({ problem: null, screenshot: null, render_ms: 3 })
   })
 
   it("lets the lens load the synthetic items' own images", async () => {

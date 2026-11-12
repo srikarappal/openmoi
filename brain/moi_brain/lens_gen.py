@@ -27,6 +27,7 @@ moi.more(cursor)                       ask for the next page when cursor is not 
                                        also right after a render or append that leaves the end visible (observe the end again)
 moi.seen(item_ids)                     report items that were visible for at least one second
 moi.less_like_this(item_id)            the person wants fewer items like this one
+moi.play(item_id)                      play a YouTube video in the host's player above the lens (on a click only)
 Each entry of items is {"item": <Item>, "reasons": ["boost: author maya", "recent", "from x"]}; cursor is a string or null."""
 SYSTEM_PROMPT = """You write lenses for openMoi, a personal feed reader: one self contained HTML document that renders items the way the person described.
 Rules:

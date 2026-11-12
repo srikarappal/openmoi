@@ -2,7 +2,7 @@
 import type { LensToHost, ViewItem } from "./types"
 
 export const LENS_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: data:; font-src data:; media-src https:"
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src moi-media: data:; font-src data:; media-src moi-media: data:"
 const MAX_IDS_PER_MESSAGE = 200
 const MAX_ID_LENGTH = 200
 
@@ -19,39 +19,31 @@ export function lens_data_url(html: string, tokens = ""): string {
   return `data:text/html;charset=utf-8;base64,${Buffer.from(wrap_lens(html, tokens), "utf-8").toString("base64")}`
 }
 
-// The lens session only loads its own document and the https images of items it was sent; any other address
+// The lens session loads only its own document, data URLs and the moi-media tokens it was given; any other address
 // (say an "image" whose query carries your items to someone's server) is refused.
-export function lens_request_allowed(url: string, resource_type: string, item_images: ReadonlySet<string> | undefined): boolean {
-  if (url.startsWith("data:")) return true
-  const key = image_key(url)
-  return url.startsWith("https://") && (resource_type === "image" || resource_type === "media") && key !== null && Boolean(item_images?.has(key))
+export function lens_request_allowed(url: string): boolean {
+  return url.startsWith("data:") || url.startsWith("moi-media:")
 }
 
-// An image address the way Chromium requests it (spaces and accents encoded, no fragment), so the brain's raw
-// address and the request compare equal.
-export function image_key(url: string): string | null {
-  try {
-    const parsed = new URL(url)
-    parsed.hash = ""
-    return parsed.href
-  } catch {
-    return null
-  }
-}
-
-// The image addresses in items a lens is about to show: each item's image and the images of a reader article.
-export function item_images(items: ViewItem[]): string[] {
-  const found: string[] = []
-  for (const { item } of items) {
-    if (item.image_url) found.push(item.image_url)
+// Items as a lens gets them: each image (the item's and those of a reader article) through the media proxy, so the lens
+// never sees a web address it could load; an image the proxy will not take is left out.
+export function with_media(items: ViewItem[], to_media: (url: string) => string | null): ViewItem[] {
+  return items.map((view_item) => {
+    const item = view_item.item
+    const image_url = item.image_url ? to_media(item.image_url) : null
+    let blocks: string | undefined = item.extra?.blocks
     try {
-      const blocks: unknown = JSON.parse(item.extra?.blocks ?? "[]")
-      if (Array.isArray(blocks)) for (const block of blocks) if (typeof block?.src === "string") found.push(block.src)
+      const parsed: unknown = JSON.parse(blocks ?? "null")
+      if (Array.isArray(parsed)) {
+        const mapped = parsed.map((block) => (typeof block?.src === "string" ? { ...block, src: to_media(block.src) } : block))
+        blocks = JSON.stringify(mapped.filter((block) => block?.src !== null))
+      }
     } catch {
-      continue
+      blocks = undefined
     }
-  }
-  return found.map(image_key).filter((key): key is string => key !== null)
+    const extra = blocks === undefined ? item.extra : { ...item.extra, blocks }
+    return { ...view_item, item: { ...item, image_url, extra } }
+  })
 }
 
 function is_id(value: unknown): value is string {
@@ -67,6 +59,7 @@ export function parse_lens_message(raw: unknown): LensToHost | null {
       return { type: "ready" }
     case "open":
     case "less_like_this":
+    case "play":
       return is_id(message.item_id) ? { type: message.type, item_id: message.item_id } : null
     case "more":
       return typeof message.cursor === "string" ? { type: "more", cursor: message.cursor } : null

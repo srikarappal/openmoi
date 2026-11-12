@@ -75,6 +75,52 @@ test("nested rules, pins and groups shape the feed in the real app", async () =>
   }
 })
 
+test("an item's image reaches the lens through the media proxy, fetched without cookies, never by its address", async () => {
+  const feed = `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/photos.xml\n`
+  const harness = await Harness.launch(world, { views: { feed } })
+  try {
+    await loaded(harness, "Sunset over the bay")
+    const images = await eventually(
+      () => harness.in_lenses<Array<{ src: string; width: number }>>(`[...document.querySelectorAll("img")].map((image) => ({ src: image.src, width: image.naturalWidth }))`),
+      (found) => found.flat().some((image) => image.width === 1),
+    )
+    const [image] = images.flat()
+    expect(image.src).toMatch(/^moi-media:\/\/m\/[0-9a-f]{32}$/)
+    expect(image.src).not.toContain("127.0.0.1")
+    const fetched = await world.hits("/images/pixel.png")
+    expect(fetched.length).toBeGreaterThan(0)
+    expect(fetched.every((hit) => !hit.headers.cookie && !hit.headers.referer)).toBe(true)
+    const direct = await harness.in_lenses<boolean>(
+      `new Promise((resolve) => { const probe = new Image(); probe.onload = () => resolve(true); probe.onerror = () => resolve(false); probe.src = ${JSON.stringify(`${world.base_url}/images/pixel.png?direct=1`)} })`,
+    )
+    expect(direct).toEqual([false])
+    expect(await world.hits("/images/pixel.png?direct=1")).toEqual([])
+  } finally {
+    await harness.close()
+  }
+})
+
+test("Play here shows a YouTube video in the host's player above the lens, and Close or another view ends it", async () => {
+  const harness = await Harness.launch(world)
+  try {
+    await loaded(harness, "Why the sky is blue")
+    const clicked = await harness.click_lens(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("Why the sky is blue")).querySelector(".play")`)
+    expect(clicked).toMatch(/^[0-9a-f]{32}$/)
+    await expect(harness.chrome.locator(".player_title")).toHaveText("Playing: Why the sky is blue, really")
+    const players = () => harness.app.evaluate(({ webContents }) => webContents.getAllWebContents().map((contents) => contents.getURL()).filter((url) => url.includes("/embed/")))
+    await eventually(players, (urls) => urls.some((url) => url.includes("/embed/VIDEO00001A?autoplay=1")))
+    await expect(harness.chrome.locator(".tab.web")).toHaveCount(0)
+    await harness.chrome.locator(".close_player").click()
+    await expect(harness.chrome.locator(".player_bar")).toHaveCount(0)
+    await eventually(players, (urls) => urls.length === 0)
+    const unclicked = await harness.in_lenses<number>(`(() => { moi.play(document.querySelector("[data-item-id]").dataset.itemId); return 1 })()`)
+    expect(unclicked).toEqual([1])
+    await expect(harness.chrome.locator(".player_bar")).toHaveCount(0)
+  } finally {
+    await harness.close()
+  }
+})
+
 test("the status line shows the feed updating, then Idle", async () => {
   const harness = await Harness.launch(world)
   try {

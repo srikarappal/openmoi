@@ -33,6 +33,7 @@ import { LensManager, type LensContext } from "./lenses"
 import { MineController, chrome_mine_key, tab_mine_key } from "./mine"
 import { ActivityTracker } from "./activity"
 import { RelayLink } from "./relay_link"
+import { Player } from "./player"
 import { SmokeTester } from "./smoke"
 import { ReaderPool } from "./readers"
 import { Scheduler } from "./scheduler"
@@ -79,6 +80,7 @@ export class Shell implements ViewHost {
   readonly mine: MineController
   readonly chat: ChatController
   readonly lens_gen: LensGenerator
+  readonly player: Player
   readonly electron: ElectronDriver
   readonly relay: RelayLink
   readonly scheduler: Scheduler
@@ -147,13 +149,15 @@ export class Shell implements ViewHost {
       },
       changed: () => this.push_state(),
     })
-    this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload, this.lens_tokens), {
+    this.player = new Player(this, { open_original: (url) => this.open_original(url), changed: () => this.push_state() })
+    this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload, this.lens_tokens, path.join(dist_dir, "axe.min.js")), {
       say: (text) => this.chat.say(text),
       on_new_lens: (view_id, kind) => this.reload_lens(view_id, kind),
       track: (label, work) => this.activity.track(label, work),
     })
     this.views = new ViewController(brain, this.lenses, this.readers, {
       open_original: (url) => this.open_original(url),
+      play: (item) => this.player.play(item),
       notify: (text, url, tag, action) => this.notify(text, url, action, tag),
       retract: (tag) => this.retract(tag),
       echo: (text) => this.chat.say(text),
@@ -382,6 +386,7 @@ export class Shell implements ViewHost {
   // Shows the active lens or tab on top; hidden source views stay attached underneath and keep rendering.
   private activate(target: ActiveTarget): void {
     this.activations += 1
+    this.player.close()
     this.active = target
     const tab = this.active_tab()
     if (target.kind === "view") this.chat_view_id = target.view_id
@@ -619,6 +624,9 @@ export class Shell implements ViewHost {
       case "open_link":
         this.open_original(command.url)
         return
+      case "close_player":
+        this.player.close()
+        return
       case "select_tab":
         if (this.tabs.get(command.tab_id)) this.activate({ kind: "tab", tab_id: command.tab_id })
         return
@@ -697,6 +705,7 @@ export class Shell implements ViewHost {
       relay: this.relay.status,
       gate: this.gate,
       stop: this.stop,
+      player: this.player.playing,
     }
   }
 

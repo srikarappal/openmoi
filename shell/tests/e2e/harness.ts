@@ -55,6 +55,11 @@ export class FakeWorld {
     return (await fetch(`${this.base_url}/__requests?task=${task}`)).json()
   }
 
+  // Requests that reached the fake world at paths starting with prefix: method, path and headers.
+  async hits(prefix: string): Promise<Array<{ method: string; path: string; headers: Record<string, string> }>> {
+    return (await fetch(`${this.base_url}/__hits?prefix=${encodeURIComponent(prefix)}`)).json()
+  }
+
   page(name: string): string {
     return `${this.base_url}/pages/${name}`
   }
@@ -68,6 +73,8 @@ export interface LaunchOptions {
   x_page?: string
   views?: Record<string, string>
   fast_slot?: { base_url: string; model: string }
+  // The fake model also judges lenses from screenshots.
+  vision?: boolean
   files?: Record<string, string>
   // The folder of an earlier run, to start openMoi again on the same home, as after a restart.
   root?: string
@@ -101,6 +108,7 @@ export class Harness {
         MOI_HOME: home,
         MOI_ASSETS_DIR: assets,
         MOI_YOUTUBE_BASE: world.base_url,
+        MOI_EMBED_BASE: world.base_url,
         MOI_HEADLESS: "1",
         MOI_BRAIN_PORT: String(brain_port),
         MOI_TOKEN: TOKEN,
@@ -128,7 +136,7 @@ export class Harness {
       writeFileSync(path.join(home, relative), text)
     }
     const slot = { base_url: `${world.base_url}/llm/v1`, model: "fake" }
-    writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot }))
+    writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot, ...(options.vision ? { vision: slot } : {}) }))
   }
 
   async brain<T>(route: string, body?: unknown): Promise<T> {

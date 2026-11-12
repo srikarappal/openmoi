@@ -275,6 +275,13 @@ def lens_patch(payload: dict[str, Any], base_url: str) -> str:
         return json.dumps({"edits": [{"find": "text that is not in the lens", "replace": "x"}]})
     if "BROKEN" in layout or ("FIXABLE" in layout and not request["last_error"]):
         return json.dumps({"edits": [{"find": "moi.ready()", "replace": "moi.never_ready()"}]})
+    first_try = not request["last_error"]
+    if "NOALT" in layout and first_try:
+        return json.dumps({"edits": [{"find": 'image.alt = ""\n      image.src = item.image_url', "replace": "image.src = item.image_url"}]})
+    if "SLOW" in layout and first_try:
+        return json.dumps({"edits": [{"find": "  function add(items) {\n", "replace": "  function add(items) {\n    const until = performance.now() + 120\n    while (performance.now() < until) {}\n"}]})
+    if "HARDCODED" in layout and first_try:
+        return json.dumps({"edits": [{"find": "  .meta {", "replace": "  .meta { color: #777; }\n  .meta {"}]})
     banner = f'<div id="look" data-kind="{request["kind"]}">Look: {html.escape(layout)}</div>'
     existing = LOOK_BANNER.search(current)
     change = {"find": existing.group(0), "replace": banner} if existing else {"find": "<body>", "replace": f"<body>{banner}"}

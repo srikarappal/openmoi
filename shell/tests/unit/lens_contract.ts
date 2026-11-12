@@ -31,6 +31,10 @@ export class FakeMoi {
   seen(item_ids: string[]): void {
     this.sent.push({ type: "seen", item_ids })
   }
+  play(item_id: string): void {
+    this.sent.push({ type: "play", item_id })
+  }
+
   less_like_this(item_id: string): void {
     this.sent.push({ type: "less_like_this", item_id })
   }

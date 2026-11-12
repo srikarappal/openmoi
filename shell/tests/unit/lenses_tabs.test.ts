@@ -143,7 +143,7 @@ describe("LensManager", () => {
 })
 
 describe("LensContext", () => {
-  it("tracks what it rendered and lets the lens load only those items' images", () => {
+  it("tracks what it rendered and hands the lens its images only as media tokens it may load", async () => {
     configure_sessions()
     const lens = session.fromPartition(LENS_PARTITION)
     const view = new FakeWebContentsView()
@@ -151,11 +151,18 @@ describe("LensContext", () => {
     context.send({ type: "render", items: [view_item("a", "https://i/a.jpg")], cursor: null })
     context.send({ type: "append", items: [view_item("b")], cursor: "more" })
     expect([...context.rendered.keys()]).toEqual(["a", "b"])
-    expect(view.webContents.messages("moi:lens")).toHaveLength(2)
+    expect(context.rendered.get("a")?.image_url).toBe("https://i/a.jpg")
+    const [first] = view.webContents.messages("moi:lens") as Array<{ items: ViewItem[] }>
+    const token = first.items[0].item.image_url ?? ""
+    expect(token).toMatch(/^moi-media:\/\/m\/[0-9a-f]{32}$/)
+    expect(cancelled(lens, token, view.webContents.id)).toBe(false)
+    expect(cancelled(lens, "https://i/a.jpg", view.webContents.id)).toBe(true)
+    session.fromPartition("media").fetch_answer = () => new Response(new Uint8Array([1, 2]), { headers: { "content-type": "image/jpeg" } })
+    const served = await lens.protocols.get("moi-media")?.(new Request(token))
+    expect(served?.status).toBe(200)
+    expect(session.fromPartition("media").fetched).toEqual([["https://i/a.jpg", { credentials: "omit", redirect: "follow", headers: {} }]])
     context.send({ type: "render", items: [view_item("c")], cursor: null })
     expect([...context.rendered.keys()]).toEqual(["c"])
-    expect(cancelled(lens, "https://i/a.jpg", view.webContents.id)).toBe(false)
-    expect(cancelled(lens, "https://i/a.jpg?d=items", view.webContents.id)).toBe(true)
   })
 
   it("runs page fetches one at a time and a failed one does not stop the next", async () => {

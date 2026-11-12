@@ -104,6 +104,32 @@ test("a second view file becomes a second tab with its own sources", async () =>
     )
     expect(texts[1]).toContain("Local bakery wins national prize")
     expect(texts[1]).not.toContain("space telescope")
+
+    // Switching between views whose lenses are open takes under 100 ms: from the click to the chrome UI marking the
+    // view active, which the shell does only after the lens is in front.
+    const switches: number[] = []
+    for (const title of ["Feed", "Local", "Feed", "Local", "Feed", "Local"]) {
+      switches.push(
+        await harness.chrome.evaluate(
+          (name) =>
+            new Promise<number>((resolve) => {
+              const button = [...document.querySelectorAll<HTMLButtonElement>("button.tab.view")].find((candidate) => candidate.textContent === name)
+              const at = performance.now()
+              const observer = new MutationObserver(() => {
+                if (document.querySelector("button.tab.view.active")?.textContent !== name) return
+                observer.disconnect()
+                resolve(performance.now() - at)
+              })
+              observer.observe(document.body, { subtree: true, attributes: true, childList: true })
+              button?.click()
+            }),
+          title,
+        ),
+      )
+    }
+    const median = [...switches].sort((first, second) => first - second)[Math.floor(switches.length / 2)]
+    console.log(`lens switches took ${switches.map(Math.round).join(", ")} ms`)
+    expect(median).toBeLessThan(100)
   } finally {
     await harness.close()
   }

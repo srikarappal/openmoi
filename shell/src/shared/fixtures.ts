@@ -1,4 +1,5 @@
-// Synthetic items that exercise a lens: every kind, missing fields, long text. Used by the smoke test and unit tests.
+// Synthetic items that exercise a lens: every kind, missing fields, long text, right to left scripts. Used by the lens
+// test gate and unit tests; nothing here is yours, so a hosted model may see a screenshot of it.
 import type { Item, ItemKind, LensKind, ViewItem } from "./types"
 
 const PIXEL = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
@@ -57,4 +58,55 @@ export function synthetic_view_items(kind: LensKind, count = SMOKE_ITEMS): ViewI
       extra: kind === "listing" ? { price_text: `$${index}.99` } : {},
     }),
   )
+}
+
+const ALL_KINDS: ItemKind[] = ["post", "article", "video", "product", "link"]
+export const TIMED_ITEMS = 50
+
+export interface LensScenario {
+  name: string
+  items: ViewItem[]
+  // The render whose speed counts, that is checked for accessibility and shown to the visual judge.
+  timed?: boolean
+}
+
+// Items that break careless lenses: right to left text, a word too long for any line, nothing but an id, markup and
+// emoji in text, and every kind of item.
+export function hard_items(kind: LensKind): ViewItem[] {
+  const kinds = kind === "listing" ? LISTING_KINDS : ALL_KINDS
+  return [
+    synthetic_item("rtl_arabic", { title: "عنوان طويل باللغة العربية عن الأخبار", text: "نص عربي طويل ".repeat(40), author_name: "مريم" }),
+    synthetic_item("rtl_hebrew", { title: "כותרת בעברית", text: "טקסט ארוך בעברית ".repeat(30) }),
+    synthetic_item("long_word", { title: "W".repeat(400), text: "x".repeat(10_000) }),
+    synthetic_item("bare", { title: null, text: null, author_name: null, author_handle: null, published_at: null, image_url: null }),
+    synthetic_item("markup", { title: "<b>not bold</b> & <script>not run</script> 🙂", text: "Line one\nLine two\t\u200b end" }),
+    ...kinds.map((item_kind, index) => synthetic_item(`kind_${item_kind}_${index}`, { kind: item_kind, title: `A ${item_kind}`, image_url: index % 2 ? null : PIXEL, extra: kind === "listing" ? { price_text: "$9.99" } : {} })),
+  ]
+}
+
+function rtl_article(): ViewItem {
+  const blocks = [
+    { type: "h", text: "عنوان فرعي" },
+    { type: "p", text: "فقرة من نص المقال. ".repeat(12) },
+    { type: "li", text: "عنصر في قائمة" },
+  ]
+  return synthetic_item("article_rtl", { kind: "article", title: "مقال تجريبي", author_name: "مريم", extra: { blocks: JSON.stringify(blocks) } })
+}
+
+// What the test gate renders, in order: nothing, one item, 50 timed, the hard cases, then 500.
+export function lens_scenarios(kind: LensKind): LensScenario[] {
+  if (kind === "article") {
+    return [
+      { name: "no items", items: [] },
+      { name: "an article", items: [article_item()], timed: true },
+      { name: "a right to left article", items: [rtl_article()] },
+    ]
+  }
+  return [
+    { name: "no items", items: [] },
+    { name: "one item", items: synthetic_view_items(kind, 1) },
+    { name: `${TIMED_ITEMS} items`, items: synthetic_view_items(kind, TIMED_ITEMS), timed: true },
+    { name: "hard cases", items: hard_items(kind) },
+    { name: "500 items", items: synthetic_view_items(kind, 500) },
+  ]
 }

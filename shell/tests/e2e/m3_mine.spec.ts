@@ -110,8 +110,8 @@ test("a page Mine cannot read leaves the original and says why", async () => {
   }
 })
 
-test("asking for a layout builds a smoke tested lens in under a minute that still shows what you saw; rollback restores the old look", async () => {
-  const harness = await Harness.launch(world)
+test("asking for a layout builds a lens through every gate in under a minute that still shows what you saw; rollback restores the old look", async () => {
+  const harness = await Harness.launch(world, { vision: true })
   try {
     await eventually(
       () => harness.lens_text(),
@@ -132,6 +132,7 @@ test("asking for a layout builds a smoke tested lens in under a minute that stil
     expect(Date.now() - started).toBeLessThan(60_000)
     console.log(`generated lens live after ${Date.now() - started} ms`)
     expect(harness.files_in(".moi/lenses/feed")).toEqual(["current.json", "v1.html"])
+    expect((await world.model_calls("judge_lens")).length).toBeGreaterThan(0)
 
     await harness.chat("bring back the previous look")
     await harness.chrome.locator(".proposal_actions .confirm").last().click()
@@ -157,8 +158,8 @@ test("a lens that fails the smoke test is retried with the error, then the curre
     await harness.chrome.locator("button.tab.view", { hasText: "Feed" }).click()
     await expect(harness.chrome.locator(".message.moi", { hasText: "That look did not work" })).toHaveCount(1, { timeout: 30_000 })
     const calls = (await world.model_calls("lens_patch")).slice(before)
-    expect(calls).toHaveLength(2)
-    expect(JSON.parse(calls[1].payload.messages[1].content).last_error).toContain("never_ready")
+    expect(calls).toHaveLength(3)
+    expect(JSON.parse(calls[2].payload.messages[1].content).last_error).toContain("never_ready")
     expect(await harness.lens_text()).toContain("New laptop chip")
     expect(await harness.lens_text()).not.toContain("Look:")
 
@@ -194,6 +195,35 @@ test("chat on a Mine page edits that site's view and rebuilds its lens", async (
     expect(text).toContain("Look: make it a compact table")
     expect(harness.file("views/site_127.0.0.1.md")).toBe("# 127.0.0.1\n\n## Layout\nmake it a compact table\n")
     await expect(harness.chrome.locator("button.tab.view")).toHaveText(["Feed"])
+  } finally {
+    await harness.close()
+  }
+})
+
+test("every lens gate runs in the real app: colors, accessibility, speed and the visual judge each send a fix back", async () => {
+  const harness = await Harness.launch(world, { vision: true })
+  try {
+    await eventually(
+      () => harness.lens_text(),
+      (value) => value.includes("New laptop chip"),
+    )
+    const cases: Array<[string, string]> = [
+      ["HARDCODED colors", "hardcodes a color (color: #777)"],
+      ["NOALT images", "image-alt"],
+      ["SLOW cards", "rendering 50 items took"],
+      ["UGLY two columns", "it does not look the way the layout asks: the cards are not in two columns"],
+    ]
+    for (const [layout, problem] of cases) {
+      const before = (await world.model_calls("lens_patch")).length
+      const replies = await harness.chrome.locator(".message.moi", { hasText: /is live|did not work/ }).count()
+      harness.write("views/feed.md", harness.file("views/feed.md").replace(/## Layout\n.*\n?/, `## Layout\n${layout}\n`))
+      await harness.chrome.locator("button.tab.view", { hasText: "Feed" }).click()
+      await expect(harness.chrome.locator(".message.moi", { hasText: /is live|did not work/ })).toHaveCount(replies + 1, { timeout: 45_000 })
+      const calls = (await world.model_calls("lens_patch")).slice(before)
+      expect(calls.length).toBeGreaterThanOrEqual(2)
+      expect(JSON.parse(calls[1].payload.messages[1].content).last_error).toContain(problem)
+    }
+    expect((await world.model_calls("judge_lens")).length).toBeGreaterThan(3)
   } finally {
     await harness.close()
   }

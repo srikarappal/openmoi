@@ -29,6 +29,8 @@ const MAX_TITLE = 80
 
 export interface ViewHooks {
   open_original(url: string): void
+  // Plays a video item in the host's player; false when it cannot (not a YouTube video).
+  play(item: Item): boolean
   notify(text: string, url?: string, tag?: string, action?: Notice["action"]): void
   retract(tag: string): void
   echo(text: string): void
@@ -474,6 +476,9 @@ export class ViewController {
       const recorded = await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "open" }])
       this.hooks.open_original(item.url)
       if (recorded?.notes?.includes(item.item_id)) this.take_note(item).catch((error) => this.hooks.notify(`No note was taken: ${error}`))
+    } else if (message.type === "play" && item) {
+      await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "open" }])
+      if (!this.hooks.play(item)) this.hooks.open_original(item.url)
     } else if (message.type === "less_like_this" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "less_like_this" }])
       this.hooks.less_like_this(context.view_id, item)

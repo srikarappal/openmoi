@@ -21,6 +21,7 @@ const BASE: ShellState = {
   relay: { connected: false, waiting_for_approval: null, paired: false },
   gate: null,
   stop: null,
+  player: null,
 }
 
 // The preload bridge as the UI sees it: commands are recorded, states are pushed by the test.
@@ -308,5 +309,18 @@ describe("App dropping a view file", () => {
     await vi.waitFor(() => expect(last_sent()).toEqual({ type: "import_view", name: "ai.md", text: "# AI news" }))
     await act(async () => chat.dispatchEvent(drop_event("drop", [new File(["[]"], "your_posts_1.json")])))
     await vi.waitFor(() => expect(last_sent()).toEqual({ type: "import_history", name: "your_posts_1.json", text: "[]" }))
+  })
+})
+
+describe("the player bar", () => {
+  it("shows what plays, opens it on YouTube or closes it", async () => {
+    await show({ player: { item_id: "v1", title: "Why the sky is blue", url: "https://www.youtube.com/watch?v=VIDEO00001A" } })
+    expect(texts(".player_title")).toEqual(["Playing: Why the sky is blue"])
+    await click(document.querySelectorAll(".player_bar button")[0])
+    expect(last_sent()).toEqual({ type: "open_link", url: "https://www.youtube.com/watch?v=VIDEO00001A" })
+    await click(query(".close_player"))
+    expect(last_sent()).toEqual({ type: "close_player" })
+    await show({ player: null })
+    expect(query(".player_bar")).toBeNull()
   })
 })

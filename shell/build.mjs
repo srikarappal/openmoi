@@ -22,3 +22,4 @@ for (const file of ["manifest.json", "popup.html"]) cpSync(`extension/${file}`, 
 cpSync("src/ui/index.html", "dist/ui/index.html")
 cpSync("src/ui/styles.css", "dist/ui/styles.css")
 cpSync("../lenses/tokens.css", "dist/lens_tokens.css")
+cpSync("node_modules/axe-core/axe.min.js", "dist/axe.min.js")
