@@ -25,7 +25,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "12"
+COMPILER_VERSION = "13"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
@@ -175,8 +175,11 @@ def watch_minutes(rest: str) -> int:
     return max(int(match.group(1) or 1) * scale, MIN_WATCH_MINUTES)
 
 
+HISTORIES = ("facebook", "amazon")
+
+
 class SourceRef(BaseModel):
-    source_id: Literal["x", "youtube", "rss", "page"]
+    source_id: Literal["x", "youtube", "rss", "page", "history"]
     page_type: str | None = None
     channels: list[str] = Field(default_factory=list)
     feeds: list[str] = Field(default_factory=list)
@@ -186,6 +189,8 @@ class SourceRef(BaseModel):
     ordered: list[str] = Field(default_factory=list)
     # Pages listing the accounts you follow, read about once a week to know who is a stranger.
     following: list[str] = Field(default_factory=list)
+    # Your own history from data exports you dropped on the chat: "facebook", "amazon".
+    histories: list[str] = Field(default_factory=list)
     # How a page asks to be read, when its line says: "assist" or "pilot".
     modes: dict[str, Literal["pilot", "assist"]] = Field(default_factory=dict)
     # Pages watched for changes: a change becomes an item your rules judge, and an alert if they keep it.
@@ -231,7 +236,7 @@ def check_view_id(view_id: str) -> str:
 
 def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRef], list[str]]:
     """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://... (newest first)' or a bare feed URL."""
-    has_x, channels, feeds, pages, ordered, following, watches, warnings = False, [], [], [], [], [], [], []
+    has_x, channels, feeds, pages, ordered, following, watches, histories, warnings = False, [], [], [], [], [], [], [], []
     modes: dict[str, Literal["pilot", "assist"]] = {}
     for line in bullets(body):
         label, _, rest = line.partition(":")
@@ -252,6 +257,11 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
                 modes |= {page: "assist" if mode.group(1).lower() == "assist" else "pilot" for page in found_pages}
             if not found_pages:
                 warnings.append(f"No page address found in: {line}")
+        elif key == "history":
+            found_histories = [name for name in HISTORIES if name in rest.lower()]
+            histories += found_histories
+            if not found_histories:
+                warnings.append(f"No history openMoi knows in: {line} (facebook or amazon)")
         elif key == "watch":
             found_watches = URL.findall(rest)
             watches += [WatchRef(url=url, every_minutes=watch_minutes(URL.sub("", rest))) for url in found_watches]
@@ -271,6 +281,8 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
         sources.append(SourceRef(source_id="youtube", channels=list(dict.fromkeys(channels))))
     if feeds:
         sources.append(SourceRef(source_id="rss", feeds=list(dict.fromkeys(feeds))))
+    if histories:
+        sources.append(SourceRef(source_id="history", histories=list(dict.fromkeys(histories))))
     if pages or following or watches:
         unique_watches = list({watch.url: watch for watch in watches}.values())
         sources.append(
@@ -334,6 +346,7 @@ def source_ids(sources: list[SourceRef]) -> list[str]:
             ids.append("x")
         ids += [youtube_source_id(channel) for channel in source.channels]
         ids += [rss_source_id(feed) for feed in source.feeds]
+        ids += [f"history:{name}" for name in source.histories]
         ids += [page_source_id(page) for page in source.pages]
         ids += [watch_source_id(watch.url) for watch in source.watches]
     return list(dict.fromkeys(ids))
@@ -376,6 +389,8 @@ def describe_sources(sources: list[SourceRef]) -> str:
             parts.append(f"{len(source.pages)} page{'s' if len(source.pages) != 1 else ''}")
         if source.following:
             parts.append(f"{len(source.following)} following list{'s' if len(source.following) != 1 else ''}")
+        if source.histories:
+            parts.append(f"your {' and '.join(source.histories)} history")
         if source.watches:
             parts.append(f"{len(source.watches)} watched page{'s' if len(source.watches) != 1 else ''}")
     if not parts:

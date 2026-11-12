@@ -15,7 +15,7 @@ ItemKind = Literal["post", "article", "video", "product", "link"]
 EventKind = Literal["open", "seen", "less_like_this"]
 
 ITEM_KINDS = set(get_args(ItemKind))
-DEFAULT_KINDS: dict[str, ItemKind] = {"x": "post", "youtube": "video", "rss": "article", "site": "link", "page": "post", "watch": "link"}
+DEFAULT_KINDS: dict[str, ItemKind] = {"x": "post", "youtube": "video", "rss": "article", "site": "link", "page": "post", "watch": "link", "history": "post"}
 TRACKING_PARAMS = {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref", "ref_src", "si"}
 HOST_NOISE = {"www", "feeds", "feed", "rss", "m"}
 WEB_SCHEMES = {"http", "https"}

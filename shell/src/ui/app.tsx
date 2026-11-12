@@ -143,12 +143,15 @@ function CommandHints({ text, pick }: { text: string; pick: (name: string) => vo
 }
 
 // New replies, proposals and "new look is live" land at the bottom, so the chat follows them there.
-const MAX_DROP_BYTES = 200_000
+const MAX_VIEW_BYTES = 200_000
+const MAX_EXPORT_BYTES = 20_000_000
 
-// A view file dropped on the chat: a .md or .txt file small enough to be one; anything else is left alone.
-function dropped_view(event: DragEvent): File | null {
+// What a file dropped on the chat is: a view file (.md, .txt), a data export (.json, .csv) or nothing to take.
+function dropped(event: DragEvent): { file: File; type: "import_view" | "import_history" } | null {
   const file = event.dataTransfer.files[0]
-  return file && file.size <= MAX_DROP_BYTES && /\.(md|txt)$/i.test(file.name) ? file : null
+  if (file && file.size <= MAX_VIEW_BYTES && /\.(md|txt)$/i.test(file.name)) return { file, type: "import_view" }
+  if (file && file.size <= MAX_EXPORT_BYTES && /\.(json|csv)$/i.test(file.name)) return { file, type: "import_history" }
+  return null
 }
 
 function Chat({ state }: { state: ShellState }) {
@@ -171,12 +174,12 @@ function Chat({ state }: { state: ShellState }) {
   const drop = (event: DragEvent) => {
     event.preventDefault()
     set_dragging(false)
-    const file = dropped_view(event)
-    if (file) file.text().then((content) => send({ type: "import_view", name: file.name, text: content }))
+    const found = dropped(event)
+    if (found) found.file.text().then((content) => send({ type: found.type, name: found.file.name, text: content }))
   }
   return (
     <section className={dragging ? "chat dragging" : "chat"} onDragOver={drag_over} onDragLeave={() => set_dragging(false)} onDrop={drop}>
-      {dragging && <div className="drop_hint">Drop a view file to add it</div>}
+      {dragging && <div className="drop_hint">Drop a view file, or a data export from Facebook or Amazon</div>}
       <div className="messages" ref={messages}>
         {state.chat.map((entry) => (
           <ChatMessage key={entry.entry_id} entry={entry} />

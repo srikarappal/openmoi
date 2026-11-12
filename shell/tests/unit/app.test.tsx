@@ -291,7 +291,7 @@ describe("App dropping a view file", () => {
     const chat = query(".chat") as HTMLElement
     await act(async () => chat.dispatchEvent(drop_event("dragover", [])))
     expect(chat.className).toBe("chat dragging")
-    expect(query(".drop_hint")?.textContent).toBe("Drop a view file to add it")
+    expect(query(".drop_hint")?.textContent).toBe("Drop a view file, or a data export from Facebook or Amazon")
     await act(async () => chat.dispatchEvent(drop_event("dragleave", [])))
     expect(chat.className).toBe("chat")
     const sent = bridge.sent.length
@@ -301,5 +301,7 @@ describe("App dropping a view file", () => {
     expect(bridge.sent).toHaveLength(sent)
     await act(async () => chat.dispatchEvent(drop_event("drop", [new File(["# AI news"], "ai.md")])))
     await vi.waitFor(() => expect(last_sent()).toEqual({ type: "import_view", name: "ai.md", text: "# AI news" }))
+    await act(async () => chat.dispatchEvent(drop_event("drop", [new File(["[]"], "your_posts_1.json")])))
+    await vi.waitFor(() => expect(last_sent()).toEqual({ type: "import_history", name: "your_posts_1.json", text: "[]" }))
   })
 })

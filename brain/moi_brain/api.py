@@ -144,6 +144,11 @@ class ImportRequest(BaseModel):
     url: str | None = Field(default=None, max_length=2000)
 
 
+class HistoryRequest(BaseModel):
+    name: str = Field(max_length=200)
+    text: str = Field(max_length=20_000_000)
+
+
 class ShareRequest(BaseModel):
     view_id: str
 
@@ -236,6 +241,12 @@ def open_early(view_id: str, brain: BrainDep) -> dict[str, str]:
 @router.post("/import")
 def import_view(body: ImportRequest, brain: BrainDep) -> Proposal:
     return brain.import_view(body.name, body.text, body.url)
+
+
+@router.post("/history")
+def import_history(body: HistoryRequest, brain: BrainDep) -> dict[str, Any]:
+    source_id, stored = brain.import_history(body.name, body.text)
+    return {"source_id": source_id, "stored": stored}
 
 
 @router.post("/share")

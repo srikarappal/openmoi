@@ -582,6 +582,9 @@ export class Shell implements ViewHost {
       case "import_view":
         await this.chat.import_file(command.name.slice(0, 200), command.text)
         return
+      case "import_history":
+        await this.chat.import_history(command.name.slice(0, 200), command.text)
+        return
       case "open_early":
         await this.brain.open_early(command.view_id)
         this.retract(`edition:${command.view_id}`)

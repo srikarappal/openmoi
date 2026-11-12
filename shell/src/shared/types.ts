@@ -405,4 +405,5 @@ export type ShellCommand =
   | { type: "extend_visit" }
   | { type: "open_early"; view_id: string }
   | { type: "import_view"; name: string; text: string }
+  | { type: "import_history"; name: string; text: string }
   | { type: "end_visit" }

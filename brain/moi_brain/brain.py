@@ -22,6 +22,7 @@ from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_mode
 from moi_brain.editions import LEAD, LOCAL_LEAD, Edition, EditionBook
 from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
+from moi_brain.exports import SOURCE_IDS, read_export
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.files import read_json, write_atomic
 from moi_brain.health import HealthBook, OracleReply, RunReport, Verdict, oracle_prompt
@@ -846,6 +847,16 @@ class Brain:
         except httpx.HTTPError as error:
             raise BadInput(f"Could not fetch {url}: {error}") from error
         return text[:MAX_IMPORT]
+
+    def import_history(self, name: str, text: str) -> tuple[str, int]:
+        """A data export you dropped (Facebook posts or events, Amazon orders): its records stored under its history
+        source. Returns the source id and how many items it holds now."""
+        found = read_export(name, text)
+        if found is None:
+            raise BadInput("That file is not a data export openMoi knows: Facebook's your_posts or your_events JSON, or Amazon's order history CSV.")
+        kind, records = found
+        items = self.store_records(SOURCE_IDS[kind], records)
+        return SOURCE_IDS[kind], len(items)
 
     def share_view(self, view_id: str) -> str:
         """A copy of a view to send to someone, in ~/openMoi/shared, without people, following lists or watched pages."""

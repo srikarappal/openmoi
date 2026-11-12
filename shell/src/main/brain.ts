@@ -128,6 +128,10 @@ export class BrainClient {
     return this.request("POST", "/import", { name, text, url })
   }
 
+  import_history(name: string, text: string): Promise<{ source_id: string; stored: number }> {
+    return this.request("POST", "/history", { name, text })
+  }
+
   share_view(view_id: string): Promise<{ path: string }> {
     return this.request("POST", "/share", { view_id })
   }

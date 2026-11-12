@@ -142,6 +142,16 @@ export class ChatController {
     await this.working(async () => this.offer_import(await this.brain.import_view(name, text, null)))
   }
 
+  // A data export you dropped (Facebook posts or events, Amazon orders): stored as your history, which a view lists.
+  async import_history(name: string, text: string): Promise<void> {
+    this.add({ role: "you", text: `Import ${name}` })
+    await this.working(async () => {
+      const { source_id, stored } = await this.hooks.track(`Reading ${name}`, () => this.brain.import_history(name, text))
+      const history = source_id.replace(/^history:/, "")
+      this.say(`Your ${history} history now holds ${stored} items. Add "History: ${history}" to a view's Sources to see them.`)
+    })
+  }
+
   private offer_import(proposal: Proposal): void {
     this.add({ role: "moi", text: `Add ${proposal.reply}`, proposal, status: "pending" })
   }

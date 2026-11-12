@@ -327,3 +327,14 @@ describe("ChatController sharing", () => {
     expect(last_reply(chat)).toBe("Saved a copy of feed to send: /Users/me/openMoi/shared/feed.md. People, following lists and watched pages are left out.")
   })
 })
+
+describe("ChatController history imports", () => {
+  it("stores a dropped export as your history and says how to show it", async () => {
+    const import_history = vi.fn(async () => ({ source_id: "history:amazon", stored: 42 }))
+    const { chat, labels } = make_chat({ import_history } as unknown as Partial<BrainClient>)
+    await chat.import_history("Retail.OrderHistory.1.csv", "csv")
+    expect(import_history).toHaveBeenCalledWith("Retail.OrderHistory.1.csv", "csv")
+    expect(labels).toEqual(["Reading Retail.OrderHistory.1.csv"])
+    expect(last_reply(chat)).toBe('Your amazon history now holds 42 items. Add "History: amazon" to a view\'s Sources to see them.')
+  })
+})

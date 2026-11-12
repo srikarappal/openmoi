@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS moments (
 )
 """
 FOLLOW_TTL = timedelta(days=30)
+HISTORY_PREFIX = "history:"
 INDEXES = (
     "CREATE INDEX IF NOT EXISTS items_by_url ON items (url)",
     "CREATE INDEX IF NOT EXISTS items_by_source ON items (source_id, published_at)",
@@ -160,11 +161,15 @@ class Store:
         return [item for item, _ in self.items_with_seen(source_ids, since)]
 
     def items_with_seen(self, source_ids: list[str], since: datetime) -> list[tuple[Item, datetime | None]]:
-        """Items from these sources published (or fetched) after since, each with when you saw it."""
+        """Items from these sources published (or fetched) after since, each with when you saw it. Your own history
+        (from data exports) is old by nature and always counts."""
         if not source_ids:
             return []
         marks = ", ".join("?" for _ in source_ids)
-        query = f"SELECT item_json, seen_at FROM items WHERE source_id IN ({marks}) AND COALESCE(published_at, fetched_at) >= ?"
+        query = (
+            f"SELECT item_json, seen_at FROM items WHERE source_id IN ({marks}) "
+            f"AND (COALESCE(published_at, fetched_at) >= ? OR source_id LIKE '{HISTORY_PREFIX}%')"
+        )
         with self.lock:
             rows = self.connection.execute(query, (*source_ids, iso(since))).fetchall()
         return [(Item.model_validate_json(item_json), datetime.fromisoformat(seen_at) if seen_at else None) for item_json, seen_at in rows]
@@ -240,10 +245,10 @@ class Store:
             )
 
     def expire(self, now: datetime) -> int:
-        """Drop items no source has listed for a month, unless you opened them."""
+        """Drop items no source has listed for a month, unless you opened them; your own history stays."""
         with self.lock, self.connection:
             cursor = self.connection.execute(
-                "DELETE FROM items WHERE COALESCE(listed_at, fetched_at) < ? AND item_id NOT IN "
+                f"DELETE FROM items WHERE COALESCE(listed_at, fetched_at) < ? AND source_id NOT LIKE '{HISTORY_PREFIX}%' AND item_id NOT IN "
                 "(SELECT item_id FROM events WHERE event_kind = 'open' AND item_id IS NOT NULL)",
                 (iso(now - ITEM_TTL),),
             )

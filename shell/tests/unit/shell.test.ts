@@ -681,3 +681,12 @@ describe("Shell after the review", () => {
     expect(after_edit).toHaveBeenCalledWith("feed")
   })
 })
+
+describe("Shell history imports", () => {
+  it("hands a dropped data export to the chat", async () => {
+    const { shell, window } = await started()
+    const imported = vi.spyOn(shell.chat, "import_history").mockResolvedValue()
+    await command(window, { type: "import_history", name: "your_events.json", text: "[]" })
+    expect(imported).toHaveBeenCalledWith("your_events.json", "[]")
+  })
+})
