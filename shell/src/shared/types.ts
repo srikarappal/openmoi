@@ -79,6 +79,38 @@ export interface ViewPage {
   lens_stale: boolean
   // Per source, the share of its items the view's rules let through.
   keep_rate?: Record<string, number>
+  // Feeds still being fetched for this view, apart from tagging.
+  reading?: boolean
+  // A view with editions: when the one on show came out and when the next comes out.
+  edition?: string | null
+  next_edition?: string | null
+}
+
+// A view with a Time section: its editions, a read due now and how long one visit lasts.
+export interface ViewSchedule {
+  view_id: string
+  title: string
+  edition: string | null
+  next_edition: string | null
+  read_for: string | null
+  visit_minutes: number | null
+}
+
+// One answer to "why are you here?": a view, how long a visit lasts and when its next edition comes out.
+export interface GateChoice {
+  view_id: string
+  title: string
+  visit_minutes: number | null
+  next_edition: string | null
+}
+
+// Shown when a visit's time is up, in place of the view.
+export interface StopScreen {
+  view_id: string
+  title: string
+  minutes: number
+  read: string[]
+  next_edition: string | null
 }
 
 export interface IngestResult {
@@ -143,7 +175,7 @@ export interface Proposal {
   reply: string
 }
 
-export type EditScope = "any" | "memory" | "rules" | "sources" | "layout" | "view"
+export type EditScope = "any" | "memory" | "rules" | "sources" | "layout" | "time" | "view"
 
 export interface ModelChange {
   slot?: "fast" | "smart" | "both"
@@ -248,6 +280,8 @@ export interface ShellState {
   activities: Activity[]
   chrome_pages: ChromePageInfo[]
   relay: RelayInfo
+  gate: GateChoice[] | null
+  stop: StopScreen | null
 }
 
 export type ShellCommand =
@@ -266,3 +300,6 @@ export type ShellCommand =
   | { type: "select_chrome_page"; page_id: number }
   | { type: "close_chrome_page"; page_id: number }
   | { type: "relay_trust"; extension_id: string }
+  | { type: "choose_view"; view_id: string }
+  | { type: "extend_visit" }
+  | { type: "end_visit" }

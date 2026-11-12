@@ -12,14 +12,16 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/feed", usage: "/feed <what this view should show>", summary: "rules: hide, boost or limit items in this view" },
   { name: "/sources", usage: "/sources <what to read>", summary: "add or remove sources of this view" },
   { name: "/layout", usage: "/layout <how it should look>", summary: "change the look; builds a new tested lens" },
+  { name: "/time", usage: "/time <when this view comes out>", summary: "editions and how long a visit lasts" },
   { name: "/memory", usage: "/memory <what to remember or forget>", summary: "facts, likes, dislikes and people, for every view" },
   { name: "/newview", usage: "/newview <name> [what it should be]", summary: "create views/<name>.md as a new tab" },
   { name: "/model", usage: "/model [fast|smart|both] [ollama|openrouter] <model>  or  /model privacy on|off", summary: "show or change models and the privacy switch" },
   { name: "/settings", usage: "/settings [open]", summary: "show this view's settings, memory and models; open the folder" },
+  { name: "/background", usage: "/background on|off", summary: "keep reading on schedule with the window closed, and start at login" },
   { name: "/help", usage: "/help", summary: "list the commands" },
 ]
 
-const SCOPES: Record<string, EditScope> = { "/memory": "memory", "/feed": "rules", "/sources": "sources", "/layout": "layout" }
+const SCOPES: Record<string, EditScope> = { "/memory": "memory", "/feed": "rules", "/sources": "sources", "/layout": "layout", "/time": "time" }
 const VIEW_NAME = /^[a-z0-9_]{1,40}$/i
 const SLOTS = new Set(["fast", "smart", "both"])
 const PROVIDERS = new Set(["ollama", "openrouter"])
@@ -29,6 +31,7 @@ export type ChatCommand =
   | { kind: "new_view"; view_id: string; title: string; description: string }
   | { kind: "model"; change: ModelChange | null }
   | { kind: "settings"; open: boolean }
+  | { kind: "background"; on: boolean }
   | { kind: "help" }
   | { kind: "error"; message: string }
 
@@ -66,6 +69,7 @@ export function parse_chat(input: string): ChatCommand {
   }
   if (command === "/model") return parse_model(words)
   if (command === "/settings") return words[0] && words[0] !== "open" ? usage_error(command) : { kind: "settings", open: words[0] === "open" }
+  if (command === "/background") return words[0] === "on" || words[0] === "off" ? { kind: "background", on: words[0] === "on" } : usage_error(command)
   if (command === "/help") return { kind: "help" }
   return { kind: "error", message: `Unknown command ${name}. Type /help for the list.` }
 }

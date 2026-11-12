@@ -1,13 +1,14 @@
 """HTTP API the shell calls. Thin on purpose: every handler delegates to the Brain."""
 
 import hmac
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import Brain, MineRequest, Overview, PageSource, ViewPage
+from moi_brain.brain import Brain, MineRequest, Overview, PageSource, ViewPage, ViewSchedule
 from moi_brain.compile import BadInput, ViewInfo
 from moi_brain.config import ModelChange, ModelInfo
 from moi_brain.edits import EditScope, Proposal, StaleProposal
@@ -126,6 +127,11 @@ class ProposalRequest(BaseModel):
     proposal_id: str
 
 
+class ScheduleDoneRequest(BaseModel):
+    view_id: str
+    edition: datetime
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -173,6 +179,17 @@ def ingest(body: IngestRequest, brain: BrainDep) -> IngestResponse:
 @router.post("/view/{view_id}")
 def view_page(view_id: str, body: ViewRequest, brain: BrainDep) -> ViewPage:
     return brain.view_page(view_id, body.exclude_ids, body.limit)
+
+
+@router.get("/schedule")
+def schedule(brain: BrainDep) -> list[ViewSchedule]:
+    return brain.schedules()
+
+
+@router.post("/schedule/done")
+def schedule_done(body: ScheduleDoneRequest, brain: BrainDep) -> dict[str, str]:
+    brain.schedule_done(body.view_id, body.edition)
+    return {"status": "done"}
 
 
 @router.post("/events")

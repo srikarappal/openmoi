@@ -158,6 +158,8 @@ def edit(payload: dict[str, Any], base_url: str) -> str:
     if "less like this" in ask and request.get("item"):
         line = f"* Posts like \"{request['item']['title']}\""
         edits.append({"file": "memory/dislikes.md", "section": None, "text": "\n".join([*bullet_lines(files.get("memory/dislikes.md", ""), None), line])})
+    if "edition" in ask or "visit" in ask:
+        edits.append({"file": view_file, "section": "Time", "text": f"* {request['request'].strip().rstrip('.')}."})
     if "column" in ask or "magazine" in ask or "compact" in ask:
         edits.append({"file": view_file, "section": "Layout", "text": request["request"]})
     rollback = "previous look" in ask

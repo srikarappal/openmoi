@@ -32,6 +32,7 @@ function make_chat(brain: Partial<BrainClient>) {
     view_created: vi.fn(async () => {}),
     model_changed: vi.fn(),
     open_folder: vi.fn(),
+    set_background: vi.fn((on: boolean) => (on ? "on now" : "off now")),
     track,
     changed: vi.fn(),
   }
@@ -265,5 +266,16 @@ describe("explain", () => {
     ["text", "text"],
   ])("%s", (error, expected) => {
     expect(explain(error)).toBe(expected)
+  })
+})
+
+describe("ChatController background", () => {
+  it("passes /background to the shell and says what it means", async () => {
+    const { chat, hooks } = make_chat({})
+    await chat.send("/background on")
+    expect(hooks.set_background).toHaveBeenCalledWith(true)
+    expect(last_reply(chat)).toBe("on now")
+    await chat.send("/background off")
+    expect(last_reply(chat)).toBe("off now")
   })
 })

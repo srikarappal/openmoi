@@ -25,7 +25,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "4"
+COMPILER_VERSION = "5"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
@@ -33,6 +33,11 @@ DEFAULT_BOOST = 3.0
 FIXED_FIELDS = ("source_id", "author_handle", "topic", "media_kind", "text", "age_hours")
 JUDGMENT_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 MAX_QUESTION = 200
+CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s*([ap])\.?m\b\.?|\b(\d{1,2}):(\d{2})\b|\b(\d{1,2})\s*([ap])\.?m\b\.?|\b(noon|midnight)\b")
+EDITION_COUNT = re.compile(r"\b(\d+)\s+(?:items|posts|stories|things|cards)\b")
+DURATION = re.compile(r"\b(\d+)\s*(minutes?|mins?|hours?|hrs?)\b")
+MAX_EDITION_SIZE = 500
+MAX_VISIT_MINUTES = 600
 RETRY_AFTER_SECONDS = 60.0
 RULES_PROMPT = """You turn rules written in plain words into JSON for openMoi, a personal feed reader.
 Reply with one JSON object: {"rules": [<rule>, ...], "judgments": [<judgment>, ...], "summary": "<one short sentence>"}.
@@ -113,6 +118,14 @@ class Rule(BaseModel):
     count_per_day: int | None = None
 
 
+class TimeSpec(BaseModel):
+    """A view's Time section: when its editions come out, how big they are and how long one visit lasts."""
+
+    editions: list[str] = Field(default_factory=list)  # "07:00" on your clock, sorted
+    edition_size: int | None = None
+    visit_minutes: int | None = None
+
+
 class SourceRef(BaseModel):
     source_id: Literal["x", "youtube", "rss", "page"]
     page_type: str | None = None
@@ -129,6 +142,7 @@ class CompiledView(BaseModel):
     sources: list[SourceRef] = Field(default_factory=list)
     rules: list[Rule] = Field(default_factory=list)
     judgments: list[Judgment] = Field(default_factory=list)
+    time: TimeSpec = Field(default_factory=TimeSpec)
     layout: str = ""
     summary: str = ""
     warnings: list[str] = Field(default_factory=list)
@@ -188,6 +202,47 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
     if pages:
         sources.append(SourceRef(source_id="page", pages=list(dict.fromkeys(pages))))
     return sources, warnings
+
+
+def clock_time(match: re.Match[str]) -> str | None:
+    """One time of day as HH:MM, or None for something like 25:00 or 13pm."""
+    if match.group(8):
+        return "12:00" if match.group(8) == "noon" else "00:00"
+    if match.group(1) or match.group(6):
+        hour, minute, half = int(match.group(1) or match.group(6)), int(match.group(2) or 0), match.group(3) or match.group(7)
+        if not 1 <= hour <= 12 or minute > 59:
+            return None
+        hour = hour % 12 + (12 if half == "p" else 0)
+    else:
+        hour, minute = int(match.group(4)), int(match.group(5))
+        if hour > 23 or minute > 59:
+            return None
+    return f"{hour:02d}:{minute:02d}"
+
+
+def parse_time_section(body: str) -> tuple[TimeSpec, list[str]]:
+    """Lines such as "Editions at 7:00 and 6pm", "Each edition has 15 items" or "A visit lasts 10 minutes"."""
+    editions: list[str] = []
+    size, visit, warnings = None, None, []
+    for line in bullets(body):
+        text = line.lower()
+        if "edition" in text:
+            times = [clock_time(match) for match in CLOCK.finditer(text)]
+            count = EDITION_COUNT.search(text)
+            if None in times or not (times or count):
+                warnings.append(f"No time of day or size found in: {line}")
+            editions += [found for found in times if found]
+            size = min(int(count.group(1)), MAX_EDITION_SIZE) if count else size
+        elif "visit" in text or "session" in text:
+            duration = DURATION.search(text)
+            if duration is None:
+                warnings.append(f"No length found in: {line}")
+                continue
+            minutes = int(duration.group(1)) * (60 if duration.group(2).startswith("h") else 1)
+            visit = min(max(minutes, 1), MAX_VISIT_MINUTES)
+        else:
+            warnings.append(f"Time line not understood: {line}")
+    return TimeSpec(editions=sorted(set(editions)), edition_size=size or None, visit_minutes=visit), warnings
 
 
 def source_ids(sources: list[SourceRef]) -> list[str]:
@@ -327,6 +382,8 @@ class Compiler:
     ) -> tuple[CompiledView, bool]:
         title, sections = parse_sections(view_text)
         sources, warnings = parse_sources(section_text(sections, "sources"), read_takeout(self.paths.takeout))
+        time, time_warnings = parse_time_section(section_text(sections, "time"))
+        warnings += time_warnings
         try:
             if not use_model:
                 raise LlmError("still compiling")
@@ -342,6 +399,7 @@ class Compiler:
             sources=sources,
             rules=rules,
             judgments=judgments,
+            time=time,
             layout=section_text(sections, "layout"),
             summary=" ".join(part for part in (describe_sources(sources), rules_summary) if part),
             warnings=warnings,

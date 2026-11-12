@@ -18,19 +18,20 @@ from moi_brain.llm import Gateway
 from moi_brain.md import replace_body, replace_section
 from moi_brain.memory import TOPIC_FILES
 
-VIEW_SECTIONS = ("Sources", "Rules", "Layout")
+VIEW_SECTIONS = ("Sources", "Rules", "Layout", "Time")
 MAX_PROPOSALS = 50
 # Memory files come back whole on every edit, so the cap leaves room for years of likes and dislikes.
 MAX_EDIT_TEXT = 60_000
 LensAction = Literal["rollback"]
-EditScope = Literal["any", "memory", "rules", "sources", "layout", "view"]
-SCOPE_SECTIONS = {"rules": "Rules", "sources": "Sources", "layout": "Layout"}
+EditScope = Literal["any", "memory", "rules", "sources", "layout", "time", "view"]
+SCOPE_SECTIONS = {"rules": "Rules", "sources": "Sources", "layout": "Layout", "time": "Time"}
 SCOPE_RULES = {
     "any": None,
     "memory": "Only change the memory files.",
     "rules": "Only change the Rules section of the view.",
     "sources": "Only change the Sources section of the view.",
     "layout": "Only change the Layout section of the view.",
+    "time": "Only change the Time section of the view.",
     "view": "Write the view file's Sources, Rules and Layout sections from the request. Do not touch memory.",
 }
 SYSTEM_PROMPT = """You edit the plain text files that configure openMoi, a personal feed reader, for one person.
@@ -39,13 +40,15 @@ Reply with one JSON object:
 
 recent_journal lists what the person opened lately; use it when the request refers to it.
 Files you may edit, all given to you with their current content:
-* views/<view>.md: sections "Sources", "Rules" and "Layout". For these give "section" and the complete new text of that section.
+* views/<view>.md: sections "Sources", "Rules", "Layout" and "Time". For these give "section" and the complete new text of that section.
   Sources are lines such as "* X home timeline", "* YouTube: @handle, @other", "* RSS: <feed address>" or
   "* Page: <address of any site's feed page>" (Instagram, Facebook, a YouTube home: read as you scroll).
   Rules are plain words, one per line, each line starting with "* ".
   Layout describes the look in plain words, one idea per line. Add what the person asks for as new lines, close to their own words
   (for example "A separate section for each source."). Keep every existing Layout line unless the request names that exact look
   and asks to drop or change it: a request about one aspect (sections, sizes, colors) never removes lines about another (tile style).
+  Time says when the view comes out and for how long, one line each, starting with "* ": "* Editions at 7:00 and 18:00."
+  (the view then shows only what was read by its latest edition), "* Each edition has 15 items." and "* A visit lasts 10 minutes.".
 * memory/about_me.md, memory/likes.md, memory/dislikes.md, memory/people.md: lists of lines starting with "* ".
   For these use "section": null and give the complete new list.
 

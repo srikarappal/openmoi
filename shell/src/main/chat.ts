@@ -13,6 +13,8 @@ export interface ChatHooks {
   view_created(view_id: string): Promise<void>
   model_changed(): void
   open_folder(path: string): void
+  // Turns reading in the background on or off; the reply says what that means.
+  set_background(on: boolean): string
   track: Track
   changed(): void
 }
@@ -99,6 +101,9 @@ export class ChatController {
         this.say(command.open ? `Opened ${overview.home}.` : format_overview(overview))
         return
       }
+      case "background":
+        this.say(this.hooks.set_background(command.on))
+        return
       case "help":
         this.say(help_text())
         return

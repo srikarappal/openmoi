@@ -13,8 +13,9 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from moi_brain.compile import BadInput, CompiledView, Compiler, Judgment, ViewInfo, check_view_id
+from moi_brain.compile import BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
 from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, save_settings
+from moi_brain.editions import LEAD, LOCAL_LEAD, Edition, EditionBook
 from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
@@ -67,6 +68,22 @@ class ViewPage(BaseModel):
     lens_stale: bool = False
     # Per source, the share of its items your rules let through, so the shell reads enough ahead.
     keep_rate: dict[str, float] = Field(default_factory=dict)
+    # Feeds still being fetched for this view, apart from tagging.
+    reading: bool = False
+    # A view with editions: the one on show and when the next comes out.
+    edition: datetime | None = None
+    next_edition: datetime | None = None
+
+
+class ViewSchedule(BaseModel):
+    """A view with a Time section: its editions, a read due now and how long a visit lasts."""
+
+    view_id: str
+    title: str
+    edition: datetime | None
+    next_edition: datetime | None
+    read_for: datetime | None
+    visit_minutes: int | None
 
 
 class PassiveRecords(BaseModel):
@@ -112,6 +129,25 @@ def url_prefix(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
 
 
+def edition_items(
+    size: int,
+    edition: Edition,
+    entries: list[tuple[Item, datetime | None]],
+    items: list[Item],
+    shown: list[str],
+    rules: list[Rule],
+    now: datetime,
+    long_seen: set[str],
+) -> list[Item]:
+    """An edition's own items: what it already showed you or you saw since it came out, then the best of the rest up to its
+    size. Those stay members on a reload, so reading the whole edition never empties it and never lets more in."""
+    present = {item.item_id for item in items}
+    fixed = ({item.item_id for item, seen_at in entries if seen_at and seen_at >= edition.at} | set(shown)) & present
+    best, _ = rank(items, rules, now, long_seen | fixed, max(size - len(fixed), 0))
+    members = fixed | {entry.item.item_id for entry in best}
+    return [item for item in items if item.item_id in members]
+
+
 def needs_tags(compiled: CompiledView) -> bool:
     """A view whose rules test topics or judgments shows an item only once the tagging pass has looked at it."""
     return bool(rule_topics(compiled.rules) or compiled.judgments)
@@ -138,6 +174,7 @@ class Brain:
         self.settings_problems = list(settings_problems or [])
         self.http = http or httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True)
         self.store = Store(paths.db)
+        self.editions = EditionBook(paths.editions)
         self.gateway = Gateway(settings, paths.llm_log, self.http)
         self.fetcher = FeedFetcher(self.http, paths.channel_cache, youtube_base)
         self.memory = Memory(paths)
@@ -340,12 +377,19 @@ class Brain:
         self.retag_if_needed()
         now = self.clock()
         entries = self.store.items_with_seen(compiled.source_ids(), now - VIEW_WINDOW)
-        items, long_seen = [item for item, _ in entries], seen_long_ago(entries, now - SEEN_KEEP)
+        edition = self.editions.current(view_id, compiled.time, now) if compiled.time.editions else None
+        if edition:
+            entries = [(item, seen_at) for item, seen_at in entries if item.fetched_at <= edition.cutoff]
+        items = [item for item, _ in entries]
+        long_seen = seen_long_ago(entries, max(now - SEEN_KEEP, edition.at) if edition else now - SEEN_KEEP)
         if needs_tags(compiled) and self.tagger.healthy:
             items = [item for item in items if item.tagged and is_judged(item, compiled.judgments)]
+        if edition and compiled.time.edition_size:
+            items = edition_items(compiled.time.edition_size, edition, entries, items, exclude_ids, compiled.rules, now, long_seen)
         ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order)
         with self.lock:
-            refreshing = view_id in self.refreshing or self.tagger.busy
+            reading = view_id in self.refreshing
+            refreshing = reading or self.tagger.busy
         source_ids = set(compiled.source_ids())
         current = {(source_id, location) for source_id, location, _ in self.feed_readers(compiled)} | {(source_id, source_id) for source_id in source_ids}
         problems = [f"{source_id}: {status}" for source_id, status in self.status_by_source(current).items() if status != "ok"]
@@ -363,7 +407,36 @@ class Brain:
             layout_hash=compiled.layout_hash,
             lens_stale=self.lenses.is_stale(lens_key(view_id, "feed"), compiled.layout, compiled.layout_hash),
             keep_rate=kept_share(items, compiled.rules, now),
+            reading=reading,
+            edition=edition.at if edition else None,
+            next_edition=edition.next_at if edition else None,
         )
+
+    def schedules(self) -> list[ViewSchedule]:
+        """Views with a Time section; read_for is set while an edition's read is due. Never asks the model."""
+        now = self.clock()
+        lead = LOCAL_LEAD if self.model_settings().fast.local else LEAD
+        found = []
+        for compiled in self.compiler.all_compiled(use_model=False):
+            time = compiled.time
+            if not (time.editions or time.visit_minutes):
+                continue
+            edition = self.editions.current(compiled.view_id, time, now) if time.editions else None
+            found.append(
+                ViewSchedule(
+                    view_id=compiled.view_id,
+                    title=compiled.title,
+                    edition=edition.at if edition else None,
+                    next_edition=edition.next_at if edition else None,
+                    read_for=self.editions.due(compiled.view_id, time, now, lead) if time.editions else None,
+                    visit_minutes=time.visit_minutes,
+                )
+            )
+        return found
+
+    def schedule_done(self, view_id: str, edition: datetime) -> None:
+        """The read for this edition finished; one that finished after the edition came out moves it to now."""
+        self.editions.done(check_view_id(view_id), edition, self.clock())
 
     def record_events(self, events: list[Event]) -> None:
         """Store events; every item you open also gets a line in today's journal."""

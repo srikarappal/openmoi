@@ -257,3 +257,85 @@ describe("ViewController rendering", () => {
     expect(brain.events.mock.calls).toEqual([[[{ view_id: "feed", item_id: "a", event_kind: "seen" }]]])
   })
 })
+
+describe("ViewController editions", () => {
+  const SEVEN = "2026-11-10T07:00:00.000Z"
+  const SIX_PM = "2026-11-10T18:00:00.000Z"
+  const EDITION = { ...PAGE, edition: SEVEN, next_edition: SIX_PM, caught_up: true } as ViewPage
+
+  it("reads for an edition with no lens open, deeper than a look, and waits for the brain's feeds", async () => {
+    const reading = { ...PAGE, view_id: "morning", reading: true } as ViewPage
+    const { views, sources, brain, hooks, context } = make_views([read(40)], [reading, PAGE])
+    sources.fill.mockImplementationOnce(async (...args: unknown[]) => {
+      await (args[2] as (records: unknown[]) => Promise<void>)([{ url: "https://x.com/1", text: "hi" }])
+      return read(1)
+    })
+    await views.read_for_edition("morning")
+    expect(brain.refresh).toHaveBeenCalledWith("morning", true)
+    expect(fills(sources)).toEqual([["x", 120, true, true]])
+    expect(brain.ingest).toHaveBeenCalledWith("x", [{ url: "https://x.com/1", text: "hi" }], "https://x.com/home")
+    expect(brain.view_page).toHaveBeenCalledTimes(2)
+    expect(context.send).not.toHaveBeenCalled()
+    expect(hooks.labels).toEqual(["Reading for the next morning edition", "Reading x"])
+  })
+
+  it("gives an open lens what an edition read finds", async () => {
+    const { views, sources, context } = make_views([], [EDITION, PAGE])
+    sources.fill.mockImplementationOnce(async (...args: unknown[]) => {
+      await (args[2] as (records: unknown[]) => Promise<void>)([{ url: "https://x.com/1", text: "hi" }])
+      return read(1)
+    })
+    await views.read_for_edition("feed")
+    expect(context.send).toHaveBeenCalledWith({ type: "append", items: [], cursor: null })
+  })
+
+  it("never reads ahead in an edition and says once when you have read all of it", async () => {
+    const { views, context, sources, hooks, brain } = make_views([read(20)], [EDITION, EDITION, EDITION, EDITION])
+    Object.assign(brain, { events: vi.fn(async () => ({ recorded: 1 })), lens: vi.fn(async () => "<p></p>") })
+    await views.on_ready(context)
+    await vi.waitFor(() => expect(hooks.labels).toContain("Updating feed"))
+    await vi.waitFor(() => expect(brain.view_page).toHaveBeenCalledTimes(2))
+    expect(sources.fill).not.toHaveBeenCalled()
+    expect(cursors(context).every((cursor) => cursor === null)).toBe(true)
+    const shown = show_items(context, 3)
+    await views.on_event(context, { type: "seen", item_ids: [shown[2]] })
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(sources.fill).not.toHaveBeenCalled()
+    const told = hooks.notify.mock.calls.filter((call) => String(call[2]).startsWith("edition:"))
+    expect(told).toHaveLength(1)
+    expect(told[0][0]).toMatch(/^That is all of the .+ edition of feed\. The next one comes out at .+\.$/)
+  })
+
+  it("reads an edition's sources when you refresh it yourself", async () => {
+    const { views, context, sources } = make_views([read(5), read(5)], [EDITION, EDITION, EDITION])
+    await views.refresh(context, false)
+    expect(sources.fill).toHaveBeenCalledTimes(1)
+    await views.refresh(context, false)
+    expect(sources.fill).toHaveBeenCalledTimes(1)
+    await views.refresh(context, true)
+    expect(sources.fill).toHaveBeenCalledTimes(2)
+  })
+
+  it("remembers what you saw, for the end of a visit", async () => {
+    const { views, context, brain } = make_views([])
+    Object.assign(brain, { events: vi.fn(async () => ({ recorded: 1 })) })
+    context.rendered.set("a", { item_id: "a", title: "First story", text: null, url: "https://a.com" } as never)
+    context.rendered.set("b", { item_id: "b", title: null, text: "x".repeat(200), url: "https://b.com" } as never)
+    context.rendered.set("c", { item_id: "c", title: null, text: null, url: "https://c.com/3" } as never)
+    const before = Date.now()
+    await views.on_event(context, { type: "seen", item_ids: ["a", "b", "c", "a", "missing"] })
+    expect(views.seen_since("feed", before)).toEqual(["First story", "x".repeat(80), "https://c.com/3"])
+    expect(views.seen_since("feed", Date.now() + 1)).toEqual([])
+    expect(views.seen_since("tech", 0)).toEqual([])
+  })
+
+  it("reads a source again in Chrome for a view whose lens is closed", async () => {
+    const { views, sources } = make_views([{ status: "challenge", url: "https://x.com/login", driver: "openmoi" }, read(3)], [], [X_SOURCE])
+    await views.read_for_edition("morning")
+    await views.chrome_connected()
+    expect(fills(sources)).toEqual([
+      ["x", 120, true, true],
+      ["x", 30, true, true],
+    ])
+  })
+})

@@ -178,6 +178,10 @@ class Paths:
         return self.state / "tagged_topics.json"
 
     @property
+    def editions(self) -> Path:
+        return self.state / "editions.json"
+
+    @property
     def relay_trust(self) -> Path:
         return self.state / "relay_trusted.json"
 

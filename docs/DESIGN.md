@@ -80,7 +80,7 @@ The MVP (Part 1) proves this with a Feed across X, YouTube and news, views and m
 | 2 | Generate the renderer, not the page | Lenses and extractors are generated once and cached; LLMs stay off the hot path |
 | 3 | One ladder | Same adapter contract for feeds, web pages and, later, native apps |
 | 4 | Local first | Sessions, items, memory and caches live on your disk; hosted models see structure, not your content, by default |
-| 5 | Your device, your session, your pace | Reads only on your action, fixed budgets, stop on challenge, no proxies, no fingerprint games (Part 3 proposes reads on a schedule you wrote, 35) |
+| 5 | Your device, your session, your pace | Reads on your action or on a schedule you wrote, fixed budgets, stop on challenge, no proxies, no fingerprint games |
 | 6 | Reads free, writes gated | MVP is read only; later every write passes one gate and money always ends on the real site |
 | 7 | Content is data, never instructions | Web text can never trigger an action or change your files |
 | 8 | Inspectable and reversible | Your rules, memory and views are files you can read; reasons on every item; lens versions; show original |
@@ -352,6 +352,10 @@ A view file:
 
 ## Layout
 Two column magazine, big images, no like counts, dark theme.
+
+## Time
+* Editions at 7:00 and 18:00.
+* Each edition has 15 items.
 ```
 
 A memory file:
@@ -426,10 +430,12 @@ The chat panel takes slash commands for each kind of setting; anything without a
 | `/feed <what this view should show>` | Edits only the Rules section of the current view | Yes, then you confirm the diff |
 | `/sources <what to read>` | Edits only the Sources section | Yes, then you confirm |
 | `/layout <how it should look>` | Edits only the Layout section; a new tested lens follows | Yes, then you confirm |
+| `/time <when this view comes out>` | Edits only the Time section: editions, their size, how long a visit lasts | Yes, then you confirm |
 | `/memory <what to remember or forget>` | Edits only the memory files | Yes, then you confirm |
 | `/newview <name> [what it should be]` | Creates `views/<name>.md` as a new tab; with a description the model drafts the file for you to confirm | Only with a description |
 | `/model [fast\|smart\|both] [ollama\|openrouter] <model>`, `/model privacy on\|off` | Shows or changes the model slots and the privacy switch, saved to `.moi/config.json` | No |
 | `/settings [open]` | Shows the current view's sections, memory, models and Chrome; `open` opens `~/openMoi` | No |
+| `/background on\|off` | Starts openMoi at login and keeps it reading on schedule with its window closed | No |
 | `/help` | Lists the commands | No |
 
 A scope is enforced in the brain, not just asked of the model: files outside the scope are not even sent and edits to other sections are dropped.
@@ -579,6 +585,7 @@ Items expire after 30 days unless opened. Everything else the MVP stores is a fi
 | `POST /refresh {view_id, force}` | Start the rung 1 refresh in a thread; returns the page sources the shell should read |
 | `POST /ingest {source_id, records, page_url, view_id?, kind?}` | Raw records to items; with a view id, also the Mine page ranked in page order and whether its lens is stale |
 | `POST /view/{view_id} {exclude_ids}` | Ranked page with reasons, excluding what the lens already shows, plus `refreshing`, `version`, `lens_stale` and `keep_rate` (per source, the share its rules let through, which sizes read ahead) |
+| `GET /schedule`, `POST /schedule/done {view_id, edition}` | Views with a Time section, their editions and any read due now (never asks the model); a finished edition read |
 | `POST /events {events}` | `open`, `seen`, `less_like_this`; opens also go into the journal |
 | `POST /edit {view_id, text, item_id?, scope}` | Proposed section edits to .md files, shown as diffs; `scope` (memory, rules, sources, layout, view) limits what may change |
 | `POST /views {view_id, title}` | A new empty view file |
@@ -764,7 +771,7 @@ Even a dogfood build keeps these, because they cost little now and a lot to retr
 
 1. Local only: no openMoi server; your sessions stay in your Chrome (or openMoi's own Chromium); the relay listens on 127.0.0.1 only.
 2. Read only: no code path clicks, posts or buys.
-3. Human pace: reads only on your action, a fixed budget, stop on challenge, the standard user agent, no proxies.
+3. Human pace: reads on your action or on a schedule you wrote, a fixed daily budget, stop on challenge, the standard user agent, no proxies.
 4. Lens sandbox and CSP from the very first lens.
 5. Your files change only after you confirm a diff; web content never writes memory or rules.
 6. Model calls that read web content return JSON only and have no tools.
@@ -772,7 +779,7 @@ Even a dogfood build keeps these, because they cost little now and a lot to retr
 8. Electron security baseline on every view.
 9. Chrome relay: only an extension you allowed may connect; openMoi only reads pages and only closes tabs it opened itself.
 
-Part 3 proposes changing 3 (reads on a schedule you wrote) and 5 (content may add to the journal); see 35.
+Part 3 changed 3 (reads on a schedule you wrote, built) and proposes changing 5 (content may add to the journal); see 35.
 
 ## 13. Milestones `[M1 to M3 built]`
 
@@ -791,7 +798,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 445 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 328 shell and extension unit (97% of lines), 27 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 475 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 366 shell and extension unit (97% of lines), 29 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -1328,9 +1335,9 @@ Sites tune their feeds for their own goals: time on site, ads, outrage. openMoi 
 
 | # | Scenario | Flow | Status |
 |---|---|---|---|
-| 1 | Editions | reader tabs scroll X, Instagram and LinkedIn before 7am -> your rules keep 15 -> 7am edition -> view closed until 6pm | read ahead built; schedule not built |
+| 1 | Editions | reader tabs scroll X, Instagram and LinkedIn before 7am -> your rules keep 15 -> 7am edition -> view closed until 6pm | built |
 | 2 | You missed nothing | reader follows a chronological Following feed down to the last post you saw -> "nothing else from your 40 people since yesterday" -> you stop because you know | seen tracking built; the claim not built |
-| 3 | Intent gate | open openMoi -> "why are you here?" -> a 5 minute break gets 10 items then a stop screen, research gets a deep list, friends gets only people | not built |
+| 3 | Intent gate | open openMoi -> "why are you here?" -> a 5 minute break gets 10 items then a stop screen, research gets a deep list, friends gets only people | built |
 | 4 | Unbundled platforms | Facebook -> only events and birthdays; LinkedIn -> only job changes of people you know; YouTube -> new uploads from subscriptions, no sidebar; Instagram -> close friends, no Reels | `Page:` sources, rules and judgments built; Facebook and Instagram untested |
 | 5 | Notification firewall | reader opens each site's notifications page -> replies from people you know pass, likes and "trending" drop -> one batch at noon -> every app's push turned off | `Page:` sources built; batching not built |
 | 6 | Algorithm mirror | keep rate and topics per source -> weekly "X showed you 600 posts, 7% passed your rules, a third were anger" -> X earns your time or loses its place | keep rate and topics built; report not built |
@@ -1345,17 +1352,18 @@ Sites tune their feeds for their own goals: time on site, ads, outrage. openMoi 
 
 Five building blocks and four smaller pieces cover all 12. Two of the gaps are guardrails (12), not missing code. None of the 12 needs the L6 agent runtime: each is a read plus one model pass per item, the shape guardrail 6 already allows (JSON out, no tools), like topic tagging today.
 
-### 34.1 Background reads on a schedule (1, 5, 7, 8)
+### 34.1 Background reads on a schedule (1, 5, 7, 8) `[built]`
 
 * **Missing:** guardrail 3 says "reads only on your action"; L6 reads rung 2 and 3 sources only while you use the app.
 * **Design:** a view's Time section (34.2) says when it is due. The reader pool starts filling early enough for tagging to finish, inside the same daily budget per source, at the same pace, with the same challenge stop; a challenge waits for you instead of retrying.
 * **Needs:** openMoi running with its window closed (a menu bar icon, started at login), Chrome running and the Mac awake. A read missed during sleep runs at wake or when you open the view. Alerts use OS notifications while the window is closed.
 * **Side effect:** background time is what a slow local model needs. At about 6 s per item (13.1), 500 items take 50 minutes, so a local edition starts reading an hour ahead and its content never reaches a hosted model.
+* **As built:** the shell's scheduler (`scheduler.ts`) looks at `GET /schedule` every minute and when the Mac wakes; a due read runs the brain's feeds, then each page source from the top for up to 120 records, then marks the edition read even if a source failed (its notice says why), so a dead source is never retried every minute. Closing the window hides it while a view has editions or `/background on` is set; "moi" in the menu bar opens or quits openMoi; a new edition shows as a system notification when the window is not in front. Starting hidden at login works once openMoi is packaged (L9).
 
-### 34.2 Time in views (1, 3, 5)
+### 34.2 Time in views (1, 3, 5) `[built]`
 
 * **Missing:** a view is always open; nothing in it knows the clock.
-* **Design:** an optional Time section in plain words, compiled like Rules:
+* **Design:** an optional Time section in plain words, read without a model like Sources (a line it cannot read becomes a warning):
 
 ```markdown
 ## Time
@@ -1372,6 +1380,7 @@ Five building blocks and four smaller pieces cover all 12. Two of the gaps are g
 
 * A closed view shows its next edition time and nothing else. "Open anyway" is one click and is counted (34.6 history).
 * **Intent gate (3):** the first iteration is a chooser of your views at launch, each with its own visit length. An intent is a view; no new mechanism.
+* **As built:** the first iteration keeps editions and visits and leaves out windows by weekday. An edition shows items read by the time it came out (later if its read ran late); items you saw before it came out never come back; with a size, its items are fixed once shown or seen, so reading all of it never empties it on a reload and nothing new slips in. An edition never reads ahead; once you have read all of it a notice says when the next one comes out. With a visit length on any view, openMoi opens on "Why are you here?"; when a visit's time is up the view gives way to a stop screen listing what you read, with "Done" (back to the question) or "5 more minutes". "Open anyway" waits for History (34.6).
 
 ### 34.3 Rules that use model judgments (4, 5, 6, 8) `[built]`
 
@@ -1416,13 +1425,13 @@ Facebook and Instagram through reader tabs are untested on the real sites (4, 5)
 
 ## 35. Changes to this design
 
-| Where | Today | Proposed |
+| Where | Before | Proposed |
 |---|---|---|
-| Principle 5 (2), guardrail 3 (12) | Reads only on your action | Reads on your action or on a schedule you wrote, within the same daily budget per source |
+| Principle 5 (2), guardrail 3 (12) | Reads only on your action | Done: reads on your action or on a schedule you wrote, within the same daily budget per source |
 | Guardrail 5 (12) | Web content never writes memory or rules | Web content may add to `memory/journal/` as quoted data with a link; never to topic files, views or rules |
-| L6 scheduling (22) | Rung 2 and 3 sources read only while you use the app | Also read on a view's schedule (34.1); still read only |
+| L6 scheduling (22) | Rung 2 and 3 sources read only while you use the app | Done: also read on a view's schedule (34.1); still read only |
 | L1 Facebook (17) | Assist mode by default | Chosen per source in the site policy (34.7) |
-| View file (9.4) | Sources, Rules, Layout | Adds an optional Time section |
+| View file (9.4) | Sources, Rules, Layout | Done: adds an optional Time section |
 | Sources (9.2) | RSS, YouTube, X, `Page:` | Adds `Watch:` and a chronological mark on `Page:` |
 | Condition (11.4) | 6 fields | Adds `judged:<name>` and `author_in` |
 | Store (11.2) | 2 tables | Adds `follows` and `source_days` |

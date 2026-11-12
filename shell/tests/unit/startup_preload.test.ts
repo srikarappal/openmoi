@@ -6,14 +6,26 @@ const { app, contextBridge, error_boxes, exposed, ipcRenderer, reset_electron } 
 
 vi.mock("electron", () => fake)
 
-const started = { sessions: 0, shells: [] as Array<{ dist: string; headless: boolean }>, stops: 0, fail: null as Error | null }
+const started = { sessions: 0, shells: [] as FakeShell[], stops: 0, fail: null as Error | null }
 
 class FakeShell {
-  constructor(_brain: unknown, dist: string, headless: boolean) {
-    started.shells.push({ dist, headless })
+  quitting = false
+  shows = 0
+
+  constructor(
+    _brain: unknown,
+    readonly dist: string,
+    readonly headless: boolean,
+    readonly start_hidden: boolean,
+  ) {
+    started.shells.push(this)
   }
 
   async start(): Promise<void> {}
+
+  show(): void {
+    this.shows += 1
+  }
 }
 
 const brain_process = { client: { base_url: "http://127.0.0.1:1" }, stop: () => (started.stops += 1) }
@@ -58,10 +70,29 @@ describe("main", () => {
     expect(started.sessions).toBe(1)
     expect(started.shells).toHaveLength(1)
     expect(started.shells[0].headless).toBe(true)
+    expect(started.shells[0].start_hidden).toBe(false)
+    app.emit("activate")
+    expect(started.shells[0].shows).toBe(1)
     app.emit("window-all-closed")
     expect(app.quits).toBe(1)
     app.emit("before-quit")
     expect(started.stops).toBe(1)
+    expect(started.shells[0].quitting).toBe(true)
+  })
+
+  it("starts with its window hidden when the Mac opened it at login", async () => {
+    app.login.wasOpenedAtLogin = true
+    await launch()
+    expect(started.shells[0].start_hidden).toBe(true)
+  })
+
+  it("quits cleanly when it never got as far as a window", async () => {
+    started.fail = new Error("no uv")
+    vi.spyOn(console, "error").mockImplementation(ignore)
+    await launch()
+    app.emit("activate")
+    app.emit("before-quit")
+    expect(started.stops).toBe(0)
   })
 
   it("shows why it could not start, stops what started and quits", async () => {

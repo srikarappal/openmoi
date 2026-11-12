@@ -1,11 +1,12 @@
 // The window: chrome UI on top and on the right, one content area showing a lens or a web tab.
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { BrowserWindow, ipcMain, shell as desktop, type WebContentsView } from "electron"
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, shell as desktop, Tray, type WebContentsView } from "electron"
 import { is_web_url, site_domain } from "../shared/address"
 import type {
   ActiveTarget,
   ChromePageInfo,
+  GateChoice,
   Item,
   LensKind,
   LensToHost,
@@ -15,7 +16,9 @@ import type {
   RelayInfo,
   ShellCommand,
   ShellState,
+  StopScreen,
   ViewInfo,
+  ViewSchedule,
 } from "../shared/types"
 import type { BrainClient } from "./brain"
 import { ChatController, explain } from "./chat"
@@ -28,8 +31,9 @@ import { ActivityTracker } from "./activity"
 import { RelayLink } from "./relay_link"
 import { SmokeTester } from "./smoke"
 import { ReaderPool } from "./readers"
+import { Scheduler } from "./scheduler"
 import { TabManager, type Tab } from "./tabs"
-import { ViewController, view_lens_key } from "./views"
+import { ViewController, clock_time, view_lens_key } from "./views"
 
 function ignore(): void {}
 
@@ -37,6 +41,16 @@ const TOP_BAR_HEIGHT = 48
 const SIDE_PANEL_WIDTH = 340
 const MAX_NOTICES = 6
 const UNRECOGNIZED_TAG = "relay:unrecognized"
+// Tests run time faster; a minute is a minute otherwise.
+const MINUTE_MS = Number(process.env.MOI_MINUTE_MS) || 60_000
+const EXTRA_MINUTES = 5
+
+interface Visit {
+  view_id: string
+  minutes: number
+  started_at: number
+  timer: ReturnType<typeof setTimeout>
+}
 
 export class Shell implements ViewHost {
   readonly window: BrowserWindow
@@ -51,7 +65,15 @@ export class Shell implements ViewHost {
   readonly lens_gen: LensGenerator
   readonly electron: ElectronDriver
   readonly relay: RelayLink
+  readonly scheduler: Scheduler
   readonly activity = new ActivityTracker(() => this.push_state())
+  // Set once you quit, so closing the window then really closes it.
+  quitting = false
+  private tray: Tray | null = null
+  private background = false
+  private gate: GateChoice[] | null = null
+  private stop: StopScreen | null = null
+  private visit: Visit | null = null
   private readonly chrome_pages = new Map<number, ChromePageInfo>()
   private next_chrome_page = 1
   private active: ActiveTarget = { kind: "view", view_id: "feed" }
@@ -65,13 +87,14 @@ export class Shell implements ViewHost {
     private readonly brain: BrainClient,
     private readonly dist_dir: string,
     private readonly headless: boolean,
+    start_hidden = false,
   ) {
     this.page_preload = path.join(dist_dir, "preload_page.js")
     this.lens_preload = path.join(dist_dir, "preload_lens.js")
     this.window = new BrowserWindow({
       width: 1280,
       height: 860,
-      show: !headless,
+      show: !headless && !start_hidden,
       title: "openMoi",
       webPreferences: { preload: path.join(dist_dir, "preload_chrome.js"), sandbox: true, contextIsolation: true },
     })
@@ -99,6 +122,7 @@ export class Shell implements ViewHost {
       open_folder: (folder) => {
         desktop.openPath(folder).catch(ignore)
       },
+      set_background: (on) => this.set_background(on),
       changed: () => this.push_state(),
     })
     this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload), {
@@ -121,7 +145,22 @@ export class Shell implements ViewHost {
       lens_stale: (view_id, kind, layout_hash) => this.lens_gen.ensure(view_id, kind, layout_hash),
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
     })
+    this.scheduler = new Scheduler(
+      brain,
+      {
+        read: (view_id) => this.views.read_for_edition(view_id),
+        edition_out: (schedule) => this.edition_out(schedule),
+        failed: (text) => this.notify(text),
+      },
+      MINUTE_MS,
+    )
     this.window.on("resize", () => this.layout())
+    // With editions to read (or background reading on) closing the window only hides it; quitting closes it.
+    this.window.on("close", (event) => {
+      if (this.quitting || !this.keeps_running()) return
+      event.preventDefault()
+      this.window.hide()
+    })
     // The chrome UI never navigates (a link dropped on it would otherwise take the shell bridge with it),
     // and only the UI page itself may send commands or read the state.
     this.window.webContents.on("will-navigate", (event) => event.preventDefault())
@@ -141,11 +180,98 @@ export class Shell implements ViewHost {
     return pathToFileURL(path.join(this.dist_dir, "ui", "index.html")).href
   }
 
+  // With a view that has a visit length, openMoi first asks why you are here instead of opening a feed.
   async start(): Promise<void> {
     await this.window.loadFile(path.join(this.dist_dir, "ui", "index.html"))
     this.view_infos = await this.brain.views()
+    this.background = app.getLoginItemSettings().openAtLogin
     this.relay.start()
+    await this.scheduler.tick()
+    this.scheduler.start()
+    powerMonitor.on("resume", () => {
+      this.scheduler.tick().catch(ignore)
+    })
+    if (!this.headless) this.make_tray()
+    if (this.view_infos.length > 1 && this.scheduler.schedules.some((schedule) => schedule.visit_minutes)) {
+      this.gate = this.choices()
+      this.push_state()
+      return
+    }
     await this.open_view(this.view_infos[0]?.view_id ?? "feed")
+  }
+
+  show(): void {
+    this.window.show()
+    this.window.focus()
+  }
+
+  private keeps_running(): boolean {
+    return this.background || this.scheduler.schedules.some((schedule) => schedule.next_edition)
+  }
+
+  private make_tray(): void {
+    this.tray = new Tray(nativeImage.createEmpty())
+    this.tray.setTitle("moi")
+    this.tray.setToolTip("openMoi")
+    this.tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: "Open openMoi", click: () => this.show() },
+        { label: "Quit openMoi", click: () => app.quit() },
+      ]),
+    )
+  }
+
+  private set_background(on: boolean): string {
+    app.setLoginItemSettings({ openAtLogin: on })
+    this.background = on
+    if (on) return "openMoi now starts when you log in and keeps reading on schedule while its window is closed. Quit it from moi in the menu bar."
+    return "openMoi no longer starts at login. Closing its window quits it, unless a view comes out in editions."
+  }
+
+  private schedule_of(view_id: string): ViewSchedule | undefined {
+    return this.scheduler.schedules.find((schedule) => schedule.view_id === view_id)
+  }
+
+  // "Why are you here?": every view, with its visit length and next edition.
+  private choices(): GateChoice[] {
+    return this.view_infos.map((view) => {
+      const schedule = this.schedule_of(view.view_id)
+      return { view_id: view.view_id, title: view.title, visit_minutes: schedule?.visit_minutes ?? null, next_edition: schedule?.next_edition ?? null }
+    })
+  }
+
+  // A visit starts when you open a view that has a visit length; opening another view ends it.
+  private begin_visit(view_id: string, minutes = this.schedule_of(view_id)?.visit_minutes ?? 0): void {
+    if (this.visit?.view_id === view_id) return
+    if (this.visit) clearTimeout(this.visit.timer)
+    this.visit = null
+    if (minutes > 0) this.visit = { view_id, minutes, started_at: Date.now(), timer: setTimeout(() => this.visit_over(), minutes * MINUTE_MS) }
+  }
+
+  // Time is up: if you are still in the view, it gives way to the stop screen with what you read.
+  private visit_over(): void {
+    const visit = this.visit
+    this.visit = null
+    if (!visit || this.active.kind !== "view" || this.active.view_id !== visit.view_id) return
+    this.stop = {
+      view_id: visit.view_id,
+      title: this.view_infos.find((view) => view.view_id === visit.view_id)?.title ?? visit.view_id,
+      minutes: visit.minutes,
+      read: this.views.seen_since(visit.view_id, visit.started_at),
+      next_edition: this.schedule_of(visit.view_id)?.next_edition ?? null,
+    }
+    this.activate(this.active)
+  }
+
+  // An edition that came out while the window is away from you shows as a system notification; click it to read.
+  private edition_out(schedule: ViewSchedule): void {
+    if (!schedule.edition || (this.window.isVisible() && this.window.isFocused())) return
+    const notification = new Notification({ title: schedule.title, body: `The ${clock_time(schedule.edition)} edition is out.` })
+    notification.on("click", () => {
+      this.show()
+      this.run({ type: "open_view", view_id: schedule.view_id }).catch((error) => this.notify(String(error)))
+    })
+    notification.show()
   }
 
   attach(view: WebContentsView): void {
@@ -177,8 +303,10 @@ export class Shell implements ViewHost {
     return this.active.kind === "tab" ? this.tabs.get(this.active.tab_id) : undefined
   }
 
-  // A tab in Mine shows its Mine lens; a Chrome page always does; otherwise the page itself.
+  // A tab in Mine shows its Mine lens; a Chrome page always does; otherwise the page itself. The gate and the stop
+  // screen are drawn by the chrome UI, so nothing covers them.
   private active_view(): WebContentsView | undefined {
+    if (this.gate || this.stop) return undefined
     if (this.active.kind === "view") return this.lenses.get(view_lens_key(this.active.view_id))?.view
     if (this.active.kind === "chrome") return this.lenses.get(chrome_mine_key(this.active.page_id))?.view
     const tab = this.active_tab()
@@ -205,7 +333,9 @@ export class Shell implements ViewHost {
   async open_view(view_id: string): Promise<void> {
     const ticket = this.activations
     await this.views.show(view_id)
-    if (ticket === this.activations) this.activate({ kind: "view", view_id })
+    if (ticket !== this.activations) return
+    this.activate({ kind: "view", view_id })
+    this.begin_visit(view_id)
   }
 
   open_tab(url: string): void {
@@ -388,7 +518,23 @@ export class Shell implements ViewHost {
   private async run(command: ShellCommand): Promise<void> {
     switch (command.type) {
       case "open_view":
+      case "choose_view":
+        this.gate = null
+        this.stop = null
         await this.open_view(command.view_id)
+        return
+      case "extend_visit": {
+        const stop = this.stop
+        if (!stop) return
+        this.stop = null
+        this.begin_visit(stop.view_id, EXTRA_MINUTES)
+        this.activate({ kind: "view", view_id: stop.view_id })
+        return
+      }
+      case "end_visit":
+        this.stop = null
+        this.gate = this.choices()
+        this.activate(this.active)
         return
       case "open_tab":
         this.open_tab(command.url)
@@ -469,6 +615,8 @@ export class Shell implements ViewHost {
       activities: this.activity.list(),
       chrome_pages: [...this.chrome_pages.values()],
       relay: this.relay.status,
+      gate: this.gate,
+      stop: this.stop,
     }
   }
 

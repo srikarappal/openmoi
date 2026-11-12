@@ -21,6 +21,9 @@ const FIRST_FILL_RECORDS = 30
 const MAX_FILL_RECORDS = 120
 // A source whose items your rules almost all hide is still read at most ten raw items for each one wanted.
 const MIN_KEEP_RATE = 0.1
+// A read for an edition goes deeper than a look: it is the only read the edition gets.
+const EDITION_RECORDS = 120
+const MAX_TITLE = 80
 
 export interface ViewHooks {
   open_original(url: string): void
@@ -44,6 +47,15 @@ function challenge_text(source_id: string, driver: DriverKind): string {
 
 function ignore(): void {}
 
+// A time of day as your clock shows it, such as 7:00 AM.
+export function clock_time(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+}
+
+function label_of(item: Item): string {
+  return item.title || item.text?.slice(0, MAX_TITLE) || item.url
+}
+
 function source_tag(source_id: string): string {
   return `source:${source_id}`
 }
@@ -65,6 +77,11 @@ export class ViewController {
   // Per lens, the position of the furthest item you have seen, in the order the lens shows them.
   private readonly furthest = new Map<string, number>()
   private readonly reading = new Map<string, Promise<void>>()
+  // Views that come out in editions: what they show is fixed until the next one, so they never read ahead.
+  private readonly editioned = new Set<string>()
+  private readonly edition_told = new Set<string>()
+  // What you saw in each view and when, for the end of a visit.
+  private readonly seen_log = new Map<string, Array<{ at: number; label: string }>>()
 
   constructor(
     private readonly brain: BrainClient,
@@ -102,13 +119,34 @@ export class ViewController {
     if (previous !== undefined && previous !== page.summary) this.hooks.echo(`I understood: ${page.summary}`)
     this.summaries.set(context.view_id, page.summary)
     this.report(page)
+    this.edition_end(page)
     if (page.lens_stale) this.hooks.lens_stale(context.view_id, page.layout_hash)
   }
 
-  // The next page of stored items, else reading the page sources further, else caught up.
+  // The next page of stored items, else reading the page sources further, else caught up. An edition never reads further.
   private cursor_for(page: ViewPage): string | null {
+    if (page.edition) this.editioned.add(page.view_id)
+    else this.editioned.delete(page.view_id)
     if (page.has_more) return MORE_CURSOR
-    return this.open_sources(page.view_id).length ? DEEPER_CURSOR : null
+    return !page.edition && this.open_sources(page.view_id).length ? DEEPER_CURSOR : null
+  }
+
+  // Once you have read all of an edition, say so once and when the next one comes out.
+  private edition_end(page: ViewPage): void {
+    if (!page.caught_up || !page.edition || !page.next_edition) return
+    const key = `${page.view_id}@${page.edition}`
+    if (this.edition_told.has(key)) return
+    this.edition_told.add(key)
+    this.hooks.notify(
+      `That is all of the ${clock_time(page.edition)} edition of ${page.view_id}. The next one comes out at ${clock_time(page.next_edition)}.`,
+      undefined,
+      `edition:${page.view_id}`,
+    )
+  }
+
+  // Labels of the items you saw in a view since a moment, oldest first and each once.
+  seen_since(view_id: string, since: number): string[] {
+    return [...new Set((this.seen_log.get(view_id) ?? []).filter((entry) => entry.at >= since).map((entry) => entry.label))]
   }
 
   private open_sources(view_id: string): PageSource[] {
@@ -134,14 +172,34 @@ export class ViewController {
   }
 
   // The brain's feeds show as they arrive while page sources load in your session, which may wait for Chrome.
+  // An edition opened by itself reads nothing: what it shows was read for it on schedule.
   async refresh(context: LensContext, force: boolean): Promise<void> {
     await this.hooks.track(`Updating ${context.view_id}`, async () => {
       const { page_sources } = await this.brain.refresh(context.view_id, force)
       this.page_sources.set(context.view_id, page_sources)
       this.finished.delete(context.view_id)
-      const wanted = new Map(page_sources.map((source) => [source.source_id, FIRST_FILL_RECORDS]))
-      await Promise.all([this.settle(context), this.read_and_settle(context, page_sources, force, wanted, true)])
+      const reads = this.editioned.has(context.view_id) && !force ? [] : page_sources
+      const wanted = new Map(reads.map((source) => [source.source_id, FIRST_FILL_RECORDS]))
+      await Promise.all([this.settle(context), this.read_and_settle(context, reads, force, wanted, true)])
     })
+  }
+
+  // A scheduled read for an edition: the brain's feeds, then every page source from the top and deeper than a look.
+  // It needs no open lens; it ends once the brain has fetched its feeds, so the edition can be marked read.
+  async read_for_edition(view_id: string): Promise<void> {
+    await this.hooks.track(`Reading for the next ${view_id} edition`, async () => {
+      const { page_sources } = await this.brain.refresh(view_id, true)
+      const wanted = new Map(page_sources.map((source) => [source.source_id, EDITION_RECORDS]))
+      await this.queued(view_id, () => this.read_sources(view_id, page_sources, true, wanted, true))
+      await this.feeds_fetched(view_id)
+    })
+  }
+
+  private async feeds_fetched(view_id: string): Promise<void> {
+    for (let attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
+      if (!(await this.brain.view_page(view_id, [])).reading) return
+      await sleep(SETTLE_POLL_MS)
+    }
   }
 
   // After a model change: follow the brain while it retries tagging, so warnings that no longer hold go away.
@@ -157,6 +215,7 @@ export class ViewController {
     for (const { view_id, source } of waiting) {
       const context = this.lenses.get(view_lens_key(view_id))
       if (context) await this.read_and_settle(context, [source], true, new Map([[source.source_id, FIRST_FILL_RECORDS]]), true)
+      else await this.queued(view_id, () => this.read_sources(view_id, [source], true, new Map([[source.source_id, FIRST_FILL_RECORDS]]), true))
     }
   }
 
@@ -166,7 +225,7 @@ export class ViewController {
   private async read_ahead(context: LensContext, at_end: boolean): Promise<void> {
     const view_id = context.view_id
     const sources = this.open_sources(view_id)
-    if (!sources.length || this.reading.has(view_id)) return
+    if (!sources.length || this.reading.has(view_id) || this.editioned.has(view_id)) return
     const below = at_end ? 0 : context.rendered.size - 1 - (this.furthest.get(context.key) ?? -1)
     if (below >= READ_AHEAD_ITEMS) return
     const per_source = Math.ceil((BUFFER_ITEMS - below) / sources.length)
@@ -175,25 +234,26 @@ export class ViewController {
     await this.hooks.track(`Reading ahead for ${view_id}`, () => this.read_and_settle(context, sources, true, wanted, false))
   }
 
-  // One read of a view's page sources at a time: a refresh during a read ahead waits for it, so two reads never
-  // scroll your Chrome at once.
   private read_and_settle(context: LensContext, sources: PageSource[], force: boolean, wanted: Map<string, number>, from_top: boolean): Promise<void> {
     if (!sources.length) return Promise.resolve()
-    const view_id = context.view_id
-    const run = (this.reading.get(view_id) ?? Promise.resolve()).catch(ignore).then(() => this.read_once(context, sources, force, wanted, from_top))
+    return this.queued(context.view_id, async () => {
+      await this.read_sources(context.view_id, sources, force, wanted, from_top)
+      await this.settle(context)
+    })
+  }
+
+  // One read of a view's page sources at a time: a refresh during a read ahead or a scheduled read waits for it,
+  // so two reads never scroll your Chrome at once.
+  private queued(view_id: string, work: () => Promise<void>): Promise<void> {
+    const run = (this.reading.get(view_id) ?? Promise.resolve()).catch(ignore).then(work)
     this.reading.set(view_id, run)
     return run.finally(() => {
       if (this.reading.get(view_id) === run) this.reading.delete(view_id)
     })
   }
 
-  private async read_once(context: LensContext, sources: PageSource[], force: boolean, wanted: Map<string, number>, from_top: boolean): Promise<void> {
-    await this.read_sources(context, sources, force, wanted, from_top)
-    await this.settle(context)
-  }
-
   // A notice about a source is replaced by its latest read, so one that worked leaves nothing behind.
-  private async read_sources(context: LensContext, sources: PageSource[], force: boolean, wanted: Map<string, number>, from_top: boolean): Promise<void> {
+  private async read_sources(view_id: string, sources: PageSource[], force: boolean, wanted: Map<string, number>, from_top: boolean): Promise<void> {
     for (const source of sources) {
       const tag = source_tag(source.source_id)
       const outcome = await this.hooks.track(`Reading ${source.source_id}`, () =>
@@ -202,7 +262,7 @@ export class ViewController {
           wanted.get(source.source_id) ?? FIRST_FILL_RECORDS,
           (records) => {
             this.hooks.retract(tag)
-            return this.ingest_batch(context, source, records)
+            return this.ingest_batch(view_id, source, records)
           },
           force,
           from_top,
@@ -211,9 +271,9 @@ export class ViewController {
       if (outcome.status === "skipped") continue
       this.hooks.retract(tag)
       if (outcome.status === "ended" || outcome.status === "exhausted") {
-        this.finished.set(context.view_id, (this.finished.get(context.view_id) ?? new Set<string>()).add(source.source_id))
+        this.finished.set(view_id, (this.finished.get(view_id) ?? new Set<string>()).add(source.source_id))
       } else if (outcome.status === "challenge") {
-        if (outcome.driver === "openmoi") this.waiting_for_chrome.set(`${context.view_id}\0${source.source_id}`, { view_id: context.view_id, source })
+        if (outcome.driver === "openmoi") this.waiting_for_chrome.set(`${view_id}\0${source.source_id}`, { view_id, source })
         this.hooks.notify(challenge_text(source.source_id, outcome.driver), outcome.url, tag)
       } else if (outcome.status === "failed") {
         this.hooks.notify(`${source.source_id} could not be read: ${outcome.error}`, undefined, tag)
@@ -254,9 +314,11 @@ export class ViewController {
     return true
   }
 
-  private async ingest_batch(context: LensContext, source: PageSource, records: RawRecord[]): Promise<void> {
+  // A lens open now (or opened during a scheduled read) gets what each batch adds.
+  private async ingest_batch(view_id: string, source: PageSource, records: RawRecord[]): Promise<void> {
     await this.brain.ingest(source.source_id, records, source.start_url)
-    await this.append_next(context)
+    const context = this.lenses.get(view_lens_key(view_id))
+    if (context) await this.append_next(context)
   }
 
   private append_next(context: LensContext): Promise<ViewPage> {
@@ -265,6 +327,7 @@ export class ViewController {
       if (page.keep_rate) this.keep_rates.set(context.view_id, page.keep_rate)
       if (page.items.length || !page.has_more) context.send({ type: "append", items: page.items, cursor: this.cursor_for(page) })
       this.report(page)
+      this.edition_end(page)
       return page
     })
   }
@@ -284,6 +347,9 @@ export class ViewController {
     } else if (message.type === "seen") {
       const known = message.item_ids.filter((item_id) => context.rendered.has(item_id))
       if (!known.length) return
+      const log = this.seen_log.get(context.view_id) ?? []
+      for (const item_id of known) log.push({ at: Date.now(), label: label_of(context.rendered.get(item_id) as Item) })
+      this.seen_log.set(context.view_id, log)
       await this.brain.events(known.map((item_id) => ({ view_id: context.view_id, item_id, event_kind: "seen" })))
       const order = [...context.rendered.keys()]
       this.furthest.set(context.key, Math.max(this.furthest.get(context.key) ?? -1, ...known.map((item_id) => order.indexOf(item_id))))

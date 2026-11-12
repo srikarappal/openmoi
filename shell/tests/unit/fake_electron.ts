@@ -146,6 +146,19 @@ export class FakeBrowserWindow extends EventEmitter {
     this.shown = true
   }
 
+  hide(): void {
+    this.shown = false
+    this.focused = false
+  }
+
+  isVisible(): boolean {
+    return this.shown
+  }
+
+  isFocused(): boolean {
+    return this.focused
+  }
+
   focus(): void {
     this.focused = true
   }
@@ -198,6 +211,16 @@ const sessions = new Map<string, FakeSession>()
 
 class FakeApp extends EventEmitter {
   quits = 0
+  login = { openAtLogin: false, wasOpenedAtLogin: false }
+
+  getLoginItemSettings(): { openAtLogin: boolean; wasOpenedAtLogin: boolean } {
+    return { ...this.login }
+  }
+
+  setLoginItemSettings(settings: { openAtLogin: boolean }): void {
+    this.login.openAtLogin = settings.openAtLogin
+  }
+
   private ready_resolve: () => void = () => {}
   private ready = new Promise<void>((resolve) => {
     this.ready_resolve = resolve
@@ -231,6 +254,41 @@ class FakeIpcRenderer extends EventEmitter {
   }
 }
 
+export class FakeNotification extends EventEmitter {
+  static shown: FakeNotification[] = []
+
+  constructor(readonly options: { title: string; body: string }) {
+    super()
+  }
+
+  show(): void {
+    FakeNotification.shown.push(this)
+  }
+}
+
+export class FakeTray {
+  static created: FakeTray[] = []
+  title = ""
+  tooltip = ""
+  menu: { items: Array<{ label: string; click: () => void }> } | null = null
+
+  constructor(readonly image: unknown) {
+    FakeTray.created.push(this)
+  }
+
+  setTitle(title: string): void {
+    this.title = title
+  }
+
+  setToolTip(tooltip: string): void {
+    this.tooltip = tooltip
+  }
+
+  setContextMenu(menu: { items: Array<{ label: string; click: () => void }> }): void {
+    this.menu = menu
+  }
+}
+
 export const exposed: Record<string, unknown> = {}
 export const opened_paths: string[] = []
 
@@ -238,6 +296,19 @@ export const ipcMain = new FakeIpcMain()
 export const ipcRenderer = new FakeIpcRenderer()
 export const app = new FakeApp()
 export const WebContentsView = FakeWebContentsView
+export const Notification = FakeNotification
+export const Tray = FakeTray
+export const Menu = {
+  buildFromTemplate(items: Array<{ label: string; click: () => void }>): { items: Array<{ label: string; click: () => void }> } {
+    return { items }
+  },
+}
+export const nativeImage = {
+  createEmpty(): object {
+    return {}
+  },
+}
+export const powerMonitor = new EventEmitter()
 export const BrowserWindow = FakeBrowserWindow
 export const session = {
   fromPartition(partition: string): FakeSession {
@@ -279,6 +350,10 @@ export function reset_electron(): void {
   ipcRenderer.sent = []
   ipcRenderer.invoked = []
   sessions.clear()
+  FakeNotification.shown = []
+  FakeTray.created = []
+  powerMonitor.removeAllListeners()
+  app.login = { openAtLogin: false, wasOpenedAtLogin: false }
   opened_paths.length = 0
   error_boxes.length = 0
   for (const name of Object.keys(exposed)) delete exposed[name]

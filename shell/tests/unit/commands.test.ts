@@ -8,6 +8,9 @@ describe("parse_chat", () => {
     ["/FEED hide politics", { kind: "edit", scope: "rules", text: "hide politics" }],
     ["/sources add https://a.com/rss", { kind: "edit", scope: "sources", text: "add https://a.com/rss" }],
     ["/layout compact cards", { kind: "edit", scope: "layout", text: "compact cards" }],
+    ["/time editions at 7:00 and 18:00", { kind: "edit", scope: "time", text: "editions at 7:00 and 18:00" }],
+    ["/background on", { kind: "background", on: true }],
+    ["/background off", { kind: "background", on: false }],
     ["/newview Tech", { kind: "new_view", view_id: "tech", title: "Tech", description: "" }],
     ["/newview space_news space and physics", { kind: "new_view", view_id: "space_news", title: "space_news", description: "space and physics" }],
     ["/model", { kind: "model", change: null }],
@@ -32,6 +35,9 @@ describe("parse_chat", () => {
     ["/model privacy maybe", `Usage: ${COMMANDS.find((command) => command.name === "/model")?.usage}`],
     ["/model fast openrouter", `Usage: ${COMMANDS.find((command) => command.name === "/model")?.usage}`],
     ["/settings delete", "Usage: /settings [open]"],
+    ["/time", "Usage: /time <when this view comes out>"],
+    ["/background", "Usage: /background on|off"],
+    ["/background maybe", "Usage: /background on|off"],
     ["/nope", "Unknown command /nope. Type /help for the list."],
   ])("%s is a usage error", (typed, message) => {
     expect(parse_chat(typed)).toEqual({ kind: "error", message })

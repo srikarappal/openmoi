@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
 import { createRoot } from "react-dom/client"
 import { matching_commands } from "../shared/commands"
-import type { Activity, ChatEntry, ShellCommand, ShellState } from "../shared/types"
+import type { Activity, ChatEntry, GateChoice, ShellCommand, ShellState, StopScreen } from "../shared/types"
 
 interface ShellBridge {
   command(command: ShellCommand): void
@@ -201,6 +201,66 @@ function StatusLine({ activities }: { activities: Activity[] }) {
   )
 }
 
+function clock(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+}
+
+function choice_note(choice: GateChoice): string {
+  const parts = []
+  if (choice.visit_minutes) parts.push(`${choice.visit_minutes} minute visit`)
+  if (choice.next_edition) parts.push(`next edition ${clock(choice.next_edition)}`)
+  return parts.join(", ")
+}
+
+// "Why are you here?": opening openMoi starts from what you came for, not from a feed.
+function Gate({ choices }: { choices: GateChoice[] }) {
+  return (
+    <main className="content gate">
+      <h1>Why are you here?</h1>
+      <div className="choices">
+        {choices.map((choice) => (
+          <button key={choice.view_id} type="button" className="choice" onClick={() => send({ type: "choose_view", view_id: choice.view_id })}>
+            <span className="choice_title">{choice.title}</span>
+            {choice_note(choice) && <span className="choice_note">{choice_note(choice)}</span>}
+          </button>
+        ))}
+      </div>
+    </main>
+  )
+}
+
+// The end of a visit: what you read, and a choice to stop or take a few more minutes.
+function Stop({ stop }: { stop: StopScreen }) {
+  return (
+    <main className="content stop">
+      <h1>
+        Your {stop.minutes} minute{stop.minutes === 1 ? "" : "s"} in {stop.title} {stop.minutes === 1 ? "is" : "are"} up.
+      </h1>
+      {stop.read.length ? (
+        <div className="read">
+          <p>You read:</p>
+          <ul>
+            {stop.read.map((label) => (
+              <li key={label}>{label}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p>You did not stop on anything this time.</p>
+      )}
+      {stop.next_edition && <p className="next">The next edition comes out at {clock(stop.next_edition)}.</p>}
+      <div className="stop_actions">
+        <button type="button" className="primary" onClick={() => send({ type: "end_visit" })}>
+          Done
+        </button>
+        <button type="button" onClick={() => send({ type: "extend_visit" })}>
+          5 more minutes
+        </button>
+      </div>
+    </main>
+  )
+}
+
 function SidePanel({ state }: { state: ShellState }) {
   return (
     <aside className="side">
@@ -232,6 +292,7 @@ function App() {
   return (
     <>
       <TopBar state={state} />
+      {state.stop ? <Stop stop={state.stop} /> : state.gate && <Gate choices={state.gate} />}
       <SidePanel state={state} />
     </>
   )

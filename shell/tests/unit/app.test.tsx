@@ -19,6 +19,8 @@ const BASE: ShellState = {
   activities: [],
   chrome_pages: [],
   relay: { connected: false, waiting_for_approval: null, paired: false },
+  gate: null,
+  stop: null,
 }
 
 // The preload bridge as the UI sees it: commands are recorded, states are pushed by the test.
@@ -236,5 +238,42 @@ describe("the chat", () => {
     list.scrollTop = 0
     await show({ chat: [...full.slice(1), { entry_id: 200, role: "moi", text: "New look for feed is live" }] })
     expect(list.scrollTop).toBe(900)
+  })
+})
+
+describe("App gate and stop screen", () => {
+  it("asks why you are here and opens what you pick", async () => {
+    await show({
+      gate: [
+        { view_id: "break", title: "Break", visit_minutes: 5, next_edition: null },
+        { view_id: "feed", title: "Feed", visit_minutes: null, next_edition: "2026-11-10T18:00:00Z" },
+        { view_id: "tech", title: "Tech", visit_minutes: null, next_edition: null },
+      ],
+    })
+    expect(query(".gate h1")?.textContent).toBe("Why are you here?")
+    expect(texts(".choice .choice_title")).toEqual(["Break", "Feed", "Tech"])
+    expect(texts(".choice .choice_note")[0]).toBe("5 minute visit")
+    expect(texts(".choice .choice_note")[1]).toMatch(/^next edition /)
+    expect(texts(".choice .choice_note")).toHaveLength(2)
+    await click(document.querySelectorAll(".choice")[0])
+    expect(last_sent()).toEqual({ type: "choose_view", view_id: "break" })
+  })
+
+  it("shows what you read when a visit ends and offers more time or done", async () => {
+    await show({ stop: { view_id: "feed", title: "Feed", minutes: 10, read: ["First story", "Second story"], next_edition: "2026-11-10T18:00:00Z" }, gate: [] })
+    expect(query(".stop h1")?.textContent).toBe("Your 10 minutes in Feed are up.")
+    expect(texts(".read li")).toEqual(["First story", "Second story"])
+    expect(query(".stop .next")?.textContent).toMatch(/^The next edition comes out at /)
+    expect(query(".gate")).toBeNull()
+    await click(query(".stop_actions .primary"))
+    expect(last_sent()).toEqual({ type: "end_visit" })
+    await click(document.querySelectorAll(".stop_actions button")[1])
+    expect(last_sent()).toEqual({ type: "extend_visit" })
+    await show({ stop: { view_id: "feed", title: "Feed", minutes: 1, read: [], next_edition: null } })
+    expect(query(".stop h1")?.textContent).toBe("Your 1 minute in Feed is up.")
+    expect(query(".stop p")?.textContent).toBe("You did not stop on anything this time.")
+    expect(query(".stop .next")).toBeNull()
+    await show({ stop: null, gate: null })
+    expect(query(".content")).toBeNull()
   })
 })

@@ -17,7 +17,7 @@ export function unpacked_extension_id(folder = EXTENSION_DIR): string {
   const hex = createHash("sha256").update(folder).digest("hex").slice(0, 32)
   return [...hex].map((digit) => String.fromCharCode(97 + Number.parseInt(digit, 16))).join("")
 }
-const TOKEN = "e2e_token"
+export const TOKEN = "e2e_token"
 
 export function free_port(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -71,6 +71,7 @@ export interface LaunchOptions {
   files?: Record<string, string>
   // The folder of an earlier run, to start openMoi again on the same home, as after a restart.
   root?: string
+  env?: Record<string, string>
 }
 
 export class Harness {
@@ -104,6 +105,7 @@ export class Harness {
         MOI_BRAIN_PORT: String(brain_port),
         MOI_TOKEN: TOKEN,
         MOI_RELAY_PORT: String(relay_port),
+        ...options.env,
       },
     })
     const chrome = await app.firstWindow()

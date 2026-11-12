@@ -19,6 +19,7 @@ import type {
   RelayPoll,
   ViewInfo,
   ViewPage,
+  ViewSchedule,
 } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
@@ -109,6 +110,14 @@ export class BrainClient {
 
   discard_edit(proposal_id: string): Promise<{ status: string }> {
     return this.request("POST", "/edit/discard", { proposal_id })
+  }
+
+  schedule(): Promise<ViewSchedule[]> {
+    return this.request("GET", "/schedule")
+  }
+
+  schedule_done(view_id: string, edition: string): Promise<{ status: string }> {
+    return this.request("POST", "/schedule/done", { view_id, edition })
   }
 
   lens(view_id: string, kind: LensKind): Promise<string> {

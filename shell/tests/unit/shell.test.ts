@@ -2,10 +2,12 @@ import { pathToFileURL } from "node:url"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BrainClient } from "../../src/main/brain"
 import type { Proposal, RelayInfo, ShellCommand, ShellState, ViewPage } from "../../src/shared/types"
-import { FakeBrowserWindow, FakeWebContentsView, ipc_event, ipcMain, opened_paths, reset_electron } from "./fake_electron"
+import { FakeBrowserWindow, FakeNotification, FakeTray, FakeWebContentsView, app, ipc_event, ipcMain, opened_paths, powerMonitor, reset_electron } from "./fake_electron"
 
 vi.mock("electron", async () => await import("./fake_electron"))
 
+// A minute lasts 20 ms in these tests, so visits end while the test waits.
+process.env.MOI_MINUTE_MS = "20"
 const { Shell } = await import("../../src/main/shell")
 
 const UI_URL = pathToFileURL("/dist/ui/index.html").href
@@ -33,6 +35,8 @@ function fake_brain(fields: Record<string, unknown> = {}) {
     apply_edit: vi.fn(async () => proposal()),
     discard_edit: vi.fn(async () => ({ status: "discarded" })),
     ingest: vi.fn(async () => ({ items: [], view_items: [], lens_stale: false, layout_hash: "h" })),
+    schedule: vi.fn(async () => []),
+    schedule_done: vi.fn(async () => ({ status: "done" })),
     ...fields,
   }
 }
@@ -42,6 +46,7 @@ async function started(fields: Record<string, unknown> = {}) {
   const shell = new Shell(brain as unknown as BrainClient, "/dist", true)
   await shell.start()
   shell.relay.stop()
+  shell.scheduler.stop()
   const [window] = FakeBrowserWindow.created
   return { shell, brain, window }
 }
@@ -416,3 +421,163 @@ describe("Shell guards", () => {
   })
 })
 
+
+const SEVEN = "2026-11-10T07:00:00Z"
+const SIX_PM = "2026-11-10T18:00:00Z"
+
+function view_schedule(fields: Record<string, unknown> = {}) {
+  return { view_id: "feed", title: "Feed", edition: null, next_edition: null, read_for: null, visit_minutes: null, ...fields }
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function close_window(window: FakeBrowserWindow): { prevented: boolean } {
+  const event = { prevented: false, preventDefault(): void {} }
+  event.preventDefault = () => {
+    event.prevented = true
+  }
+  window.emit("close", event)
+  return event
+}
+
+describe("Shell visits", () => {
+  it("asks why you are here when a view has a visit length, then opens what you chose", async () => {
+    const { shell, window, brain } = await started({ schedule: vi.fn(async () => [view_schedule({ visit_minutes: 5, next_edition: SIX_PM })]) })
+    expect(state_of(shell).gate).toEqual([
+      { view_id: "feed", title: "Feed", visit_minutes: 5, next_edition: SIX_PM },
+      { view_id: "tech", title: "Tech", visit_minutes: null, next_edition: null },
+    ])
+    expect(brain.lens).not.toHaveBeenCalled()
+    await command(window, { type: "choose_view", view_id: "tech" })
+    expect(state_of(shell).gate).toBeNull()
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "tech" })
+  })
+
+  it("opens the first view directly when no view has a visit length", async () => {
+    const { shell } = await started({ schedule: vi.fn(async () => [view_schedule({ next_edition: SIX_PM })]) })
+    expect(state_of(shell).gate).toBeNull()
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "feed" })
+  })
+
+  it("ends a visit with what you read, then lets you take five more minutes or stop", async () => {
+    const { shell, window } = await started({ schedule: vi.fn(async () => [view_schedule({ visit_minutes: 1, next_edition: SIX_PM })]) })
+    vi.spyOn(shell.views, "seen_since").mockReturnValue(["First story"])
+    await command(window, { type: "choose_view", view_id: "feed" })
+    await wait(60)
+    expect(state_of(shell).stop).toEqual({ view_id: "feed", title: "Feed", minutes: 1, read: ["First story"], next_edition: SIX_PM })
+    expect(FakeWebContentsView.created.every((view) => !view.visible)).toBe(true)
+    await command(window, { type: "extend_visit" })
+    expect(state_of(shell).stop).toBeNull()
+    await wait(40)
+    expect(state_of(shell).stop).toBeNull()
+    await wait(80)
+    expect(state_of(shell).stop?.minutes).toBe(5)
+    await command(window, { type: "end_visit" })
+    expect(state_of(shell).stop).toBeNull()
+    expect(state_of(shell).gate?.map((choice) => choice.view_id)).toEqual(["feed", "tech"])
+    await command(window, { type: "extend_visit" })
+    expect(state_of(shell).gate).not.toBeNull()
+  })
+
+  it("lets a visit end quietly when you already went elsewhere, and ends it when you switch views", async () => {
+    const { shell, window } = await started({ schedule: vi.fn(async () => [view_schedule({ visit_minutes: 1 }), view_schedule({ view_id: "tech", title: "Tech", visit_minutes: 1 })]) })
+    await command(window, { type: "choose_view", view_id: "feed" })
+    await command(window, { type: "open_tab", url: "https://a.example/" })
+    await wait(60)
+    expect(state_of(shell).stop).toBeNull()
+    await command(window, { type: "open_view", view_id: "feed" })
+    await command(window, { type: "open_view", view_id: "tech" })
+    await wait(30)
+    expect(state_of(shell).stop?.view_id).toBe("tech")
+  })
+})
+
+describe("Shell in the background", () => {
+  it("hides instead of closing while a view has editions, and closes once you quit", async () => {
+    const { shell, window } = await started({ schedule: vi.fn(async () => [view_schedule({ next_edition: SIX_PM })]) })
+    window.shown = true
+    expect(close_window(window).prevented).toBe(true)
+    expect(window.shown).toBe(false)
+    shell.quitting = true
+    expect(close_window(window).prevented).toBe(false)
+  })
+
+  it("closes normally with nothing to read on schedule", async () => {
+    const { window } = await started()
+    expect(close_window(window).prevented).toBe(false)
+  })
+
+  it("turns background reading and starting at login on and off from the chat", async () => {
+    const { shell, window } = await started()
+    await command(window, { type: "chat_send", text: "/background on" })
+    expect(app.login.openAtLogin).toBe(true)
+    expect(state_of(shell).chat.at(-1)?.text).toContain("starts when you log in")
+    expect(close_window(window).prevented).toBe(true)
+    await command(window, { type: "chat_send", text: "/background off" })
+    expect(app.login.openAtLogin).toBe(false)
+    expect(close_window(window).prevented).toBe(false)
+  })
+
+  it("remembers background reading turned on at login", async () => {
+    app.login.openAtLogin = true
+    const { window } = await started()
+    expect(close_window(window).prevented).toBe(true)
+  })
+
+  it("tells you about a new edition with a system notification that opens it", async () => {
+    const schedules = [[view_schedule({ edition: SEVEN })], [view_schedule({ edition: SIX_PM })]]
+    const { shell, window } = await started({ schedule: vi.fn(async () => (schedules.length > 1 ? schedules.shift() : schedules[0])) })
+    await shell.scheduler.tick()
+    const [notification] = FakeNotification.shown
+    expect(notification.options.title).toBe("Feed")
+    expect(notification.options.body).toMatch(/^The .+ edition is out\.$/)
+    notification.emit("click")
+    await wait(5)
+    expect(window.shown && window.focused).toBe(true)
+    expect(state_of(shell).active).toEqual({ kind: "view", view_id: "feed" })
+  })
+
+  it("skips the notification when you are looking at openMoi", async () => {
+    const schedules = [[view_schedule({ edition: SEVEN })], [view_schedule({ edition: SIX_PM })]]
+    const { shell, window } = await started({ schedule: vi.fn(async () => (schedules.length > 1 ? schedules.shift() : schedules[0])) })
+    window.show()
+    window.focus()
+    await shell.scheduler.tick()
+    expect(FakeNotification.shown).toHaveLength(0)
+  })
+
+  it("looks at the schedule again when the Mac wakes", async () => {
+    const { brain } = await started()
+    const looks = brain.schedule.mock.calls.length
+    powerMonitor.emit("resume")
+    await wait(5)
+    expect(brain.schedule.mock.calls.length).toBe(looks + 1)
+  })
+
+  it("runs a due read in the background and marks its edition read", async () => {
+    const { shell, brain } = await started({ schedule: vi.fn(async () => [view_schedule({ view_id: "tech", read_for: SIX_PM })]) })
+    await shell.scheduler.idle()
+    expect(brain.refresh).toHaveBeenCalledWith("tech", true)
+    expect(brain.schedule_done).toHaveBeenCalledWith("tech", SIX_PM)
+  })
+
+  it("puts openMoi in the menu bar with a window that is not headless", async () => {
+    const brain = fake_brain()
+    const shell = new Shell(brain as unknown as BrainClient, "/dist", false, true)
+    await shell.start()
+    shell.relay.stop()
+    shell.scheduler.stop()
+    const [window] = FakeBrowserWindow.created
+    expect(window.options.show).toBe(false)
+    const [tray] = FakeTray.created
+    expect(tray.title).toBe("moi")
+    const [open, quit] = tray.menu?.items ?? []
+    open.click()
+    expect(window.shown).toBe(true)
+    const quits = app.quits
+    quit.click()
+    expect(app.quits).toBe(quits + 1)
+  })
+})
