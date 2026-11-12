@@ -71,3 +71,22 @@ test("an edition shows only what was read by it, while its next read runs in the
     await harness.close()
   }
 })
+
+test("a summarize rule reads articles in full in the background and their cards gain a summary in place", async () => {
+  const feed = `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/tech.xml\n\n## Rules\n* Summarize everything.\n`
+  const harness = await Harness.launch(world, { views: { feed }, env: { MOI_MINUTE_MS: "1500" } })
+  try {
+    await eventually(
+      () => harness.lens_text(),
+      (text) => text.includes("New laptop chip"),
+    )
+    const summary = await eventually(
+      () => harness.in_lenses<string>("Array.from(document.querySelectorAll('.summary'), (node) => node.textContent).join('|')").then((texts) => texts.join("|")),
+      (text) => text.includes("Summary of"),
+      60_000,
+    )
+    expect(summary).toContain("Summary of /articles/")
+  } finally {
+    await harness.close()
+  }
+})

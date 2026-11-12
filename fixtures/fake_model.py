@@ -93,6 +93,10 @@ def judged_rule(text: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
 
 def view_rule(line: str) -> dict[str, Any] | None:
     text = line.lower()
+    if "summarize" in text:
+        return {"when": condition("source_id", "eq", "youtube") if "video" in text else None, "do": "summarize"}
+    if "take notes" in text:
+        return {"when": None, "do": "note"}
     if (match := MENTIONS.search(text)) is not None:
         return {"when": condition("source_id", "eq", "watch"), "unless": condition("text", "contains", match.group(1)), "do": "hide"}
     if any(phrase in text for phrase in ("people i know", "people i follow", "no strangers")):
@@ -231,6 +235,16 @@ def extractor(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps(next((spec for marker, spec in SPECS_BY_MARKER.items() if marker in skeleton), NOTHING_SPEC))
 
 
+def summarize(payload: dict[str, Any], base_url: str) -> str:
+    """A summary naming the title; a transcript with times gets its second to third stretch as worth watching."""
+    request = request_of(payload)
+    lines = [line for line in request["content"].splitlines() if line.strip()]
+    stamps = [line for line in lines if re.match(r"^\[\d+:\d{2}\]", line)]
+    seconds = [int(stamp[1:].split(":")[0]) * 60 + int(stamp.split(":")[1][:2]) for stamp in stamps]
+    watching = [{"start": seconds[1], "end": seconds[2], "why": "the demo"}] if len(seconds) >= 3 else []
+    return json.dumps({"summary": f"Summary of {request['title']}.", "key_points": [line[:40] for line in lines[:3]], "worth_watching": watching})
+
+
 def update(payload: dict[str, Any], base_url: str) -> str:
     """A new copy is an update when it says so ("update", "confirmed", "now"); anything else is a retelling."""
     new = request_of(payload)["new"]
@@ -239,7 +253,7 @@ def update(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"update": changed, "what_changed": new["title"] if changed else ""})
 
 
-HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "extractor": extractor, "update": update}
+HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "extractor": extractor, "update": update, "summarize": summarize}
 
 
 def model_reply(task: str, payload: dict[str, Any], base_url: str) -> str:

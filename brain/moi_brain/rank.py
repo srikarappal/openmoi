@@ -106,7 +106,8 @@ def matches(condition: Condition | None, item: Item, now: datetime, circles: Cir
 
 
 def applies(rule: Rule, item: Item, now: datetime, circles: Circles = NO_CIRCLES) -> bool:
-    return matches(rule.when, item, now, circles) and not matches(rule.unless, item, now, circles)
+    """A rule without a when (a summarize or note rule for every item) applies to all items its unless spares."""
+    return (rule.when is None or matches(rule.when, item, now, circles)) and not matches(rule.unless, item, now, circles)
 
 
 def plain(value: object) -> str:
@@ -121,7 +122,7 @@ def describe(condition: Condition) -> str:
 
 
 def reasons(item: Item, boosts: list[Rule], now: datetime) -> list[str]:
-    found = [f"boost: {describe(rule.when)}" for rule in boosts]
+    found = [f"boost: {describe(rule.when)}" for rule in boosts if rule.when]
     if age_hours(item, now) <= RECENT_HOURS:
         found.append("recent")
     found.append(f"from {item.source_id}")

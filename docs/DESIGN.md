@@ -373,7 +373,7 @@ A memory file:
 Memory rules:
 
 * Read whole into prompts: MEMORY.md, the topic files and the last 14 days of journal. Small by design.
-* Topic files change only after you confirm a proposed edit. Web content never writes memory.
+* Topic files change only after you confirm a proposed edit. Web content writes only to the journal, as quoted data with a link (34.5).
 * Hand edits are picked up on the next read.
 * Backup is copying `~/openMoi/`.
 
@@ -596,6 +596,7 @@ Items expire after 30 days unless opened; an account no following list named for
 | `POST /ingest {source_id, records, page_url, view_id?, kind?}` | Raw records to items; with a view id, also the Mine page ranked in page order and whether its lens is stale |
 | `POST /view/{view_id} {exclude_ids}` | Ranked page with reasons, excluding what the lens already shows, plus `refreshing`, `version`, `lens_stale` and `keep_rate` (per source, the share its rules let through, which sizes read ahead) |
 | `POST /follows {list_url, records}` | Accounts from a page listing who you follow (34.4) |
+| `GET /content/wanted`, `POST /content {item_id, purpose, title, text, caption_url}` | Items a summarize rule wants read in full; an item's text or captions, summarized onto its card or noted in the journal (34.5) |
 | `GET /watches/due`, `POST /watches/report {url, title, text}` | Watched pages due for a look; a look's text, answered with whether it changed and any alert (34.6) |
 | `GET /mirror?days=`, `GET /mirror/weekly`, `POST /moments {view_id, kind}`, `POST /view/{view_id}/early` | The algorithm mirror, once a week; a visit or five more minutes; an edition opened early (34.6) |
 | `GET /schedule`, `POST /schedule/done {view_id, edition}` | Views with a Time section, their editions and any read due now (never asks the model); a finished edition read |
@@ -637,9 +638,9 @@ class Condition(BaseModel):
 
 
 class Rule(BaseModel):
-    when: Condition
+    when: Condition | None  # null only for summarize and note rules: every item
     unless: Condition | None = None
-    do: Literal["hide", "boost", "limit"]
+    do: Literal["hide", "boost", "limit", "summarize", "note"]
     weight: float = 0.0  # boost only
     count_per_day: int | None = None  # limit only
 
@@ -717,6 +718,7 @@ Helper the host injects into every lens:
 ```js
 moi.on_render((items, cursor) => {})   // replace everything
 moi.on_append((items, cursor) => {})   // add below
+moi.on_update((items) => {})           // items already shown, with new fields such as a summary: refresh in place
 moi.ready()                            // call once both listeners are registered; the host then sends the first render
 moi.open(item_id)                      // open the original in a web tab
 moi.more(cursor)                       // ask for the next page
@@ -735,6 +737,7 @@ interface ViewItem {
 type HostToLens =
   | { type: "render"; items: ViewItem[]; cursor: string | null }
   | { type: "append"; items: ViewItem[]; cursor: string | null }
+  | { type: "update"; items: ViewItem[]; cursor: null }
 
 type LensToHost =
   | { type: "ready" }
@@ -786,13 +789,13 @@ Even a dogfood build keeps these, because they cost little now and a lot to retr
 2. Read only: no code path clicks, posts or buys.
 3. Human pace: reads on your action or on a schedule you wrote, a fixed daily budget, stop on challenge, the standard user agent, no proxies.
 4. Lens sandbox and CSP from the very first lens.
-5. Your files change only after you confirm a diff; web content never writes memory or rules.
+5. Your files change only after you confirm a diff; web content never writes memory or rules, except quoted notes in the journal (34.5).
 6. Model calls that read web content return JSON only and have no tools.
 7. Hosted models see structure, not content, unless you flip the switch.
 8. Electron security baseline on every view.
 9. Chrome relay: only an extension you allowed may connect; openMoi only reads pages and only closes tabs it opened itself.
 
-Part 3 changed 3 (reads on a schedule you wrote, built) and proposes changing 5 (content may add to the journal); see 35.
+Part 3 changed 3 (reads on a schedule you wrote) and 5 (content may add quoted notes to the journal); see 35.
 
 ## 13. Milestones `[M1 to M3 built]`
 
@@ -811,7 +814,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 532 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 403 shell and extension unit (97% of lines), 32 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 553 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 417 shell and extension unit (97% of lines), 33 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -1356,8 +1359,8 @@ Sites tune their feeds for their own goals: time on site, ads, outrage. openMoi 
 | 6 | Algorithm mirror | keep rate and topics per source -> weekly "X showed you 600 posts, 7% passed your rules, a third were anger" -> X earns your time or loses its place | built |
 | 7 | Watch for me | visa slot page, school portal, a Marketplace seller -> reader checks at human pace -> one notice when it changes -> no more compulsive checking | built |
 | 8 | Hunts across sites | Zillow, Craigslist and Facebook Marketplace -> "pets ok, not ground floor, under $3k" -> one listing on 3 sites merged -> only new matches; the same for jobs, used cars and deals | built (merging by title words) |
-| 9 | Watch before you watch | 40 minute video -> transcript summary plus the 6 minutes worth watching -> watch those or nothing | not built |
-| 10 | Your reading as memory | every article you open -> 3 line note in the journal -> "what was that lithium piece?" answered from what you actually read | journal of opens built; notes not built |
+| 9 | Watch before you watch | 40 minute video -> transcript summary plus the 6 minutes worth watching -> watch those or nothing | built (YouTube captions untested on the real site) |
+| 10 | Your reading as memory | every article you open -> 3 line note in the journal -> "what was that lithium piece?" answered from what you actually read | built |
 | 11 | Updates, not repeats | new item on a story you followed -> "what changed since you read it Oct 3" -> retellings hidden | built |
 | 12 | Share a filter, not a feed | a friend's "AI news without hype" view file -> runs on your own sources and session -> experts publish judgment instead of content | views as .md built; import not built |
 
@@ -1408,7 +1411,7 @@ Five building blocks and four smaller pieces cover all 12. Two of the gaps are g
 * **People `[built]`:** `memory/people.md` already holds handles per source and L7's identity links fill it. "People you know" needs your following lists: each platform's Following page read weekly as a `Page:` source into a `follows (source_id, handle, seen_at)` table, machine state rather than memory. `Condition.field` gains `author_in` (`people` or `following`); a stranger is an author in neither. As built: a `Following:` source is read to its end within the daily budget; accounts are keyed by site (www., mobile. and twitter.com links count as one site); `known` means either circle; a rule about people with no one known yet warns instead of silently emptying the view. The rules compiler keeps a kind of item ("likes and trending notifications") as a judgment rather than hiding a whole source; checked with Nemotron 3.5, 3 of 3 runs.
 * **Duplicates `[built]`:** L2 clusters for stories (simhash, then embeddings within 48 h); L7 `same_product` extended to listings (address, price and first image). One card per cluster with "also on". As built, the first iteration is word overlap: a new item joins the cluster of the most similar item from another source in the last 48 hours when their title words overlap at least 60% (numbers count as words, and two titles carrying different numbers are different stories); two items of one source are never merged. Embeddings come with L2.
 
-### 34.5 Full content (9, 10, 11)
+### 34.5 Full content (9, 10, 11) `[built]`
 
 * **Missing:** items hold a snippet; Readability runs only for Mine; nothing reads video transcripts.
 * **Design:** a content pass for items a view asks to summarize:
@@ -1421,6 +1424,7 @@ item kept by the rules -> its page opened by the reader driver within the page l
 ```
 
 * **Journal:** opens already write the item's title to the journal (9.3), so web text already reaches a file prompts read. Make that the explicit rule: `memory/journal/` is the one place content may write, as quoted data with a link; topic files, views and rules still change only through a diff you confirm. Notes (10) append there and Chat Q&A (L4) cites them.
+* **As built:** two rule actions: `summarize` (cards get a summary, key points and, for videos, the stretches worth watching) and `note` (opening an item writes a one line note to today's journal); both may cover every item. The scheduler reads up to a few wanted items a minute, 50 a day, each in a quiet tab: Readability for articles, else the page's text; for YouTube the `transcript` page operation finds the captions address in the page's player data and the brain fetches only YouTube's own caption address. A summary made after a card showed arrives through the lens `update` message, in place. The chat answers questions about what you read from the journal ("what was that piece on lithium?") without proposing edits. Checked with Nemotron 3.5: an article summary and five key points; for a laptop review transcript, the battery test and the verdict as worth watching, the sponsor skipped.
 * **Updates (11) `[built]`:** new item in a cluster you read -> pass comparing it with the summary you read -> "what changed" shown; a cluster with nothing new stays hidden. As built, the update pass compares titles and snippets in the background (`stories.py`), the copy waits hidden until it answered, and an update shows with "update: <what changed>" first among its reasons; checked with Nemotron 3.5: a reworded copy and an opinion piece are repeats, "two more hikes likely" is an update.
 
 ### 34.6 Smaller pieces
@@ -1441,14 +1445,14 @@ Facebook and Instagram through reader tabs are untested on the real sites (4, 5)
 | Where | Before | Proposed |
 |---|---|---|
 | Principle 5 (2), guardrail 3 (12) | Reads only on your action | Done: reads on your action or on a schedule you wrote, within the same daily budget per source |
-| Guardrail 5 (12) | Web content never writes memory or rules | Web content may add to `memory/journal/` as quoted data with a link; never to topic files, views or rules |
+| Guardrail 5 (12) | Web content never writes memory or rules | Done: web content may add to `memory/journal/` as quoted data with a link; never to topic files, views or rules |
 | L6 scheduling (22) | Rung 2 and 3 sources read only while you use the app | Done: also read on a view's schedule (34.1); still read only |
 | L1 Facebook (17) | Assist mode by default | Chosen per source in the site policy (34.7) |
 | View file (9.4) | Sources, Rules, Layout | Done: adds an optional Time section |
 | Sources (9.2) | RSS, YouTube, X, `Page:` | Done: adds `Watch:`, `Following:` and a `(newest first)` mark on `Page:` |
 | Condition (11.4) | 6 fields | Done: adds `judged:<name>` and `author_in` |
 | Store (11.2) | 2 tables | Done: adds `follows`, `follow_lists` and `moments` |
-| Page operations | extract, scroll, challenge, skeleton, readability | Adds text (done, for watched pages) and transcript |
+| Page operations | extract, scroll, challenge, skeleton, readability | Done: adds text (watched pages) and transcript (videos) |
 
 ## 36. Order
 

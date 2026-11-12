@@ -30,6 +30,8 @@ Rules:
 * Handle missing fields, long text and every item kind: post, article, video, product, link.
 * item.source_id is "x", "youtube:<channel>", "rss:<site>" or "site:<domain>"; the part before ":" names the source, for layouts that group or label by source.
 * One article item whose extra.blocks is a JSON list of {type: h | p | img | quote | li, text, src} renders as a reader.
+* When an item has extra.summary (and for videos extra.worth_watching, such as "5:30 to 9:45: the test"), show them on its card.
+  A summary made later arrives through moi.on_update(items => ...): refresh those items' cards in place, never re-render.
 * Support light and dark mode with prefers-color-scheme.
 Start from the example lens and change it to match the layout request. If last_error is set, your previous lens failed that check; fix it."""
 

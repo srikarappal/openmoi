@@ -8,12 +8,16 @@ export class FakeMoi {
   readonly sent: Array<Record<string, unknown>> = []
   private render_listener: Listener | null = null
   private append_listener: Listener | null = null
+  private update_listener: Listener | null = null
 
   on_render(listener: Listener): void {
     this.render_listener = listener
   }
   on_append(listener: Listener): void {
     this.append_listener = listener
+  }
+  on_update(listener: Listener): void {
+    this.update_listener = listener
   }
   ready(): void {
     this.sent.push({ type: "ready" })
@@ -35,6 +39,9 @@ export class FakeMoi {
   }
   append(items: ViewItem[], cursor: string | null): void {
     this.append_listener?.(items, cursor)
+  }
+  update(items: ViewItem[]): void {
+    this.update_listener?.(items, null)
   }
 }
 

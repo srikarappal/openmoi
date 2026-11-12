@@ -169,8 +169,9 @@ export interface BrainEvent {
 
 export type LensKind = "feed" | "article" | "listing"
 
+// update: items already shown, with new fields (a summary); a lens refreshes them in place and keeps your place.
 export interface HostToLens {
-  type: "render" | "append"
+  type: "render" | "append" | "update"
   items: ViewItem[]
   cursor: string | null
 }
@@ -182,7 +183,28 @@ export type LensToHost =
   | { type: "seen"; item_ids: string[] }
   | { type: "less_like_this"; item_id: string }
 
-export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability" | "text"
+export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability" | "text" | "transcript"
+
+// What a video page says about its captions, read by the "transcript" page operation; the brain fetches the captions.
+export interface TranscriptSource {
+  title: string
+  description: string
+  caption_url: string | null
+}
+
+// An item a summarize rule wants read in full.
+export interface ContentWanted {
+  item_id: string
+  url: string
+  video: boolean
+}
+
+// What reading an item in full found: its title and text, and for a video where its captions are.
+export interface ItemContent {
+  title: string
+  text: string
+  caption_url: string | null
+}
 
 // A watched page's text, read by the "text" page operation.
 export interface PageText {

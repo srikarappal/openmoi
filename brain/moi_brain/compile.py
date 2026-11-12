@@ -25,7 +25,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "9"
+COMPILER_VERSION = "10"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
@@ -48,7 +48,7 @@ RETRY_AFTER_SECONDS = 60.0
 RULES_PROMPT = """You turn rules written in plain words into JSON for openMoi, a personal feed reader.
 Reply with one JSON object: {"rules": [<rule>, ...], "judgments": [<judgment>, ...], "summary": "<one short sentence>"}.
 
-A rule is {"when": <condition>, "unless": <condition or null>, "do": "hide" | "boost" | "limit", "weight": <number>, "count_per_day": <integer or null>}.
+A rule is {"when": <condition>, "unless": <condition or null>, "do": "hide" | "boost" | "limit" | "summarize" | "note", "weight": <number>, "count_per_day": <integer or null>}.
 A condition is {"field": <field>, "op": "eq" | "in" | "contains" | "gt" | "lt", "value": <string, number or list of strings>}.
 Fields:
 * source_id: where an item comes from. Use one of the given sources, or "x", "youtube" or "rss" for a whole family.
@@ -69,6 +69,9 @@ Fields:
 
 "hide", "no" and "never" mean do hide. "first" or "always show" mean boost with weight 10; "more of" means boost with weight 3.
 "at most N a day" means limit with count_per_day N.
+"summarize" reads the whole article or video and puts a short summary on its card ("summarize videos over 20 minutes":
+when media_kind eq long_video). "note" writes a short note into the journal about items the person opens ("take notes on
+what I read"). For these two "when" may be null, meaning every item.
 "unless" or "except" becomes the unless condition.
 Test source_id only when the rule names a whole source ("no X", "at most 20 from YouTube"). A kind of item ("likes and
 trending notifications", "job posts", "ads") is a judgment, never a whole source. For example "Hide likes and trending
@@ -123,9 +126,10 @@ class Condition(BaseModel):
 
 
 class Rule(BaseModel):
-    when: Condition
+    # null only for summarize and note rules, meaning every item.
+    when: Condition | None = None
     unless: Condition | None = None
-    do: Literal["hide", "boost", "limit"]
+    do: Literal["hide", "boost", "limit", "summarize", "note"]
     weight: float = 0.0
     count_per_day: int | None = None
 
@@ -316,6 +320,8 @@ def usable_rules(rules: list[Rule], judgments: list[Judgment] | None = None) -> 
     usable = []
     for rule in rules:
         if (rule.do == "limit" and not rule.count_per_day) or not judged_names(rule) <= declared.keys():
+            continue
+        if rule.when is None and rule.do in ("hide", "boost", "limit"):
             continue
         usable.append(rule.model_copy(update={"weight": rule.weight or DEFAULT_BOOST}) if rule.do == "boost" else rule)
     used = set().union(*(judged_names(rule) for rule in usable))

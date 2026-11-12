@@ -9,6 +9,7 @@ import type {
   EditScope,
   ExtractorSpec,
   IngestResult,
+  Item,
   LensKind,
   ModelChange,
   ModelInfo,
@@ -23,6 +24,7 @@ import type {
   Mirror,
   MomentKind,
   WatchReport,
+  ContentWanted,
 } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
@@ -83,7 +85,8 @@ export class BrainClient {
     return this.request("POST", `/view/${encodeURIComponent(view_id)}`, { exclude_ids })
   }
 
-  events(events: BrainEvent[]): Promise<{ recorded: number }> {
+  // notes: items just opened that a note rule covers.
+  events(events: BrainEvent[]): Promise<{ recorded: number; notes?: string[] }> {
     return this.request("POST", "/events", { events })
   }
 
@@ -117,6 +120,14 @@ export class BrainClient {
 
   follows(list_url: string, records: RawRecord[]): Promise<{ stored: number }> {
     return this.request("POST", "/follows", { list_url, records })
+  }
+
+  content_wanted(): Promise<ContentWanted[]> {
+    return this.request("GET", "/content/wanted")
+  }
+
+  add_content(item_id: string, purpose: "summary" | "note", title: string, text: string, caption_url: string | null): Promise<{ status: string; item?: Item | null }> {
+    return this.request("POST", "/content", { item_id, purpose, title, text, caption_url })
   }
 
   watches_due(): Promise<PageSource[]> {

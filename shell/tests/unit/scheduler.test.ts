@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { BrainClient } from "../../src/main/brain"
 import { Scheduler } from "../../src/main/scheduler"
-import type { PageSource, ViewSchedule } from "../../src/shared/types"
+import type { ContentWanted, PageSource, ViewSchedule } from "../../src/shared/types"
 
 const SEVEN = "2026-11-10T07:00:00Z"
 const SIX_PM = "2026-11-10T18:00:00Z"
@@ -19,8 +19,9 @@ function make_scheduler(answers: Array<ViewSchedule[] | Error>, read: (view_id: 
     }),
     schedule_done: vi.fn(async () => ({ status: "done" })),
     watches_due: vi.fn(async (): Promise<PageSource[]> => []),
+    content_wanted: vi.fn(async (): Promise<ContentWanted[]> => []),
   }
-  const hooks = { read: vi.fn(read), watch: vi.fn(async (_source: PageSource) => {}), edition_out: vi.fn(), failed: vi.fn() }
+  const hooks = { read: vi.fn(read), watch: vi.fn(async (_source: PageSource) => {}), summarize: vi.fn(async (_wanted: ContentWanted) => {}), edition_out: vi.fn(), failed: vi.fn() }
   const scheduler = new Scheduler(brain as unknown as BrainClient, hooks, 1_000)
   return { scheduler, brain, hooks }
 }
@@ -148,5 +149,32 @@ describe("Scheduler watched pages", () => {
     await scheduler.tick()
     await scheduler.idle()
     expect(hooks.failed).toHaveBeenCalledWith("Looking at https://visa.example.gov/slots failed: tab crashed")
+  })
+})
+
+describe("Scheduler summaries", () => {
+  const FIRST = { item_id: "a1", url: "https://blog.example/1", video: false }
+  const SECOND = { item_id: "a2", url: "https://blog.example/2", video: false }
+
+  it("reads wanted items one at a time and never starts a second round while one runs", async () => {
+    const held = new HeldRead()
+    const { scheduler, brain, hooks } = make_scheduler([[]])
+    brain.content_wanted.mockResolvedValue([FIRST, SECOND])
+    hooks.summarize.mockImplementationOnce(() => held.run())
+    await scheduler.tick()
+    await scheduler.tick()
+    expect(brain.content_wanted).toHaveBeenCalledTimes(1)
+    expect(hooks.summarize).toHaveBeenCalledTimes(1)
+    held.release()
+    await scheduler.idle()
+    expect(hooks.summarize.mock.calls.map((call) => call[0])).toEqual([FIRST, SECOND])
+  })
+
+  it("reports summaries that could not be made", async () => {
+    const { scheduler, brain, hooks } = make_scheduler([[]])
+    brain.content_wanted.mockRejectedValueOnce(new Error("brain restarting"))
+    await scheduler.tick()
+    await scheduler.idle()
+    expect(hooks.failed).toHaveBeenCalledWith("Summaries could not be made: brain restarting")
   })
 })

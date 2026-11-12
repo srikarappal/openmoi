@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import Brain, MineRequest, MomentKind, Overview, PageSource, ViewPage, ViewSchedule, WatchReport
+from moi_brain.brain import Brain, ContentWanted, MineRequest, MomentKind, Overview, PageSource, ViewPage, ViewSchedule, WatchReport
+from moi_brain.content import MAX_CONTENT
 from moi_brain.watch import MAX_WATCH_TEXT
 from moi_brain.mirror import Mirror
 from moi_brain.compile import BadInput, ViewInfo
@@ -136,6 +137,14 @@ class ProposalRequest(BaseModel):
     proposal_id: str
 
 
+class ContentRequest(BaseModel):
+    item_id: str
+    purpose: Literal["summary", "note"]
+    title: str = Field(default="", max_length=500)
+    text: str = Field(default="", max_length=MAX_CONTENT * 2)
+    caption_url: str | None = Field(default=None, max_length=2000)
+
+
 class WatchReportRequest(BaseModel):
     url: str
     title: str = Field(default="", max_length=500)
@@ -213,6 +222,23 @@ def open_early(view_id: str, brain: BrainDep) -> dict[str, str]:
     return {"status": "open"}
 
 
+@router.get("/content/wanted")
+def content_wanted(brain: BrainDep, limit: int = 5) -> list[ContentWanted]:
+    return brain.content_wanted(min(max(limit, 1), 20))
+
+
+class ContentResponse(BaseModel):
+    status: str
+    # The item with its summary, so an open view can show it in place.
+    item: Item | None = None
+
+
+@router.post("/content")
+def add_content(body: ContentRequest, brain: BrainDep) -> ContentResponse:
+    status = brain.add_content(body.item_id, body.purpose, body.title, body.text, body.caption_url)
+    return ContentResponse(status=status, item=brain.store.get_item(body.item_id) if status == "summarized" else None)
+
+
 @router.get("/watches/due")
 def watches_due(brain: BrainDep) -> list[PageSource]:
     return brain.watches_due()
@@ -251,9 +277,9 @@ def schedule_done(body: ScheduleDoneRequest, brain: BrainDep) -> dict[str, str]:
 
 
 @router.post("/events")
-def events(body: EventsRequest, brain: BrainDep) -> dict[str, int]:
+def events(body: EventsRequest, brain: BrainDep) -> dict[str, Any]:
     brain.record_events(body.events)
-    return {"recorded": len(body.events)}
+    return {"recorded": len(body.events), "notes": brain.notes_wanted(body.events)}
 
 
 @router.post("/edit")

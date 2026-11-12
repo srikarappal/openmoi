@@ -1,14 +1,17 @@
 // Runs the reads editions need when they are due and says when an edition comes out. It looks every minute and
 // whenever the Mac wakes; a read the Mac slept through is due late and runs then. Reads go one view at a time each.
-import type { PageSource, ViewSchedule } from "../shared/types"
+import type { ContentWanted, PageSource, ViewSchedule } from "../shared/types"
 import type { BrainClient } from "./brain"
 
 const TICK_MS = 60_000
+const SUMMARIES = "summaries"
 
 export interface SchedulerHooks {
   read(view_id: string): Promise<void>
   // A watched page is due for another look.
   watch(source: PageSource): Promise<void>
+  // An item a summarize rule wants read in full.
+  summarize(wanted: ContentWanted): Promise<void>
   // An edition came out while openMoi was running.
   edition_out(schedule: ViewSchedule): void
   failed(text: string): void
@@ -67,6 +70,20 @@ export class Scheduler {
       if (schedule.edition) this.editions.set(schedule.view_id, schedule.edition)
     }
     await this.look_at_watches()
+    this.summarize_wanted()
+  }
+
+  // Items to summarize are read one at a time, in the background, a few each minute.
+  private summarize_wanted(): void {
+    if (this.running.has(SUMMARIES)) return
+    const run = this.brain
+      .content_wanted()
+      .then(async (wanted) => {
+        for (const item of wanted) await this.hooks.summarize(item)
+      })
+      .catch((error) => this.hooks.failed(`Summaries could not be made: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => this.running.delete(SUMMARIES))
+    this.running.set(SUMMARIES, run)
   }
 
   // Each due watched page gets one look at a time; a failed look waits for the next minute.

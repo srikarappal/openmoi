@@ -48,6 +48,23 @@ def rss_feed(base_url: str, name: str, entries: list[tuple[str, str, str, int]])
     return f'<?xml version="1.0"?><rss version="2.0"><channel><title>{name}</title>{items}</channel></rss>'
 
 
+# A video's captions in YouTube's json3 shape: the demo is the part worth watching.
+CAPTIONS = {
+    "events": [
+        {"tStartMs": 0, "segs": [{"utf8": "Welcome back to the channel"}]},
+        {"tStartMs": 65_000, "segs": [{"utf8": "Here is the "}, {"utf8": "demo of the new battery"}]},
+        {"tStartMs": 190_000, "segs": [{"utf8": "Thanks for watching"}]},
+    ]
+}
+ARTICLE_PARAGRAPH = "The new chip doubles battery life by moving work to efficient cores and sleeping the radio between packets."
+
+
+def article_page(path: str) -> str:
+    """A long enough article for reader mode, titled by its path."""
+    paragraphs = "".join(f"<p>Article {path}. {ARTICLE_PARAGRAPH} Paragraph {index}.</p>" for index in range(8))
+    return f"<html><head><title>{path}</title></head><body><article><h1>{path}</h1>{paragraphs}</article></body></html>"
+
+
 def youtube_feed(base_url: str) -> str:
     now = datetime.now(UTC)
     entries = "".join(
@@ -147,13 +164,15 @@ class Handler(BaseHTTPRequestHandler):
             self.etag_feed(base)
         elif parts.path == "/watched":
             self.watched_page(parts.query)
+        elif parts.path == "/api/timedtext":
+            self.reply(200, "application/json", json.dumps(CAPTIONS))
         elif parts.path in ROUTES:
             content_type, render = ROUTES[parts.path]
             self.reply(200, content_type, render(base))
         elif parts.path.startswith("/pages/") and (PAGES_DIR / parts.path.removeprefix("/pages/")).is_file():
             self.reply(200, "text/html", (PAGES_DIR / parts.path.removeprefix("/pages/")).read_text())
         elif parts.path.startswith("/articles/"):
-            self.reply(200, "text/html", f"<html><head><title>{parts.path}</title></head><body><p>Article {parts.path}</p></body></html>")
+            self.reply(200, "text/html", article_page(parts.path))
         else:
             self.reply(404, "text/plain", "not found")
 

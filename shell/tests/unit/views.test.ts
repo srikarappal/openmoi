@@ -18,7 +18,7 @@ function make_views(outcomes: FillOutcome[], pages: ViewPage[] = [], page_source
     ingest: vi.fn(async () => {}),
   }
   const sources = { fill: vi.fn(async (..._args: unknown[]) => outcomes.shift() ?? ({ status: "skipped" } as FillOutcome)) }
-  const lenses = { get: (key: string) => (key === context.key ? context : undefined) }
+  const lenses = { get: (key: string) => (key === context.key ? context : undefined), all: () => [context] }
   const { labels, track } = new Tracked()
   const hooks = { open_original: vi.fn(), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), alert: vi.fn(), track, labels }
   const views = new ViewController(brain as unknown as BrainClient, lenses as unknown as LensManager, sources as unknown as ReaderPool, hooks)
@@ -487,5 +487,69 @@ describe("ViewController watched pages", () => {
     await skipped.views.check_watch(WATCHED, false)
     expect(skipped.hooks.notify).not.toHaveBeenCalled()
     expect((skipped.brain as unknown as { watch_report: ReturnType<typeof vi.fn> }).watch_report).not.toHaveBeenCalled()
+  })
+})
+
+describe("ViewController summaries and notes", () => {
+  const WANTED = { item_id: "a1", url: "https://blog.example/1", video: false }
+
+  function content_views(outcome: unknown) {
+    const made = make_views([])
+    Object.assign(made.sources, { read_content: vi.fn(async () => outcome) })
+    Object.assign(made.brain, { add_content: vi.fn(async () => ({ status: "summarized" })), events: vi.fn(async () => ({ recorded: 1, notes: ["a1"] })) })
+    return made as typeof made & { brain: typeof made.brain & { add_content: ReturnType<typeof vi.fn>; events: ReturnType<typeof vi.fn> } }
+  }
+
+  it("reads a wanted item in full and hands it to the brain to summarize, even when the read failed", async () => {
+    const read = content_views({ status: "read", content: { title: "Lithium", text: "Long text", caption_url: null } })
+    await read.views.summarize(WANTED)
+    expect(read.brain.add_content).toHaveBeenCalledWith("a1", "summary", "Lithium", "Long text", null)
+    expect(read.hooks.labels).toEqual(["Reading https://blog.example/1 in full"])
+    const failed = content_views({ status: "failed", error: "tab crashed" })
+    await failed.views.summarize(WANTED)
+    expect(failed.brain.add_content).toHaveBeenCalledWith("a1", "summary", "", "", null)
+  })
+
+  it("takes a note on an item you open when a note rule covers it", async () => {
+    const made = content_views({ status: "read", content: { title: "", text: "Long text", caption_url: null } })
+    made.context.rendered.set("a1", { item_id: "a1", url: "https://blog.example/1", title: "Lithium recycling" } as never)
+    await made.views.on_event(made.context, { type: "open", item_id: "a1" })
+    await vi.waitFor(() => expect(made.brain.add_content).toHaveBeenCalledWith("a1", "note", "Lithium recycling", "Long text", null))
+    expect(made.hooks.open_original).toHaveBeenCalledWith("https://blog.example/1")
+  })
+
+  it("takes no note without a note rule, or when the item could not be read", async () => {
+    const quiet = content_views({ status: "read", content: { title: "T", text: "x", caption_url: null } })
+    quiet.brain.events.mockResolvedValueOnce({ recorded: 1 })
+    quiet.context.rendered.set("a1", { item_id: "a1", url: "https://blog.example/1", title: "T" } as never)
+    await quiet.views.on_event(quiet.context, { type: "open", item_id: "a1" })
+    const unreadable = content_views({ status: "failed", error: "tab crashed" })
+    unreadable.context.rendered.set("a1", { item_id: "a1", url: "https://blog.example/1", title: "T" } as never)
+    await unreadable.views.on_event(unreadable.context, { type: "open", item_id: "a1" })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(quiet.brain.add_content).not.toHaveBeenCalled()
+    expect(unreadable.brain.add_content).not.toHaveBeenCalled()
+  })
+
+  it("says when a note could not be taken", async () => {
+    const made = content_views({ status: "read", content: { title: "T", text: "x", caption_url: null } })
+    made.brain.add_content.mockRejectedValueOnce(new Error("brain gone"))
+    made.context.rendered.set("a1", { item_id: "a1", url: "https://blog.example/1", title: "T" } as never)
+    await made.views.on_event(made.context, { type: "open", item_id: "a1" })
+    await vi.waitFor(() => expect(made.hooks.notify).toHaveBeenCalledWith("No note was taken: Error: brain gone"))
+  })
+})
+
+describe("ViewController summaries in place", () => {
+  it("sends a fresh summary to every lens that shows the item, and to no other", async () => {
+    const made = make_views([])
+    const summarized = { item_id: "a1", url: "https://blog.example/1", title: "T", extra: { summary: "Short." } }
+    Object.assign(made.sources, { read_content: vi.fn(async () => ({ status: "read", content: { title: "T", text: "x", caption_url: null } })) })
+    Object.assign(made.brain, { add_content: vi.fn(async () => ({ status: "summarized", item: summarized })) })
+    await made.views.summarize({ item_id: "a1", url: "https://blog.example/1", video: false })
+    expect(made.context.send).not.toHaveBeenCalled()
+    made.context.rendered.set("a1", { item_id: "a1" } as never)
+    await made.views.summarize({ item_id: "a1", url: "https://blog.example/1", video: false })
+    expect(made.context.send).toHaveBeenCalledWith({ type: "update", items: [{ item: summarized, reasons: [] }], cursor: null })
   })
 })

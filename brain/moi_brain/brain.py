@@ -2,12 +2,14 @@
 
 import json
 import queue
+import re
 import sys
 import threading
 from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from operator import itemgetter
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -15,6 +17,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from moi_brain.compile import BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
+from moi_brain.content import ContentSummary, caption_allowed, is_video, summary_extra, summary_prompt, transcript_text
 from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, save_settings
 from moi_brain.editions import LEAD, LOCAL_LEAD, Edition, EditionBook
 from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
@@ -25,11 +28,11 @@ from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
 from moi_brain.items import HANDLE, Event, Item, ViewItem, normalize, page_source_id, profile_handle, rss_source_id, watch_source_id, youtube_source_id
 from moi_brain.lens_gen import generate_lens
 from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
-from moi_brain.llm import Gateway
+from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import parse_sections, section_text
 from moi_brain.memory import TOPIC_FILES, Memory
 from moi_brain.mirror import MAX_DAYS, Mirror, build_mirror
-from moi_brain.rank import PAGE_SIZE, Circles, Order, kept_share, rank
+from moi_brain.rank import PAGE_SIZE, Circles, Order, applies, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
@@ -46,6 +49,10 @@ SEEN_KEEP = timedelta(hours=12)
 FOLLOWS_EVERY = timedelta(days=7)
 NOBODY_KNOWN = "Rules about people you know have no one to go on yet: add a Following source, or people to memory/people.md."
 MIRROR_EVERY = timedelta(days=7)
+# Items a summarize rule wants are summarized while they are this fresh and unseen.
+CONTENT_WINDOW = timedelta(hours=48)
+CONTENT_FAILED = "summary_failed"
+WHITESPACE = re.compile(r"\s+")
 MomentKind = Literal["visit", "extended", "early"]
 X_DOMAIN = "x.com"
 HTTP_TIMEOUT = 15.0
@@ -68,6 +75,14 @@ class PageSource(BaseModel):
     # "follows": a page listing accounts you follow, read into who you know rather than into items.
     # "watch": a page whose text is compared with its last look.
     purpose: Literal["items", "follows", "watch"] = "items"
+
+
+class ContentWanted(BaseModel):
+    """An item a summarize rule wants read in full: an article, or a video whose transcript is read."""
+
+    item_id: str
+    url: str
+    video: bool
 
 
 class WatchAlert(BaseModel):
@@ -204,6 +219,7 @@ class Brain:
         self.editions = EditionBook(paths.editions)
         self.gateway = Gateway(settings, paths.llm_log, self.http)
         self.fetcher = FeedFetcher(self.http, paths.channel_cache, youtube_base)
+        self.youtube_base = youtube_base
         self.memory = Memory(paths)
         self.compiler = Compiler(paths, self.gateway, self.memory)
         self.tagger = Tagger(self.store, self.gateway, paths.tagging_state, self.watch_list, self.watch_judgments)
@@ -416,6 +432,72 @@ class Brain:
         """Accounts from a page listing who you follow; each becomes known on its own site."""
         accounts = [account for record in records if (account := profile_handle(record, list_url))]
         return self.store.add_follows(list_url, accounts, self.clock())
+
+    def content_wanted(self, limit: int = 5) -> list[ContentWanted]:
+        """Fresh unseen items a view's summarize rules want, newest first; one that failed once is not asked for again."""
+        now = self.clock()
+        circles = self.circles()
+        found: dict[str, tuple[datetime, ContentWanted]] = {}
+        for view_id in self.compiler.view_ids():
+            compiled = self.compiler.compiled(view_id)
+            rules = [rule for rule in compiled.rules if rule.do == "summarize"]
+            if not rules:
+                continue
+            for item, seen_at in self.store.items_with_seen(compiled.source_ids(), now - CONTENT_WINDOW):
+                if seen_at or "summary" in item.extra or CONTENT_FAILED in item.extra:
+                    continue
+                if any(applies(rule, item, now, circles) for rule in rules):
+                    found[item.item_id] = (item.published_at or item.fetched_at, ContentWanted(item_id=item.item_id, url=item.url, video=is_video(item.url)))
+        newest = sorted(found.values(), key=itemgetter(0), reverse=True)
+        return [wanted for _, wanted in newest[:limit]]
+
+    def add_content(self, item_id: str, purpose: Literal["summary", "note"], title: str, text: str, caption_url: str | None) -> str:
+        """The full text of an item, or its video's captions: a summary on its card, or a note in today's journal.
+        Returns what happened: summarized, noted, empty or the model's problem."""
+        item = self.store.get_item(item_id)
+        if item is None:
+            raise BadInput("That item is gone.")
+        if caption_url and caption_allowed(caption_url, self.youtube_base):
+            text = self.captions(caption_url) or text
+        if not text.strip():
+            if purpose == "summary":
+                self.store.update_extra(item_id, {CONTENT_FAILED: "no text"})
+            return "empty"
+        try:
+            summary = self.gateway.complete_json("fast", "summarize", summary_prompt(item, title, text), True, ContentSummary)
+        except LlmError as error:
+            if purpose == "summary":
+                self.store.update_extra(item_id, {CONTENT_FAILED: str(error)[:200]})
+            return f"failed: {error}"
+        if purpose == "summary":
+            self.store.update_extra(item_id, summary_extra(summary))
+            return "summarized"
+        line = WHITESPACE.sub(" ", f"note: {title or item.title or item.url}: {summary.summary}").strip()
+        self.memory.append_journal(self.clock(), f"{line} ({item.url})")
+        return "noted"
+
+    def captions(self, caption_url: str) -> str:
+        """A video's transcript from YouTube's caption address, or empty when it cannot be had."""
+        try:
+            response = self.http.get(caption_url, params={"fmt": "json3"})
+            response.raise_for_status()
+            return transcript_text(response.json())
+        except (httpx.HTTPError, ValueError):
+            return ""
+
+    def notes_wanted(self, events: list[Event]) -> list[str]:
+        """Items just opened that a note rule of their view covers."""
+        now = self.clock()
+        wanted = []
+        opened = self.store.get_items([event.item_id for event in events if event.event_kind == "open" and event.item_id])
+        for event in events:
+            item = opened.get(event.item_id or "")
+            if item is None or event.event_kind != "open":
+                continue
+            rules = [rule for rule in self.compiler.compiled(check_view_id(event.view_id)).rules if rule.do == "note"]
+            if any(applies(rule, item, now, self.circles()) for rule in rules):
+                wanted.append(item.item_id)
+        return wanted
 
     def watches_due(self) -> list[PageSource]:
         """Watched pages whose time for another look has come, once each however many views watch them."""

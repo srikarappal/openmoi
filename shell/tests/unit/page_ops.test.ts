@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { beforeEach, describe, expect, it } from "vitest"
-import { run_page_op } from "../../src/shared/page_ops"
+import { json_object_at, run_page_op } from "../../src/shared/page_ops"
 import type { ExtractorSpec } from "../../src/shared/types"
 
 const PAGES = path.resolve(__dirname, "..", "..", "..", "fixtures", "pages")
@@ -67,5 +67,31 @@ describe("the text page operation", () => {
     const main = document.querySelector("[role=main]") as HTMLElement
     Object.defineProperty(main, "innerText", { configurable: true, value: "Shown as rendered" })
     expect((run_page_op("text", {}) as { text: string }).text).toBe("Shown as rendered")
+  })
+})
+
+describe("the transcript page operation", () => {
+  it("finds the English captions, title and description in a video page's player data", () => {
+    load("watch.html")
+    expect(run_page_op("transcript", {})).toEqual({
+      title: "The new battery, explained",
+      description: 'A look at the new battery {with braces} and "quotes".',
+      caption_url: new URL("/api/timedtext?v=demo&lang=en", location.href).href,
+    })
+  })
+
+  it("falls back to the first captions, then to the page title with none", () => {
+    document.title = "A video"
+    document.body.innerHTML = '<script>var ytInitialPlayerResponse = {"captions": {"playerCaptionsTracklistRenderer": {"captionTracks": [{"baseUrl": "https://www.youtube.com/api/timedtext?v=x&lang=de"}]}}};</script>'
+    expect(run_page_op("transcript", {})).toEqual({ title: "A video", description: "", caption_url: "https://www.youtube.com/api/timedtext?v=x&lang=de" })
+    document.body.innerHTML = '<script>var ytInitialPlayerResponse = {"videoDetails": {"title": "No captions"}};</script><script>var other = 1;</script>'
+    expect(run_page_op("transcript", {})).toEqual({ title: "No captions", description: "", caption_url: null })
+    document.body.innerHTML = '<script>var ytInitialPlayerResponse = {"never": "closes"</script>'
+    expect(run_page_op("transcript", {})).toEqual({ title: "A video", description: "", caption_url: null })
+  })
+
+  it("matches braces outside strings only", () => {
+    expect(json_object_at('x = {"a": "}{", "b": {"c": "\\"}"}} tail', 4)).toBe('{"a": "}{", "b": {"c": "\\"}"}}')
+    expect(json_object_at("{ open", 0)).toBeNull()
   })
 })

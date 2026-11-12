@@ -4,7 +4,7 @@ import type { HostToLens, LensToHost, ViewItem } from "../shared/types"
 
 type Listener = (items: ViewItem[], cursor: string | null) => void
 
-const listeners: Record<HostToLens["type"], Listener[]> = { render: [], append: [] }
+const listeners: Record<HostToLens["type"], Listener[]> = { render: [], append: [], update: [] }
 
 ipcRenderer.on("moi:lens", (_event, message: HostToLens) => {
   for (const listener of listeners[message.type] ?? []) listener(message.items, message.cursor)
@@ -23,6 +23,7 @@ function by_you(): boolean {
 contextBridge.exposeInMainWorld("moi", {
   on_render: (listener: Listener) => listeners.render.push(listener),
   on_append: (listener: Listener) => listeners.append.push(listener),
+  on_update: (listener: Listener) => listeners.update.push(listener),
   ready: () => send({ type: "ready" }),
   open: (item_id: string) => {
     if (by_you()) send({ type: "open", item_id: String(item_id) })

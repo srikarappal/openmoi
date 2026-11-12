@@ -155,6 +155,7 @@ export class Shell implements ViewHost {
         read: (view_id) => this.views.read_for_edition(view_id),
         // Not forced: a page that keeps failing is tried at most every 10 minutes, not every minute.
         watch: (source) => this.views.check_watch(source, false),
+        summarize: (wanted) => this.views.summarize(wanted),
         edition_out: (schedule) => this.edition_out(schedule),
         failed: (text) => this.notify(text),
       },

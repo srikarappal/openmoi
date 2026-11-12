@@ -134,11 +134,15 @@ describe("preloads", () => {
     const appended: unknown[] = []
     moi.on_render((items: unknown, cursor: unknown) => rendered.push([items, cursor]))
     moi.on_append((items: unknown, cursor: unknown) => appended.push([items, cursor]))
+    const updated: unknown[] = []
+    moi.on_update((items: unknown) => updated.push(items))
     ipcRenderer.emit("moi:lens", {}, { type: "render", items: ["a"], cursor: null })
     ipcRenderer.emit("moi:lens", {}, { type: "append", items: ["b"], cursor: "more" })
+    ipcRenderer.emit("moi:lens", {}, { type: "update", items: ["c"], cursor: null })
     ipcRenderer.emit("moi:lens", {}, { type: "unknown", items: [], cursor: null })
     expect(rendered).toEqual([[["a"], null]])
     expect(appended).toEqual([[["b"], "more"]])
+    expect(updated).toEqual([["c"]])
     moi.ready()
     moi.open(42)
     moi.more({ toString: () => "deeper" })

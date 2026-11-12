@@ -2,7 +2,7 @@
 // Page sources read ahead of you: as you near the end of what is shown, their reader tabs scroll further, enough to
 // refill the view after your rules hide some, so the feed goes on like the site's own until a source ends.
 import { sleep } from "../shared/timing"
-import type { Item, LensToHost, Notice, PageSource, RawRecord, ViewPage, WatchAlert } from "../shared/types"
+import type { ContentWanted, Item, LensToHost, Notice, PageSource, RawRecord, ViewPage, WatchAlert } from "../shared/types"
 import type { Track } from "./activity"
 import type { BrainClient } from "./brain"
 import type { DriverKind } from "./drivers"
@@ -206,6 +206,24 @@ export class ViewController {
     if (!report.changed) return
     for (const context of this.lenses_reading(source.source_id)) await this.append_next(context)
     if (report.alert) this.hooks.alert(report.alert)
+  }
+
+  // An item a summarize rule wants: read in full, then summarized by the brain onto its card for the next time it shows.
+  async summarize(wanted: ContentWanted): Promise<void> {
+    const outcome = await this.hooks.track(`Reading ${wanted.url} in full`, () => this.readers.read_content(wanted.url, wanted.video))
+    const content = outcome.status === "read" ? outcome.content : { title: "", text: "", caption_url: null }
+    const result = await this.brain.add_content(wanted.item_id, "summary", content.title, content.text, content.caption_url)
+    if (!result.item) return
+    for (const context of this.lenses.all()) {
+      if (context.rendered.has(wanted.item_id)) context.send({ type: "update", items: [{ item: result.item, reasons: [] }], cursor: null })
+    }
+  }
+
+  // An item you opened that a note rule covers: read in full and noted in today's journal.
+  private async take_note(item: Item): Promise<void> {
+    const outcome = await this.readers.read_content(item.url, false)
+    if (outcome.status !== "read") return
+    await this.brain.add_content(item.item_id, "note", outcome.content.title || label_of(item), outcome.content.text, outcome.content.caption_url)
   }
 
   // Open view lenses whose sources include this one.
@@ -421,8 +439,9 @@ export class ViewController {
   async on_event(context: LensContext, message: LensToHost): Promise<void> {
     const item = "item_id" in message ? context.rendered.get(message.item_id) : undefined
     if (message.type === "open" && item) {
-      await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "open" }])
+      const recorded = await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "open" }])
       this.hooks.open_original(item.url)
+      if (recorded?.notes?.includes(item.item_id)) this.take_note(item).catch((error) => this.hooks.notify(`No note was taken: ${error}`))
     } else if (message.type === "less_like_this" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "less_like_this" }])
       this.hooks.less_like_this(context.view_id, item)

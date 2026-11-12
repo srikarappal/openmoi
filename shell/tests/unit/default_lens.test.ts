@@ -84,3 +84,32 @@ describe("default lens", () => {
     expect(dom.window.document.getElementById("footer")?.textContent).toBe("Nothing new yet.")
   })
 })
+
+describe("default lens summaries", () => {
+  it("shows a summary and what is worth watching on the card, as text", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    moi.render([view_item("v1", { kind: "video", title: "Laptop review", extra: { summary: "<b>Fourteen</b> hours of battery.", worth_watching: "5:30 to 9:45: the test" } }), view_item("v2", { title: "Plain" })], null)
+    const document = dom.window.document
+    expect(document.querySelector(".summary")?.textContent).toBe("<b>Fourteen</b> hours of battery.")
+    expect(document.querySelector(".summary b")).toBeNull()
+    expect(document.querySelector(".watching")?.textContent).toBe("Worth watching: 5:30 to 9:45: the test")
+    expect(document.querySelectorAll(".summary")).toHaveLength(1)
+  })
+})
+
+describe("default lens updates", () => {
+  it("adds a summary to a card in place, keeping its reasons, and ignores items it does not show", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    moi.render([{ ...view_item("v1", { title: "Laptop review" }), reasons: ["recent", "boost: author maya"] }], null)
+    const document = dom.window.document
+    const card = document.querySelector("[data-item-id='v1']")
+    moi.update([{ item: view_item("v1", { title: "Laptop review", extra: { summary: "Fourteen hours.", worth_watching: "5:30 to 9:45" } }).item, reasons: [] }, view_item("nope", {})])
+    expect(document.querySelector("[data-item-id='v1']")).toBe(card)
+    expect(card?.querySelector(".summary")?.textContent).toBe("Fourteen hours.")
+    expect(Array.from(card?.querySelectorAll(".chip") ?? [], (chip) => chip.textContent)).toEqual(["recent", "boost: author maya"])
+    moi.update([{ item: view_item("v1", { title: "Laptop review", extra: { summary: "Fifteen hours." } }).item, reasons: [] }])
+    expect(card?.querySelectorAll(".summary")).toHaveLength(1)
+    expect(card?.querySelector(".summary")?.textContent).toBe("Fifteen hours.")
+    expect(card?.querySelector(".watching")).toBeNull()
+  })
+})

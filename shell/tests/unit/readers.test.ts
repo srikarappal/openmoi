@@ -459,3 +459,70 @@ describe("ReaderPool watched pages", () => {
     expect(await make_pool(new WatchedPage()).read_text(thrifty, true)).toEqual({ status: "failed", error: "today's budget for this page is used", driver: "chrome" })
   })
 })
+
+// An item page read in full: a video, an article, a plain page, a check in the way or a broken tab.
+class ItemPage implements PageDriver {
+  readonly kind = "chrome" as const
+  closed = 0
+  wall = false
+  article: RawRecord | null = { title: "Lithium", text: "Long article text" }
+
+  constructor(private readonly broken = false) {}
+
+  async open(): Promise<string> {
+    if (this.broken) throw new Error("tab crashed")
+    return "tab1"
+  }
+
+  async run<T>(_handle: string, op: string): Promise<T> {
+    if (op === "challenge") return this.wall as T
+    if (op === "transcript") return { title: "Video", description: "About it", caption_url: "https://www.youtube.com/api/timedtext?v=1" } as T
+    if (op === "readability") return this.article as T
+    return { title: "Page", text: "Plain text" } as T
+  }
+
+  async url(): Promise<string> {
+    return "https://a.example/"
+  }
+
+  async close(): Promise<void> {
+    this.closed += 1
+  }
+}
+
+describe("ReaderPool items read in full", () => {
+  it("reads a video's captions address, an article's text or a plain page's text, closing each tab", async () => {
+    vi.useFakeTimers()
+    const page = new ItemPage()
+    const pool = make_pool(page)
+    const video = pool.read_content("https://www.youtube.com/watch?v=1", true)
+    await pass_time(2_100)
+    expect(await video).toEqual({ status: "read", content: { title: "Video", text: "About it", caption_url: "https://www.youtube.com/api/timedtext?v=1" } })
+    const article = pool.read_content("https://a.example/1", false)
+    await pass_time(2_100)
+    expect(await article).toEqual({ status: "read", content: { title: "Lithium", text: "Long article text", caption_url: null } })
+    page.article = null
+    const plain = pool.read_content("https://a.example/2", false)
+    await pass_time(2_100)
+    expect(await plain).toEqual({ status: "read", content: { title: "Page", text: "Plain text", caption_url: null } })
+    page.article = { url: "https://a.example/3" }
+    const untitled = pool.read_content("https://a.example/3", false)
+    await pass_time(2_100)
+    expect(await untitled).toEqual({ status: "read", content: { title: "", text: "", caption_url: null } })
+    expect(page.closed).toBe(4)
+  })
+
+  it("fails on a check in the way, a broken tab or a used up budget", async () => {
+    vi.useFakeTimers()
+    const page = new ItemPage()
+    page.wall = true
+    const pool = make_pool(page)
+    const walled = pool.read_content("https://a.example/1", false)
+    await pass_time(2_100)
+    expect(await walled).toEqual({ status: "failed", error: "a sign in or check is in the way" })
+    expect(await make_pool(new ItemPage(true)).read_content("https://a.example/1", false)).toEqual({ status: "failed", error: "tab crashed" })
+    const busy = make_pool(new ItemPage(true))
+    for (let read = 0; read < 50; read++) await busy.read_content("https://a.example/1", false)
+    expect(await busy.read_content("https://a.example/1", false)).toEqual({ status: "failed", error: "today's budget for reading items in full is used" })
+  })
+})

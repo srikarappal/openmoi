@@ -99,7 +99,7 @@ def test_seen_items_stay_for_half_a_day_then_leave_and_open_is_recorded(client, 
     page = client.post("/view/feed", json={}).json()
     first_id = page["items"][0]["item"]["item_id"]
     events = [{"view_id": "feed", "item_id": first_id, "event_kind": "seen"}, {"view_id": "feed", "item_id": first_id, "event_kind": "open"}]
-    assert client.post("/events", json={"events": events}).json() == {"recorded": 2}
+    assert client.post("/events", json={"events": events}).json() == {"recorded": 2, "notes": []}
     assert first_id in shown_item_ids(client)
     brain.clock = half_a_day_later
     assert first_id not in shown_item_ids(client)

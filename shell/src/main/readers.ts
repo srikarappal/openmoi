@@ -5,7 +5,7 @@
 // newer than them was missed. One old post alone (a pinned one) does not count.
 import { record_key } from "../shared/extract"
 import { Throttle, sleep } from "../shared/timing"
-import type { ExtractorSpec, PageSource, PageText, RawRecord } from "../shared/types"
+import type { ExtractorSpec, ItemContent, PageSource, PageText, RawRecord, TranscriptSource } from "../shared/types"
 import type { BrainClient } from "./brain"
 import type { DriverKind, PageDriver } from "./drivers"
 import { find_listing_spec } from "./listing_spec"
@@ -19,6 +19,9 @@ const POLL_MS = 400
 const EMPTY_STEPS_TO_END = 3
 const RETRY_PAUSE_MS = 2_000
 const DEFAULT_DAILY_STEPS = 200
+// Items read in full (to summarize them or note them) each day, over all sites.
+const DAILY_CONTENT_READS = 50
+const CONTENT_BUDGET = "content"
 const DEFAULT_STEP_PX = 900
 // Read from the top, a newest first page goes on past what was wanted, until it reaches what was read before; this caps it.
 const MAX_COMPLETE_RECORDS = 300
@@ -35,6 +38,8 @@ export type FillOutcome =
   | { status: "challenge"; url: string; driver: DriverKind }
   // final: retrying cannot help (the page has no items a spec can find), so no second attempt is made.
   | { status: "failed"; error: string; driver: DriverKind; final?: boolean }
+
+export type ContentOutcome = { status: "read"; content: ItemContent } | { status: "failed"; error: string }
 
 export type TextOutcome = { status: "read"; page: PageText; driver: DriverKind } | { status: "skipped" } | { status: "challenge"; url: string; driver: DriverKind } | { status: "failed"; error: string; driver: DriverKind }
 
@@ -105,6 +110,31 @@ export class ReaderPool {
       return { status: "read", page: await driver.run<PageText>(handle, "text"), driver: driver.kind }
     } catch (error) {
       return { status: "failed", error: error instanceof Error ? error.message : String(error), driver: driver.kind }
+    } finally {
+      if (handle) await driver.close(handle).catch(ignore)
+    }
+  }
+
+  // One item read in full in a quiet tab that closes again: an article's text, or a video page's captions address.
+  // At most 50 a day over all sites.
+  async read_content(url: string, video: boolean): Promise<ContentOutcome> {
+    if (!this.spend(CONTENT_BUDGET, DAILY_CONTENT_READS)) return { status: "failed", error: "today's budget for reading items in full is used" }
+    const driver = await this.driver_for()
+    let handle: string | null = null
+    try {
+      handle = await driver.open(url, true)
+      await sleep(SPEC_SETTLE_MS)
+      if (await driver.run<boolean>(handle, "challenge")) return { status: "failed", error: "a sign in or check is in the way" }
+      if (video) {
+        const source = await driver.run<TranscriptSource>(handle, "transcript")
+        return { status: "read", content: { title: source.title, text: source.description, caption_url: source.caption_url } }
+      }
+      const article = await driver.run<RawRecord | null>(handle, "readability")
+      if (article) return { status: "read", content: { title: article.title ?? "", text: article.text ?? "", caption_url: null } }
+      const page = await driver.run<PageText>(handle, "text")
+      return { status: "read", content: { title: page.title, text: page.text, caption_url: null } }
+    } catch (error) {
+      return { status: "failed", error: error instanceof Error ? error.message : String(error) }
     } finally {
       if (handle) await driver.close(handle).catch(ignore)
     }
@@ -232,10 +262,14 @@ export class ReaderPool {
   }
 
   private spend_step(source: PageSource): boolean {
+    return this.spend(source.source_id, source.budget.daily_steps ?? DEFAULT_DAILY_STEPS)
+  }
+
+  private spend(key: string, daily: number): boolean {
     const today = day_of(this.clock())
-    const used = this.steps.get(source.source_id)?.day === today ? (this.steps.get(source.source_id)?.used ?? 0) : 0
-    if (used >= (source.budget.daily_steps ?? DEFAULT_DAILY_STEPS)) return false
-    this.steps.set(source.source_id, { day: today, used: used + 1 })
+    const used = this.steps.get(key)?.day === today ? (this.steps.get(key)?.used ?? 0) : 0
+    if (used >= daily) return false
+    this.steps.set(key, { day: today, used: used + 1 })
     return true
   }
 
