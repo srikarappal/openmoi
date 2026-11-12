@@ -50,6 +50,10 @@ class Item(BaseModel):
 class ViewItem(BaseModel):
     item: Item
     reasons: list[str] = Field(default_factory=list)
+    # The value a group_by rule groups this item under; the lens heads each run of one group.
+    group: str | None = None
+    # A summarize_only rule matched: the card shows the summary in place of the item's own text.
+    summary_only: bool = False
 
 
 class Event(BaseModel):

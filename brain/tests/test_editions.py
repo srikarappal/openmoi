@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from conftest import TOKEN, wait_until_refreshed
 from fastapi.testclient import TestClient
+from helpers import FixedClock
 from hypothesis import given
 from hypothesis import settings as hypothesis_settings
 from hypothesis import strategies as st
@@ -23,14 +24,6 @@ HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 def at(hour: int, minute: int = 0, days: int = 0) -> datetime:
     return DAY + timedelta(days=days, hours=hour, minutes=minute)
-
-
-class FixedClock:
-    def __init__(self, moment: datetime):
-        self.moment = moment
-
-    def __call__(self) -> datetime:
-        return self.moment
 
 
 @pytest.fixture

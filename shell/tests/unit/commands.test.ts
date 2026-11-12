@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { COMMANDS, format_mirror, format_model, help_text, matching_commands, parse_chat } from "../../src/shared/commands"
-import type { Mirror } from "../../src/shared/types"
+import { COMMANDS, format_mirror, format_model, format_search, help_text, linked_parts, matching_commands, parse_chat } from "../../src/shared/commands"
+import type { Item, Mirror } from "../../src/shared/types"
 
 describe("parse_chat", () => {
   it.each([
@@ -14,6 +14,7 @@ describe("parse_chat", () => {
     ["/background off", { kind: "background", on: false }],
     ["/mirror", { kind: "mirror", days: 7 }],
     ["/mirror 30", { kind: "mirror", days: 30 }],
+    ["/search  lithium   recycling ", { kind: "search", query: "lithium   recycling" }],
     ["/import https://gist.example/ai.md", { kind: "import", url: "https://gist.example/ai.md" }],
     ["/share", { kind: "share" }],
     ["/google", { kind: "google", connect: false }],
@@ -46,6 +47,8 @@ describe("parse_chat", () => {
     ["/background", "Usage: /background on|off"],
     ["/background maybe", "Usage: /background on|off"],
     ["/mirror 0", "Usage: /mirror [days]"],
+    ["/search", "Usage: /search <words>"],
+    ["/search   ", "Usage: /search <words>"],
     ["/mirror 31", "Usage: /mirror [days]"],
     ["/mirror week", "Usage: /mirror [days]"],
     ["/mirror 7 more", "Usage: /mirror [days]"],
@@ -115,5 +118,61 @@ describe("format_mirror", () => {
     expect(format_mirror({ days: 2, since: "2026-11-08T09:00:00Z", sources: [], views: [{ view_id: "feed", visits: 1, extended: 0, early: 0 }] })).toBe(
       "What your sources showed you in the last 2 days:\nHow you used your views:\n* feed: 1 visit.",
     )
+  })
+})
+
+function search_item(fields: Partial<Item>): Item {
+  return {
+    item_id: "i1",
+    source_id: "rss:news",
+    native_id: "1",
+    kind: "article",
+    url: "https://news.example/lithium",
+    title: null,
+    text: null,
+    author_name: null,
+    author_handle: null,
+    image_url: null,
+    media_kind: null,
+    published_at: null,
+    fetched_at: "2026-11-02T08:00:00Z",
+    topics: [],
+    tagged: true,
+    available_actions: [],
+    extra: {},
+    ...fields,
+  }
+}
+
+describe("format_search", () => {
+  it("lists hits best first with source, day and link, or says nothing matched", () => {
+    const hits = [
+      { item: search_item({ title: "Lithium   recycling\nscales up", published_at: "2026-11-01T10:00:00Z" }), score: 0.9 },
+      { item: search_item({ item_id: "i2", source_id: "x", url: "https://x.com/a/status/1", text: "a".repeat(120) }), score: 0.4 },
+    ]
+    expect(format_search("lithium", hits)).toBe(
+      [
+        '2 items match "lithium", best first:',
+        "* Lithium recycling scales up (rss:news, 2026-11-01) https://news.example/lithium",
+        `* ${"a".repeat(80)} (x, 2026-11-02) https://x.com/a/status/1`,
+      ].join("\n"),
+    )
+    expect(format_search("lithium", hits.slice(0, 1)).split("\n")[0]).toBe('One item matches "lithium", best first:')
+    expect(format_search("zebra", [])).toBe('Nothing you were shown matches "zebra".')
+  })
+})
+
+describe("linked_parts", () => {
+  it("splits text around web links and leaves trailing punctuation out of them", () => {
+    expect(linked_parts("see https://a.example/x?y=1, and (http://b.example/z).")).toEqual([
+      { text: "see " },
+      { text: "https://a.example/x?y=1", url: "https://a.example/x?y=1" },
+      { text: ", and (" },
+      { text: "http://b.example/z", url: "http://b.example/z" },
+      { text: ")." },
+    ])
+    expect(linked_parts("no links here")).toEqual([{ text: "no links here" }])
+    expect(linked_parts("")).toEqual([])
+    expect(linked_parts("javascript:alert(1) ftp://x.example")).toEqual([{ text: "javascript:alert(1) ftp://x.example" }])
   })
 })

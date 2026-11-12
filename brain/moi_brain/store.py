@@ -1,5 +1,6 @@
 """SQLite storage for items and events. Everything else openMoi keeps is a file."""
 
+import re
 import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
@@ -44,6 +45,10 @@ CREATE TABLE IF NOT EXISTS follows (
 )
 """
 FOLLOW_LISTS_TABLE = "CREATE TABLE IF NOT EXISTS follow_lists (list_url TEXT PRIMARY KEY, read_at TEXT NOT NULL)"
+# Each item's vector, for clustering and search; kind says how it was made, so vectors of two kinds are never compared.
+VECTORS_TABLE = "CREATE TABLE IF NOT EXISTS vectors (item_id TEXT PRIMARY KEY, kind TEXT NOT NULL, vector BLOB NOT NULL)"
+# Words of every item for search.
+SEARCH_TABLE = "CREATE VIRTUAL TABLE IF NOT EXISTS items_search USING fts5(item_id UNINDEXED, title, text, author)"
 # The last text of each watched page, to tell what changed.
 WATCHES_TABLE = """
 CREATE TABLE IF NOT EXISTS watches (
@@ -63,11 +68,16 @@ CREATE TABLE IF NOT EXISTS moments (
 """
 FOLLOW_TTL = timedelta(days=30)
 HISTORY_PREFIX = "history:"
+SEARCH_WORD = re.compile(r"[^\W_]+", re.UNICODE)
 INDEXES = (
     "CREATE INDEX IF NOT EXISTS items_by_url ON items (url)",
     "CREATE INDEX IF NOT EXISTS items_by_source ON items (source_id, published_at)",
     "CREATE INDEX IF NOT EXISTS events_by_item ON events (item_id)",
 )
+
+
+def search_row(item: Item) -> tuple[str, str, str, str]:
+    return (item.item_id, item.title or "", item.text or "", " ".join(part for part in (item.author_name, item.author_handle) if part))
 
 
 def iso(moment: datetime | None) -> str | None:
@@ -92,6 +102,8 @@ class Store:
                 self.connection.execute(FOLLOW_LISTS_TABLE)
                 self.connection.execute(MOMENTS_TABLE)
                 self.connection.execute(WATCHES_TABLE)
+                self.connection.execute(VECTORS_TABLE)
+                self.index_for_search()
                 for index in INDEXES:
                     self.connection.execute(index)
 
@@ -124,6 +136,14 @@ class Store:
             self.connection.rollback()
             raise
 
+    def index_for_search(self) -> None:
+        """The search table, made and filled from the items on first use (a database from before search)."""
+        exists = self.connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'items_search'").fetchone()
+        self.connection.execute(SEARCH_TABLE)
+        if not exists:
+            rows = self.connection.execute("SELECT item_json FROM items").fetchall()
+            self.connection.executemany("INSERT INTO items_search (item_id, title, text, author) VALUES (?, ?, ?, ?)", [search_row(Item.model_validate_json(row[0])) for row in rows])
+
     def upsert_items(self, items: list[Item], listed_at: datetime | None = None) -> list[Item]:
         """Insert items new to their source; returns only those. Every item given counts as listed at listed_at
         (by default its own fetch time), new or not, so one a feed keeps listing never expires.
@@ -139,6 +159,7 @@ class Store:
                 )
                 if cursor.rowcount:
                     new_items.append(item)
+                    self.connection.execute("INSERT INTO items_search (item_id, title, text, author) VALUES (?, ?, ?, ?)", search_row(item))
                 else:
                     self.connection.execute(
                         "UPDATE items SET listed_at = ? WHERE item_id = ? OR (source_id = ? AND url = ?)",
@@ -252,7 +273,42 @@ class Store:
                 "(SELECT item_id FROM events WHERE event_kind = 'open' AND item_id IS NOT NULL)",
                 (iso(now - ITEM_TTL),),
             )
+            self.connection.execute("DELETE FROM items_search WHERE item_id NOT IN (SELECT item_id FROM items)")
+            self.connection.execute("DELETE FROM vectors WHERE item_id NOT IN (SELECT item_id FROM items)")
         return cursor.rowcount
+
+    def save_vectors(self, vectors: dict[str, tuple[str, bytes]]) -> None:
+        with self.lock, self.connection:
+            self.connection.executemany("INSERT OR REPLACE INTO vectors (item_id, kind, vector) VALUES (?, ?, ?)", [(item_id, kind, data) for item_id, (kind, data) in vectors.items()])
+
+    def vectors_of(self, item_ids: list[str], kind: str) -> dict[str, bytes]:
+        """Stored vectors of these items made the given way."""
+        if not item_ids:
+            return {}
+        marks = ", ".join("?" for _ in item_ids)
+        with self.lock:
+            rows = self.connection.execute(f"SELECT item_id, vector FROM vectors WHERE kind = ? AND item_id IN ({marks})", (kind, *item_ids)).fetchall()
+        return dict(rows)
+
+    def vectors_by_kind(self, kind: str, limit: int) -> dict[str, bytes]:
+        """The newest stored vectors made the given way, for searching by meaning."""
+        with self.lock:
+            rows = self.connection.execute("SELECT item_id, vector FROM vectors WHERE kind = ? ORDER BY rowid DESC LIMIT ?", (kind, limit)).fetchall()
+        return dict(rows)
+
+    def search(self, words: str, limit: int) -> list[tuple[Item, float]]:
+        """Items matching any of the words, best first by bm25 (which puts items with more of them first), with their
+        scores. Each word is quoted, so FTS5 operators in the words are plain words."""
+        terms = list(dict.fromkeys(f'"{word}"' for word in SEARCH_WORD.findall(words.lower())))
+        if not terms:
+            return []
+        with self.lock:
+            found = self.connection.execute(
+                "SELECT items.item_json, bm25(items_search) FROM items_search JOIN items ON items.item_id = items_search.item_id "
+                "WHERE items_search MATCH ? ORDER BY bm25(items_search) LIMIT ?",
+                (" OR ".join(terms), limit),
+            ).fetchall()
+        return [(Item.model_validate_json(item_json), -score) for item_json, score in found]
 
     def add_follows(self, list_url: str, accounts: list[tuple[str, str]], now: datetime) -> int:
         """Accounts a following list named just now; the list counts as read and accounts gone a month are dropped."""
@@ -296,7 +352,9 @@ class Store:
     def replace_item(self, item: Item) -> None:
         """One item per source and URL that always holds the latest version, unseen again: the latest change of a watched page."""
         with self.lock, self.connection:
+            self.connection.execute("DELETE FROM items_search WHERE item_id IN (SELECT item_id FROM items WHERE source_id = ? AND url = ?)", (item.source_id, item.url))
             self.connection.execute("DELETE FROM items WHERE source_id = ? AND url = ?", (item.source_id, item.url))
+            self.connection.execute("INSERT INTO items_search (item_id, title, text, author) VALUES (?, ?, ?, ?)", search_row(item))
             self.connection.execute(
                 f"INSERT INTO items ({ITEM_COLUMNS}, listed_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
                 (item.item_id, item.source_id, item.url, iso(item.published_at), iso(item.fetched_at), item.model_dump_json(), iso(item.fetched_at)),

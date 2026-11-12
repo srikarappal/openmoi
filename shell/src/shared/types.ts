@@ -22,9 +22,18 @@ export interface Item {
   extra: Record<string, string>
 }
 
+export interface SearchHit {
+  item: Item
+  score: number
+}
+
 export interface ViewItem {
   item: Item
   reasons: string[]
+  // The value a group_by rule groups this item under; the lens heads each run of one group.
+  group?: string | null
+  // A summarize_only rule matched: the card shows the summary in place of the item's own text.
+  summary_only?: boolean
 }
 
 export type RawRecord = Record<string, string>
@@ -390,6 +399,7 @@ export interface ShellState {
 export type ShellCommand =
   | { type: "open_view"; view_id: string }
   | { type: "open_tab"; url: string }
+  | { type: "open_link"; url: string }
   | { type: "select_tab"; tab_id: number }
   | { type: "close_tab"; tab_id: number }
   | { type: "navigate"; url: string }

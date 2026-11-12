@@ -113,3 +113,33 @@ describe("default lens updates", () => {
     expect(card?.querySelector(".watching")).toBeNull()
   })
 })
+
+describe("default lens groups and summary only cards", () => {
+  it("heads each run of one group once, across appends, and starts over on render", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    const grouped = (item_id: string, group: string | null) => ({ ...view_item(item_id), group })
+    moi.render([grouped("a1", "rss:tech"), grouped("a2", "rss:tech"), grouped("b1", "rss:news")], "more")
+    moi.append([grouped("b2", "rss:news"), grouped("c1", "maya"), grouped("d1", null)], null)
+    const document = dom.window.document
+    const order = Array.from(document.querySelectorAll("#items > *"), (node) => (node.classList.contains("group") ? `# ${node.textContent}` : (node as HTMLElement).dataset.itemId))
+    expect(order).toEqual(["# rss tech", "a1", "a2", "# rss news", "b1", "b2", "# maya", "c1", "d1"])
+    moi.render([grouped("b1", "rss:news")], null)
+    expect(Array.from(document.querySelectorAll(".group"), (node) => node.textContent)).toEqual(["rss news"])
+    moi.render([view_item("z")], null)
+    expect(document.querySelectorAll(".group")).toHaveLength(0)
+  })
+
+  it("shows a summary in place of the text, says it is on the way until it arrives", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    moi.render([{ ...view_item("v1", { title: "Long read", text: "All the words." }), summary_only: true }, view_item("v2", { title: "Plain", text: "Plain words." })], null)
+    const document = dom.window.document
+    const card = document.querySelector("[data-item-id='v1']")
+    expect(card?.querySelector(".text")).toBeNull()
+    expect(card?.querySelector(".summary.pending")?.textContent).toBe("Summary on its way")
+    expect(document.querySelector("[data-item-id='v2'] .text")?.textContent).toBe("Plain words.")
+    expect(document.querySelector("[data-item-id='v2'] .summary")).toBeNull()
+    moi.update([{ item: view_item("v1", { title: "Long read", extra: { summary: "The short of it." } }).item, reasons: [] }])
+    expect(Array.from(card?.querySelectorAll(".summary") ?? [], (node) => node.textContent)).toEqual(["The short of it."])
+    expect(card?.querySelector(".summary.pending")).toBeNull()
+  })
+})

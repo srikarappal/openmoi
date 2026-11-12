@@ -1,7 +1,7 @@
 // The chrome UI: view and web tabs, the address bar and the side panel.
-import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react"
+import { useEffect, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from "react"
 import { createRoot } from "react-dom/client"
-import { matching_commands } from "../shared/commands"
+import { linked_parts, matching_commands } from "../shared/commands"
 import type { Activity, ChatEntry, GateChoice, ShellCommand, ShellState, StopScreen } from "../shared/types"
 
 interface ShellBridge {
@@ -100,11 +100,26 @@ function DiffView({ file, diff }: { file: string; diff: string }) {
   )
 }
 
+function open_link(event: MouseEvent, url: string): void {
+  event.preventDefault()
+  send({ type: "open_link", url })
+}
+
 function ChatMessage({ entry }: { entry: ChatEntry }) {
   const proposal = entry.proposal
   return (
     <div className={`message ${entry.role}`}>
-      <div className="message_text">{entry.text}</div>
+      <div className="message_text">
+        {linked_parts(entry.text).map((part, index) =>
+          part.url ? (
+            <a key={index} href={part.url} onClick={(event) => open_link(event, part.url ?? "")}>
+              {part.text}
+            </a>
+          ) : (
+            part.text
+          ),
+        )}
+      </div>
       {proposal && (
         <div className="proposal">
           {proposal.changes.map((change) => (

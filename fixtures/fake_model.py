@@ -4,8 +4,10 @@ Each task handler reads the JSON prompt the brain sent and answers the way a goo
 for the phrases our tests use. Unknown tasks echo the last user message as JSON.
 """
 
+import hashlib
 import html
 import json
+import math
 import re
 from typing import Any
 
@@ -14,12 +16,24 @@ SYNONYMS = {
     "science": ("physics", "math", "telescope", "space", "science"),
     "technology": ("chip", "laptop", "database", "software"),
 }
+# Words the fake embedding model takes to mean the same thing, so search by meaning finds what shares no word.
+MEANINGS = {
+    "automobile": "car", "vehicle": "car", "cars": "car", "ev": "car", "sedan": "car",
+    "canine": "dog", "puppy": "dog", "dogs": "dog",
+    "physician": "doctor", "doctors": "doctor", "clinic": "doctor",
+}
+EMBED_DIMENSIONS = 384
+EMBED_WORD = re.compile(r"[a-z0-9]+")
 QUOTED = re.compile(r"\"([^\"]+)\"")
 LIMIT = re.compile(r"at most (\d+) (?:posts )?from (\w+)")
 HANDLE = re.compile(r"@([\w.]+)")
 HIDE_TOPIC = re.compile(r"\b(?:hide|no)\s+(\w+)")
 UNLESS = re.compile(r"\b(?:unless|except)\b.*\bfrom\s+(\w+)")
 FIRST = re.compile(r"@?(\w+) (?:always )?first")
+GROUP_BY = re.compile(r"\bgroup (?:\w+ )?by (source|topic|author|language)")
+GROUP_FIELDS = {"source": "source_id", "topic": "topic", "author": "author_handle", "language": "lang"}
+PIN = re.compile(r"\bpin (?:posts |items )?about (\w+)")
+LESS_OF = re.compile(r"\bless (?:of )?(\w+)")
 UNDER = re.compile(r"under \$([\d,.]+)(k?)")
 MENTIONS = re.compile(r"only when it (?:mentions|says) (\w+)")
 PRICE = re.compile(r"\$[\d,]+(?:\.\d+)?k?")
@@ -95,8 +109,16 @@ def view_rule(line: str) -> dict[str, Any] | None:
     text = line.lower()
     if "summarize" in text:
         return {"when": condition("source_id", "eq", "youtube") if "video" in text else None, "do": "summarize"}
+    if "only summaries" in text:
+        return {"when": condition("source_id", "eq", "youtube") if "video" in text else None, "do": "summarize_only"}
     if "take notes" in text:
         return {"when": None, "do": "note"}
+    if (match := GROUP_BY.search(text)) is not None:
+        return {"when": None, "do": "group_by", "group_field": GROUP_FIELDS[match.group(1)]}
+    if (match := PIN.search(text)) is not None:
+        return {"when": condition("topic", "eq", match.group(1)), "do": "pin"}
+    if (match := LESS_OF.search(text)) is not None:
+        return {"when": condition("topic", "eq", match.group(1)), "do": "demote", "weight": 3}
     if (match := MENTIONS.search(text)) is not None:
         return {"when": condition("source_id", "eq", "watch"), "unless": condition("text", "contains", match.group(1)), "do": "hide"}
     if any(phrase in text for phrase in ("people i know", "people i follow", "no strangers")):
@@ -109,11 +131,10 @@ def view_rule(line: str) -> dict[str, Any] | None:
         return {"when": condition("author_handle", "eq", match.group(1)), "do": "boost", "weight": 10}
     if (match := HIDE_TOPIC.search(text)) is not None:
         unless = UNLESS.search(text)
-        return {
-            "when": condition("topic", "eq", match.group(1)),
-            "unless": condition("source_id", "eq", f"rss:{unless.group(1)}") if unless else None,
-            "do": "hide",
-        }
+        spared = condition("source_id", "eq", f"rss:{unless.group(1)}") if unless else None
+        if spared and "or someone i know" in text:
+            spared = {"any": [spared, condition("author_in", "eq", "known")]}
+        return {"when": condition("topic", "eq", match.group(1)), "unless": spared, "do": "hide"}
     return None
 
 
@@ -280,3 +301,19 @@ HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": ed
 
 def model_reply(task: str, payload: dict[str, Any], base_url: str) -> str:
     return HANDLERS.get(task, echo)(payload, base_url)
+
+
+def embedding(text: str) -> list[float]:
+    """A unit vector of the text's words, with words of one meaning on one dimension: "automobile" lands on "car"."""
+    vector = [0.0] * EMBED_DIMENSIONS
+    for word in EMBED_WORD.findall(text.lower()):
+        meaning = MEANINGS.get(word, word)
+        vector[int.from_bytes(hashlib.sha256(meaning.encode()).digest()[:4], "big") % EMBED_DIMENSIONS] += 1.0
+    length = math.sqrt(sum(value * value for value in vector))
+    return [value / length for value in vector] if length else vector
+
+
+def embeddings(payload: dict[str, Any]) -> dict[str, Any]:
+    texts = payload["input"] if isinstance(payload["input"], list) else [payload["input"]]
+    data = [{"object": "embedding", "index": index, "embedding": embedding(text)} for index, text in enumerate(texts)]
+    return {"object": "list", "data": data, "usage": {"prompt_tokens": sum(len(text.split()) for text in texts)}}

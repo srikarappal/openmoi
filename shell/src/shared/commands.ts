@@ -1,6 +1,6 @@
 // Chat commands: "/memory", "/feed", "/sources", "/layout", "/settings", "/newview", "/model", "/help".
 // Anything without a slash stays free form and openMoi works out from context what to change.
-import type { EditScope, Mirror, ModelChange, ModelInfo, Overview, SlotInfo, SourceMirror, ViewMirror } from "./types"
+import type { EditScope, Mirror, ModelChange, ModelInfo, Overview, SearchHit, SlotInfo, SourceMirror, ViewMirror } from "./types"
 
 export interface CommandHelp {
   name: string
@@ -19,6 +19,7 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/settings", usage: "/settings [open]", summary: "show this view's settings, memory and models; open the folder" },
   { name: "/background", usage: "/background on|off", summary: "keep reading on schedule with the window closed, and start at login" },
   { name: "/mirror", usage: "/mirror [days]", summary: "what each source showed you and how much passed your rules" },
+  { name: "/search", usage: "/search <words>", summary: "find items you were shown, by their words and by meaning" },
   { name: "/import", usage: "/import <https link to a view file>", summary: "add a view someone shared; or drop its .md file here" },
   { name: "/share", usage: "/share", summary: "save a copy of this view to send, without your people" },
   { name: "/google", usage: "/google [connect]", summary: "sign in to Google in your browser so YouTube subscriptions come from your account" },
@@ -37,6 +38,7 @@ export type ChatCommand =
   | { kind: "settings"; open: boolean }
   | { kind: "background"; on: boolean }
   | { kind: "mirror"; days: number }
+  | { kind: "search"; query: string }
   | { kind: "import"; url: string }
   | { kind: "share" }
   | { kind: "google"; connect: boolean }
@@ -82,6 +84,7 @@ export function parse_chat(input: string): ChatCommand {
     const days = words[0] === undefined ? 7 : Number(words[0])
     return Number.isInteger(days) && days >= 1 && days <= 30 && words.length <= 1 ? { kind: "mirror", days } : usage_error(command)
   }
+  if (command === "/search") return rest ? { kind: "search", query: rest } : usage_error(command)
   if (command === "/import") return words.length === 1 && words[0].startsWith("https://") ? { kind: "import", url: words[0] } : usage_error(command)
   if (command === "/share") return words.length ? usage_error(command) : { kind: "share" }
   if (command === "/google") return words.length === 0 || (words.length === 1 && words[0] === "connect") ? { kind: "google", connect: words[0] === "connect" } : usage_error(command)
@@ -161,4 +164,38 @@ export function format_mirror(mirror: Mirror): string {
   const lines = [`What your sources showed you in ${period}:`, ...mirror.sources.map(source_line)]
   if (mirror.views.length) lines.push("How you used your views:", ...mirror.views.map(view_line))
   return lines.join("\n")
+}
+
+const MAX_HIT_TEXT = 80
+const LINK = /https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/g
+
+function hit_line(hit: SearchHit): string {
+  const item = hit.item
+  const title = (item.title || item.text || item.url).replace(/\s+/g, " ").trim().slice(0, MAX_HIT_TEXT)
+  const day = (item.published_at ?? item.fetched_at).slice(0, 10)
+  return `* ${title} (${item.source_id}, ${day}) ${item.url}`
+}
+
+export function format_search(query: string, hits: SearchHit[]): string {
+  if (!hits.length) return `Nothing you were shown matches "${query}".`
+  return [`${hits.length === 1 ? "One item matches" : `${hits.length} items match`} "${query}", best first:`, ...hits.map(hit_line)].join("\n")
+}
+
+export interface TextPart {
+  text: string
+  url?: string
+}
+
+// Chat text split around its web links, so each link can be opened with a click.
+export function linked_parts(text: string): TextPart[] {
+  const parts: TextPart[] = []
+  let last = 0
+  for (const match of text.matchAll(LINK)) {
+    const start = match.index ?? 0
+    if (start > last) parts.push({ text: text.slice(last, start) })
+    parts.push({ text: match[0], url: match[0] })
+    last = start + match[0].length
+  }
+  if (last < text.length) parts.push({ text: text.slice(last) })
+  return parts
 }

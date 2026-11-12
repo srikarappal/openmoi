@@ -29,6 +29,7 @@ from moi_brain.files import read_json, write_atomic
 from moi_brain.google import GoogleAccount, GoogleError
 from moi_brain.health import HealthBook, OracleReply, RunReport, Verdict, oracle_prompt
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher, read_takeout
+from moi_brain.journal import matching_lines, roll_up
 from moi_brain.items import (
     HANDLE,
     Event,
@@ -47,7 +48,7 @@ from moi_brain.lens_gen import generate_lens
 from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import parse_sections, section_text
-from moi_brain.memory import TOPIC_FILES, Memory
+from moi_brain.memory import JOURNAL_DAYS, TOPIC_FILES, Memory
 from moi_brain.mirror import MAX_DAYS, Mirror, build_mirror
 from moi_brain.packs import PackError, install, installed_pack, merged_policy, public_key, verified_pack
 from moi_brain.policy import Mode, load_policy, policy_for
@@ -57,7 +58,8 @@ from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
 from moi_brain.sharing import MAX_IMPORT, clean_import, people_names, session_reads, share_text, view_name
-from moi_brain.stories import CLUSTER_WINDOW, Updater, assign_clusters, story_key
+from moi_brain.stories import CLUSTER_WINDOW, Updater, assign_clusters, make_vectors, story_key, story_text
+from moi_brain.vectors import HASHED, cosine, packed, unpacked
 from moi_brain.watch import change_item, changed_lines, watch_lines
 
 # A read scrolls a source page step by step at human pace; daily_steps caps how far it scrolls each source per day.
@@ -80,6 +82,13 @@ WHITESPACE = re.compile(r"\s+")
 MomentKind = Literal["visit", "extended", "early"]
 X_DOMAIN = "x.com"
 HTTP_TIMEOUT = 15.0
+SEARCH_LIMIT = 20
+MAX_SEARCH = 100
+# Search reads this many candidates per result wanted, by words and by meaning, before ordering them.
+SEARCH_DEPTH = 5
+# The newest vectors searched by meaning; older items are still found by their words.
+MAX_VECTOR_SCAN = 20_000
+TEXT_WEIGHT = 0.6
 
 
 def utc_now() -> datetime:
@@ -124,6 +133,11 @@ class WatchAlert(BaseModel):
 class WatchReport(BaseModel):
     changed: bool
     alert: WatchAlert | None = None
+
+
+class SearchHit(BaseModel):
+    item: Item
+    score: float
 
 
 class ViewPage(BaseModel):
@@ -276,6 +290,7 @@ class Brain:
         threading.Thread(target=self.relay_worker, daemon=True).start()
         self.passive_batches = 0
         self.lock = threading.Lock()
+        self.journal_lock = threading.Lock()
         self.refreshing: set[str] = set()
         self.source_status: dict[tuple[str, str], str] = {}
         self.fetched_at: dict[tuple[str, str], datetime] = {}
@@ -295,6 +310,7 @@ class Brain:
         """Drops expired items, then reads every feed source not read in the last few minutes."""
         try:
             self.store.expire(self.clock())
+            self.roll_up_journal()
             self.refresh_subscriptions()
             for source_id, location, reader in self.feed_readers(compiled):
                 key = (source_id, location)
@@ -496,16 +512,47 @@ class Brain:
         items = list({item.item_id: item for item in normalized if item}.values())
         known = self.store.get_items([item.item_id for item in items])
         recent = self.store.items_since(now - CLUSTER_WINDOW)
-        fresh = assign_clusters([enriched(item) for item in items if item.item_id not in known], [item for item, _ in recent])
+        new_items = [enriched(item) for item in items if item.item_id not in known]
+        kind, vectors = self.item_vectors(new_items, [item for item, _ in recent])
+        fresh = assign_clusters(new_items, [item for item, _ in recent], vectors)
         if tag_now:
             fresh, known = self.tag_now(fresh, known)
         stored = {item.item_id: item for item in self.store.upsert_items([*known.values(), *fresh], listed_at=now)}
+        self.store.save_vectors({item.item_id: (kind, packed(vectors[item.item_id])) for item in fresh if item.item_id in stored})
         self.check_updates(list(stored.values()), recent)
         if not tag_now:
             self.tagger.enqueue(list(stored.values()))
         same_url = self.store.items_by_url(source_id, [item.url for item in fresh if item.item_id not in stored])
         found = [known.get(item.item_id) or stored.get(item.item_id) or same_url.get(item.url) for item in items]
         return [item for item in found if item]
+
+    def item_vectors(self, new_items: list[Item], recent: list[Item]) -> tuple[str, dict[str, list[float]]]:
+        """Vectors of new items, made now, with the stored ones of recent items made the same way."""
+        if not new_items:
+            return HASHED, {}
+        kind, made = make_vectors(self.gateway, [story_text(item) for item in new_items], "embed_items")
+        vectors = {item_id: unpacked(data) for item_id, data in self.store.vectors_of([item.item_id for item in recent], kind).items()}
+        return kind, vectors | {item.item_id: vector for item, vector in zip(new_items, made, strict=True)}
+
+    def search(self, query: str, limit: int = SEARCH_LIMIT) -> list[SearchHit]:
+        """Items matching your words by bm25, reordered by how close their vectors are to the query's; with an
+        embedding model, items that say it in other words are found too."""
+        limit = min(max(limit, 1), MAX_SEARCH)
+        by_words = self.store.search(query, limit * SEARCH_DEPTH)
+        best_words = max((score for _, score in by_words), default=0.0)
+        text_scores = {item.item_id: score / best_words if best_words > 0 else 0.0 for item, score in by_words}
+        found = {item.item_id: item for item, _ in by_words}
+        kind, (query_vector,) = make_vectors(self.gateway, [query], "embed_query")
+        stored = self.store.vectors_of(list(found), kind)
+        if kind != HASHED:
+            stored |= self.store.vectors_by_kind(kind, MAX_VECTOR_SCAN)
+        closeness = {item_id: max(cosine(query_vector, unpacked(data)), 0.0) for item_id, data in stored.items()}
+        if kind != HASHED:
+            nearest = sorted(closeness, key=closeness.__getitem__, reverse=True)[: limit * SEARCH_DEPTH]
+            found |= self.store.get_items([item_id for item_id in nearest if item_id not in found])
+        scores = {item_id: TEXT_WEIGHT * text_scores.get(item_id, 0.0) + (1 - TEXT_WEIGHT) * closeness.get(item_id, 0.0) for item_id in found}
+        ranked = sorted(found, key=scores.__getitem__, reverse=True)[:limit]
+        return [SearchHit(item=found[item_id], score=round(scores[item_id], 4)) for item_id in ranked if scores[item_id] > 0]
 
     def check_updates(self, stored: list[Item], recent: list[tuple[Item, datetime | None]]) -> None:
         """A new copy of a story you saw goes to the update pass, compared with the copy you saw last. A copy of a link
@@ -558,7 +605,7 @@ class Brain:
         found: dict[str, tuple[datetime, ContentWanted]] = {}
         for view_id in self.compiler.view_ids():
             compiled = self.compiler.compiled(view_id)
-            rules = [rule for rule in compiled.rules if rule.do == "summarize"]
+            rules = [rule for rule in compiled.rules if rule.do in ("summarize", "summarize_only")]
             if not rules:
                 continue
             for item, seen_at in self.store.items_with_seen(compiled.source_ids(), now - CONTENT_WINDOW):
@@ -728,7 +775,7 @@ class Brain:
         problems = [f"{source_id}: {status}" for source_id, status in self.status_by_source(current).items() if status != "ok"]
         if not self.tagger.healthy:
             problems.append(self.tagger.status)
-        if circles.empty and any(condition and condition.field == "author_in" for rule in compiled.rules for condition in (rule.when, rule.unless)):
+        if circles.empty and any(condition.field == "author_in" for rule in compiled.rules for condition in rule.conditions()):
             problems.append(NOBODY_KNOWN)
         problems += self.policy_warnings(compiled) + self.judgment_conflicts(compiled)
         return ViewPage(
@@ -820,8 +867,10 @@ class Brain:
             self.memory.append_journal(now, f"opened: {item.title or (item.text or '')[:80]} ({item.url})")
 
     def propose_edit(self, view_id: str, request: str, item_id: str | None, scope: EditScope = "any") -> Proposal:
+        """Chat: the editor sees the last two weeks of the journal and older lines that share words with the request."""
         item = self.store.get_item(item_id) if item_id else None
-        return self.editor.propose(check_view_id(view_id), request, item, self.memory.journal_lines(self.clock()), scope)
+        older = matching_lines(self.paths.journal, request)
+        return self.editor.propose(check_view_id(view_id), request, item, self.memory.journal_lines(self.clock()), scope, older)
 
     def import_view(self, name: str, text: str | None, url: str | None) -> Proposal:
         """A view someone shared, from a dropped file or a link: cleaned to a view's own sections and proposed as a new
@@ -879,6 +928,15 @@ class Brain:
         if self.google.connected and isinstance(channels, list):
             return [str(channel) for channel in channels]
         return read_takeout(self.paths.takeout)
+
+    def roll_up_journal(self) -> list[str]:
+        """Months that ended before the journal's two recent weeks become one summary each; one refresh at a time does it."""
+        if not self.journal_lock.acquire(blocking=False):
+            return []
+        try:
+            return roll_up(self.paths.journal, self.clock() - timedelta(days=JOURNAL_DAYS))
+        finally:
+            self.journal_lock.release()
 
     def refresh_subscriptions(self) -> None:
         """With Google connected, your subscriptions are read again once a day; a failure keeps the last list."""

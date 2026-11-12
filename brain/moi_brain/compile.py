@@ -11,9 +11,9 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator
 
 from moi_brain.config import Paths
 from moi_brain.feeds import CHANNEL_ID, read_takeout
@@ -26,7 +26,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "14"
+COMPILER_VERSION = "15"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
@@ -37,6 +37,13 @@ NO_EXPLORE = re.compile(r"\b(?:no|without|stop|turn off)\s+(?:explor\w*|surprise
 READ_MODE = re.compile(r"\b(assist|pilot)\b", re.IGNORECASE)
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
 DEFAULT_BOOST = 3.0
+# How deep all, any and not may nest, and how many parts one all or any may have.
+MAX_NESTING = 4
+MAX_PARTS = 12
+GROUP_FIELDS = ("source_id", "author_handle", "topic", "media_kind", "lang")
+RuleAction = Literal["hide", "boost", "demote", "limit", "pin", "group_by", "summarize", "summarize_only", "note"]
+# Rules that only make sense for some items: without a when they are dropped.
+NEEDS_WHEN = ("hide", "boost", "demote", "limit", "pin")
 FIXED_FIELDS = ("source_id", "author_handle", "author_in", "topic", "media_kind", "text", "age_hours", "lang", "reading_minutes", "ragebait")
 JUDGMENT_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 MAX_QUESTION = 200
@@ -53,7 +60,11 @@ RETRY_AFTER_SECONDS = 60.0
 RULES_PROMPT = """You turn rules written in plain words into JSON for openMoi, a personal feed reader.
 Reply with one JSON object: {"rules": [<rule>, ...], "judgments": [<judgment>, ...], "summary": "<one short sentence>"}.
 
-A rule is {"when": <condition>, "unless": <condition or null>, "do": "hide" | "boost" | "limit" | "summarize" | "note", "weight": <number>, "count_per_day": <integer or null>}.
+A rule is {"when": <when>, "unless": <when or null>, "do": <action>, "weight": <number>, "count_per_day": <integer or null>, "group_field": <field or null>}.
+An action is "hide", "boost", "demote", "limit", "pin", "group_by", "summarize", "summarize_only" or "note".
+A when is a condition, or {"all": [<when>, ...]} (every part holds), {"any": [<when>, ...]} (at least one holds) or
+{"not": <when>}. Use a plain condition whenever one is enough; nest only when the words need it ("hide politics unless it
+is from Ars or from someone I know" is unless {"any": [source Ars, author_in known]}).
 A condition is {"field": <field>, "op": "eq" | "in" | "contains" | "gt" | "lt", "value": <string, number or list of strings>}.
 Fields:
 * source_id: where an item comes from. Use one of the given sources, or "x", "youtube" or "rss" for a whole family.
@@ -76,7 +87,10 @@ Fields:
   birthday?"), so a single hide rule keeps every one of them.
 
 "hide", "no" and "never" mean do hide. "first" or "always show" mean boost with weight 10; "more of" means boost with weight 3.
-"at most N a day" means limit with count_per_day N.
+"less of" or "lower" means demote with weight 3. "pin" or "always on top" means pin. "at most N a day" means limit with
+count_per_day N. "group by source" (or author, topic, media, language) means group_by with group_field source_id
+(author_handle, topic, media_kind, lang) and when null. "only summaries of" means summarize_only: the card shows the
+summary in place of the item's own text.
 "summarize" reads the whole article or video and puts a short summary on its card ("summarize videos over 20 minutes":
 when media_kind eq long_video). "note" writes a short note into the journal about items the person opens ("take notes on
 what I read"). For these two "when" may be null, meaning every item.
@@ -149,13 +163,80 @@ class Condition(BaseModel):
         raise ValueError(f"unknown field: {field}")
 
 
+class AllOf(BaseModel):
+    """Every part holds."""
+
+    model_config = ConfigDict(extra="forbid", validate_by_name=True, serialize_by_alias=True)
+    every: list["When"] = Field(alias="all", min_length=1, max_length=MAX_PARTS)
+
+
+class AnyOf(BaseModel):
+    """At least one part holds."""
+
+    model_config = ConfigDict(extra="forbid", validate_by_name=True, serialize_by_alias=True)
+    some: list["When"] = Field(alias="any", min_length=1, max_length=MAX_PARTS)
+
+
+class NotOf(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_by_name=True, serialize_by_alias=True)
+    negated: "When" = Field(alias="not")
+
+
+def when_kind(value: object) -> str:
+    """Which shape a when has: a condition, or all, any or not around more of them."""
+    if isinstance(value, dict):
+        return next((key for key in ("all", "any", "not") if key in value), "condition")
+    return {AllOf: "all", AnyOf: "any", NotOf: "not"}.get(type(value), "condition")
+
+
+When = Annotated[
+    Annotated[Condition, Tag("condition")] | Annotated[AllOf, Tag("all")] | Annotated[AnyOf, Tag("any")] | Annotated[NotOf, Tag("not")],
+    Discriminator(when_kind),
+]
+AllOf.model_rebuild()
+AnyOf.model_rebuild()
+NotOf.model_rebuild()
+
+
+def parts_of(when: When) -> list[When]:
+    if isinstance(when, AllOf):
+        return when.every
+    if isinstance(when, AnyOf):
+        return when.some
+    return [when.negated] if isinstance(when, NotOf) else []
+
+
+def nesting(when: When | None) -> int:
+    return 0 if when is None or isinstance(when, Condition) else 1 + max(nesting(part) for part in parts_of(when))
+
+
+def leaf_conditions(when: When | None) -> list[Condition]:
+    """Every condition inside a when, however nested."""
+    if when is None:
+        return []
+    if isinstance(when, Condition):
+        return [when]
+    return [leaf for part in parts_of(when) for leaf in leaf_conditions(part)]
+
+
 class Rule(BaseModel):
-    # null only for summarize and note rules, meaning every item.
-    when: Condition | None = None
-    unless: Condition | None = None
-    do: Literal["hide", "boost", "limit", "summarize", "note"]
+    # null for summarize, summarize_only, note and group_by rules means every item.
+    when: When | None = None
+    unless: When | None = None
+    do: RuleAction
     weight: float = 0.0
     count_per_day: int | None = None
+    group_field: str | None = None
+
+    @field_validator("when", "unless")
+    @classmethod
+    def shallow(cls, when: When | None) -> When | None:
+        if nesting(when) > MAX_NESTING:
+            raise ValueError(f"all, any and not nest at most {MAX_NESTING} deep")
+        return when
+
+    def conditions(self) -> list[Condition]:
+        return leaf_conditions(self.when) + leaf_conditions(self.unless)
 
 
 class TimeSpec(BaseModel):
@@ -361,20 +442,27 @@ def source_ids(sources: list[SourceRef]) -> list[str]:
 
 
 def judged_names(rule: Rule) -> set[str]:
-    return {condition.field.removeprefix(JUDGED_PREFIX) for condition in (rule.when, rule.unless) if condition and condition.field.startswith(JUDGED_PREFIX)}
+    return {condition.field.removeprefix(JUDGED_PREFIX) for condition in rule.conditions() if condition.field.startswith(JUDGED_PREFIX)}
+
+
+def weighted(rule: Rule) -> Rule:
+    """A boost or demote by a positive weight: a boost of -2 lowers items, so it is a demote by 2."""
+    do = "demote" if rule.do == "demote" or rule.weight < 0 else "boost"
+    return rule.model_copy(update={"do": do, "weight": abs(rule.weight) or DEFAULT_BOOST})
 
 
 def usable_rules(rules: list[Rule], judgments: list[Judgment] | None = None) -> tuple[list[Rule], list[Judgment]]:
-    """Rules that can run, with the judgments they use: a boost without a weight gets the default, a limit without a count
-    is dropped, so is a rule testing a judgment nobody declared; a judgment no rule tests is never asked."""
+    """Rules that can run, with the judgments they use: a boost or demote without a weight gets the default and a boost
+    by a negative weight is a demote; a limit without a count is dropped, so is a group_by without a field it can group
+    by and a rule testing a judgment nobody declared; a judgment no rule tests is never asked."""
     declared = {judgment.name: judgment for judgment in reversed(judgments or [])}
     usable = []
     for rule in rules:
         if (rule.do == "limit" and not rule.count_per_day) or not judged_names(rule) <= declared.keys():
             continue
-        if rule.when is None and rule.do in ("hide", "boost", "limit"):
+        if (rule.when is None and rule.do in NEEDS_WHEN) or (rule.do == "group_by" and rule.group_field not in GROUP_FIELDS):
             continue
-        usable.append(rule.model_copy(update={"weight": rule.weight or DEFAULT_BOOST}) if rule.do == "boost" else rule)
+        usable.append(weighted(rule) if rule.do in ("boost", "demote") else rule)
     used = set().union(*(judged_names(rule) for rule in usable))
     return usable, [declared[name] for name in sorted(used)]
 

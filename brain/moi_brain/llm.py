@@ -5,6 +5,7 @@ import os
 import threading
 from collections import deque
 from datetime import UTC, datetime
+from operator import itemgetter
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
@@ -12,10 +13,13 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from moi_brain.config import Settings, Slot
+from moi_brain.vectors import normalized
 
 SlotName = Literal["fast", "smart"]
 ModelType = TypeVar("ModelType", bound=BaseModel)
 TIMEOUT_SECONDS = 180.0
+# Embedding runs while items are stored, so a model that hangs must not hold reading up for long.
+EMBED_TIMEOUT_SECONDS = 20.0
 MAX_ERROR_FEEDBACK = 1500
 
 
@@ -100,6 +104,26 @@ class Gateway:
             raise LlmError(f"{task} failed on the {slot_name} slot: {error}") from error
         self.log(task, slot_name, slot, body.get("usage") or {}, contains_user_content, None)
         return content or ""
+
+    def embed(self, task: str, texts: list[str]) -> list[list[float]] | None:
+        """Vectors from the embedding slot, unit length, in the order given; None when there is no slot, it may not see
+        your content, or it failed (the caller then uses hashed vectors)."""
+        slot = self.settings.embed
+        if slot is None or not texts or (not slot.is_local and not self.settings.allow_content_to_hosted):
+            return None
+        headers = {"x-moi-task": task}
+        if slot.api_key_env:
+            headers["authorization"] = f"Bearer {os.environ.get(slot.api_key_env, '')}"
+        try:
+            response = self.http.post(f"{slot.base_url.rstrip('/')}/embeddings", json={"model": slot.model, "input": texts}, headers=headers, timeout=EMBED_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            body = response.json()
+            vectors = [entry["embedding"] for entry in sorted(body["data"], key=itemgetter("index"))]
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
+            self.log(task, "embed", slot, {}, True, str(error))
+            return None
+        self.log(task, "embed", slot, body.get("usage") or {}, True, None)
+        return [normalized([float(value) for value in vector]) for vector in vectors] if len(vectors) == len(texts) else None
 
     def complete_json(
         self,

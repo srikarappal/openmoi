@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import Brain, ContentWanted, MineRequest, MomentKind, Overview, PageSource, ViewPage, ViewSchedule, WatchReport
+from moi_brain.brain import SEARCH_LIMIT, Brain, ContentWanted, MineRequest, MomentKind, Overview, PageSource, SearchHit, ViewPage, ViewSchedule, WatchReport
 from moi_brain.content import MAX_CONTENT
 from moi_brain.watch import MAX_WATCH_TEXT
 from moi_brain.mirror import Mirror
@@ -310,6 +310,11 @@ def mirror(brain: BrainDep, days: int = 7) -> Mirror:
 @router.get("/mirror/weekly")
 def weekly_mirror(brain: BrainDep) -> Mirror | None:
     return brain.weekly_mirror()
+
+
+@router.get("/search")
+def search(brain: BrainDep, q: str, limit: int = SEARCH_LIMIT) -> list[SearchHit]:
+    return brain.search(q, limit)
 
 
 @router.get("/schedule")

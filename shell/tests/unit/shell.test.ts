@@ -152,6 +152,10 @@ describe("Shell notices", () => {
     expect(state_of(shell).notices).toHaveLength(5)
     await command(window, { type: "open_notice", notice_id: notices[5].notice_id })
     expect(shell.tabs.infos().map((tab) => tab.url)).toEqual(["https://sign.in/"])
+    await command(window, { type: "open_link", url: "https://news.example/1" })
+    await command(window, { type: "open_link", url: "file:///etc/passwd" })
+    expect(shell.tabs.infos().map((tab) => tab.url)).toEqual(["https://sign.in/", "https://news.example/1"])
+    expect(state_of(shell).notices.at(-1)?.text).toBe("openMoi only opens web links, not file:///etc/passwd")
   })
 })
 

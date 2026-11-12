@@ -5,12 +5,14 @@ from datetime import datetime
 from operator import itemgetter
 from typing import Literal
 
-from moi_brain.compile import Condition, Rule
+from moi_brain.compile import AllOf, AnyOf, Condition, NotOf, Rule, When
 from moi_brain.items import JUDGED_PREFIX, Item, ViewItem, site_host, source_matches
 from moi_brain.ranker import Ranker, features
 from moi_brain.stories import UPDATE_KEY, story_key
 
 PAGE_SIZE = 30
+# A pinned item outranks anything boosts can reach.
+PIN_SCORE = 1000.0
 EXPLORE_EVERY = 10
 EXTRA_FIELDS = ("lang", "reading_minutes", "ragebait")
 HALF_LIFE_HOURS = 24.0
@@ -88,9 +90,18 @@ def judged_number(item: Item, field: str, op: str, target: str) -> bool:
     return compare_number(value, op, target)
 
 
-def matches(condition: Condition | None, item: Item, now: datetime, circles: Circles = NO_CIRCLES) -> bool:
-    if condition is None:
-        return False
+def matches(when: When | None, item: Item, now: datetime, circles: Circles = NO_CIRCLES) -> bool:
+    """Whether a when holds for an item; no when holds for nothing."""
+    if isinstance(when, AllOf):
+        return all(matches(part, item, now, circles) for part in when.every)
+    if isinstance(when, AnyOf):
+        return any(matches(part, item, now, circles) for part in when.some)
+    if isinstance(when, NotOf):
+        return not matches(when.negated, item, now, circles)
+    return condition_holds(when, item, now, circles) if when is not None else False
+
+
+def condition_holds(condition: Condition, item: Item, now: datetime, circles: Circles) -> bool:
     wanted = wanted_values(condition)
     if condition.field == "author_in":
         return bool(circles.groups(item) & set(wanted))
@@ -118,14 +129,22 @@ def plain(value: object) -> str:
     return str(int(value)) if isinstance(value, float) and value.is_integer() else str(value)
 
 
-def describe(condition: Condition) -> str:
-    values = condition.value if isinstance(condition.value, list) else [condition.value]
-    label = FIELD_LABELS.get(condition.field, condition.field.removeprefix(JUDGED_PREFIX))
+def describe(when: When) -> str:
+    """A when in a few words: "topic politics", "all of (topic ai, source rss)", "not author maya"."""
+    if isinstance(when, AllOf):
+        return f"all of ({'; '.join(describe(part) for part in when.every)})"
+    if isinstance(when, AnyOf):
+        return f"any of ({'; '.join(describe(part) for part in when.some)})"
+    if isinstance(when, NotOf):
+        return f"not {describe(when.negated)}"
+    values = when.value if isinstance(when.value, list) else [when.value]
+    label = FIELD_LABELS.get(when.field, when.field.removeprefix(JUDGED_PREFIX))
     return f"{label} {', '.join(plain(value) for value in values)}"
 
 
-def reasons(item: Item, boosts: list[Rule], now: datetime) -> list[str]:
-    found = [f"boost: {describe(rule.when)}" for rule in boosts if rule.when]
+def reasons(item: Item, moved: list[Rule], now: datetime) -> list[str]:
+    """Why an item is where it is: the rules that moved it, how recent it is and where it is from."""
+    found = [f"{rule.do if rule.do != 'pin' else 'pinned'}: {describe(rule.when)}" for rule in moved if rule.when]
     if age_hours(item, now) <= RECENT_HOURS:
         found.append("recent")
     found.append(f"from {item.source_id}")
@@ -216,15 +235,16 @@ def rank(
     for position, item in enumerate(items):
         if any(rule.do == "hide" and applies(rule, item, now, circles) for rule in rules):
             continue
-        boosts = [rule for rule in rules if rule.do == "boost" and applies(rule, item, now, circles)]
-        boost_total = sum(rule.weight for rule in boosts)
+        moved = [rule for rule in rules if rule.do in ("pin", "boost", "demote") and applies(rule, item, now, circles)]
+        boost_total = sum(rule.weight if rule.do == "boost" else -rule.weight for rule in moved if rule.do != "pin")
         if order == "page":
             base = 1 - position / (len(items) + 1)
         elif learned is not None and learned.trained:
             base = learned.score(features(item, now, boost_total))
         else:
             base = 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS)
-        scored.append((base + boost_total, item, boosts))
+        pinned = PIN_SCORE if any(rule.do == "pin" for rule in moved) else 0.0
+        scored.append((base + boost_total + pinned, item, moved))
     scored.sort(key=itemgetter(0), reverse=True)
     scored, also = best_copy_per_story(scored, set(exclude_ids) | set(seen))
     already = [entry for entry in scored if entry[1].item_id in exclude_ids]
@@ -235,12 +255,35 @@ def rank(
     if trained and explore:
         remaining, explored = with_explore(remaining, learned.top_topics())
     page = []
-    for _, item, boosts in remaining[:limit]:
-        plain = reasons(item, boosts, now) + (learned.reasons(features(item, now)) if trained else [])
+    for _, item, moved in remaining[:limit]:
+        plain = reasons(item, moved, now) + (learned.reasons(features(item, now)) if trained else [])
         if item.item_id in explored:
             plain.append("explore: outside your usual topics")
-        page.append(ViewItem(item=item, reasons=story_reasons(item, also, plain)))
-    return page, len(remaining) > limit
+        summary_only = any(rule.do == "summarize_only" and applies(rule, item, now, circles) for rule in rules)
+        page.append(ViewItem(item=item, reasons=story_reasons(item, also, plain), group=group_of(item, rules, now, circles), summary_only=summary_only))
+    return grouped(page), len(remaining) > limit
+
+
+def group_of(item: Item, rules: list[Rule], now: datetime, circles: Circles = NO_CIRCLES) -> str | None:
+    """The value the first group_by rule that applies groups this item under, such as its source or first topic."""
+    rule = next((rule for rule in rules if rule.do == "group_by" and rule.group_field and applies(rule, item, now, circles)), None)
+    if rule is None or rule.group_field is None:
+        return None
+    if rule.group_field == "topic":
+        return item.topics[0] if item.topics else "other"
+    if rule.group_field == "author_handle":
+        return item.author_handle or item.author_name or "unknown"
+    if rule.group_field in EXTRA_FIELDS:
+        return item.extra.get(rule.group_field) or "unknown"
+    return str(getattr(item, rule.group_field, None) or "other")
+
+
+def grouped(page: list[ViewItem]) -> list[ViewItem]:
+    """Items of one group together, groups in the order their best item comes, items in score order inside each."""
+    groups: dict[str | None, list[ViewItem]] = {}
+    for view_item in page:
+        groups.setdefault(view_item.group, []).append(view_item)
+    return [view_item for members in groups.values() for view_item in members]
 
 
 def with_explore(entries: list[Scored], top_topics: set[str]) -> tuple[list[Scored], set[str]]:

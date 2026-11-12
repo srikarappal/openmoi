@@ -25,6 +25,8 @@
   .details { font-weight: 600; font-size: 14px; }
   .summary { border-left: 3px solid var(--accent, #3b6cf6); padding-left: 8px; margin-top: 6px; }
   .watching { font-size: 13px; opacity: 0.8; margin-top: 4px; }
+  .summary.pending { color: var(--muted); font-style: italic; }
+  .group { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; margin: 14px 2px 0; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .chips { display: flex; flex-wrap: wrap; gap: 4px; }
   .chip { background: var(--chip); color: var(--muted); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; }
@@ -47,6 +49,8 @@
   const visible_since = new Map()
   const seen_sent = new Set()
   let next_cursor = null
+  // The group of the last card shown, so a run of one group gets one heading.
+  let last_group = null
 
   const seen_observer = new IntersectionObserver(track_visibility, { threshold: 0.6 })
   const more_observer = new IntersectionObserver(load_more_when_visible)
@@ -101,10 +105,12 @@
     return name ? `${family} ${name}` : family
   }
 
-  // A summary and what is worth watching, made after the card first showed, arrive as an update.
-  function summary_parts(item) {
+  // A summary and what is worth watching, made after the card first showed, arrive as an update. A summary only card
+  // says its summary is on the way until then.
+  function summary_parts(item, summary_only) {
     const parts = []
     if (item.extra.summary) parts.push(element("div", "summary", item.extra.summary))
+    else if (summary_only) parts.push(element("div", "summary pending", "Summary on its way"))
     if (item.extra.worth_watching) parts.push(element("div", "watching", `Worth watching: ${item.extra.worth_watching}`))
     return parts
   }
@@ -113,6 +119,7 @@
     const item = view_item.item
     const node = element("article", "card")
     node.dataset.itemId = item.item_id
+    if (view_item.summary_only) node.dataset.summaryOnly = "1"
     if (item.image_url) {
       const image = element("img", "thumb")
       image.src = item.image_url
@@ -124,8 +131,8 @@
     const meta = [source_label(item.source_id), item.author_name || item.author_handle, time_ago(item.published_at)]
     body.append(element("div", "meta", meta.filter(Boolean).join(" · ")))
     if (item.title) body.append(element("div", "title", item.title))
-    if (item.text && item.text !== item.title) body.append(element("div", "text", item.text))
-    body.append(...summary_parts(item))
+    if (item.text && item.text !== item.title && !view_item.summary_only) body.append(element("div", "text", item.text))
+    body.append(...summary_parts(item, view_item.summary_only))
     const details = [item.extra.price_text, item.extra.rating_text, item.extra.site].filter(Boolean).join(" · ")
     if (details) body.append(element("div", "details", details))
     const row = element("div", "row")
@@ -174,10 +181,17 @@
     return items.length > 0 && items.every((view_item) => ["product", "link"].includes(view_item.item.kind))
   }
 
+  function group_label(group) {
+    return group.includes(":") ? source_label(group) : group
+  }
+
   function add(items) {
     for (const view_item of items) {
       if (rendered.has(view_item.item.item_id)) continue
       rendered.add(view_item.item.item_id)
+      const group = view_item.group || null
+      if (group && group !== last_group) items_root.append(element("h2", "group", group_label(group)))
+      last_group = group
       items_root.append(is_reader(items) ? reader(view_item) : card(view_item))
     }
   }
@@ -193,6 +207,7 @@
   moi.on_render((items, cursor) => {
     items_root.replaceChildren()
     rendered.clear()
+    last_group = null
     items_root.className = is_grid(items) ? "grid" : ""
     add(items)
     update_footer(cursor)
@@ -211,7 +226,7 @@
         const body = node && node.querySelector(".body")
         if (!body) continue
         for (const old of body.querySelectorAll(".summary, .watching")) old.remove()
-        body.querySelector(".row").before(...summary_parts(view_item.item))
+        body.querySelector(".row").before(...summary_parts(view_item.item, node.dataset.summaryOnly === "1"))
       }
     })
   }

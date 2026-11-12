@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from fake_model import model_reply
+from fake_model import embeddings, model_reply
 
 PAGES_DIR = Path(__file__).resolve().parent / "pages"
 CHANNEL_ID = "UCfakechannel00000000001"
@@ -220,6 +220,12 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length") or 0)
         payload = json.loads(self.rfile.read(length) or b"{}")
         services.record("POST", self.path, dict(self.headers), payload)
+        if urlparse(self.path).path == "/llm/v1/embeddings":
+            if services.embeddings_down:
+                self.reply(500, "text/plain", "embedding model unavailable")
+            else:
+                self.reply(200, "application/json", json.dumps(embeddings(payload)))
+            return
         if urlparse(self.path).path != "/llm/v1/chat/completions":
             self.reply(404, "text/plain", "not found")
             return
@@ -256,6 +262,7 @@ class FakeServices:
         self.model_queue: dict[str, list[str | None]] = {}
         self.model_delay = 0.0
         self.youtube_feed_down = False
+        self.embeddings_down = False
         self.looks: dict[str, int] = {}
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -304,6 +311,7 @@ class FakeServices:
             self.model_queue.clear()
             self.model_delay = 0.0
             self.youtube_feed_down = False
+            self.embeddings_down = False
 
 
 def main() -> None:

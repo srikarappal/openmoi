@@ -604,6 +604,9 @@ export class Shell implements ViewHost {
       case "open_tab":
         this.open_tab(command.url)
         return
+      case "open_link":
+        this.open_original(command.url)
+        return
       case "select_tab":
         if (this.tabs.get(command.tab_id)) this.activate({ kind: "tab", tab_id: command.tab_id })
         return

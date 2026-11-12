@@ -42,6 +42,39 @@ test("picking a command fills it in and the chat follows the replies to the bott
   }
 })
 
+test("/search finds what you were shown and its link opens in a tab", async () => {
+  const harness = await Harness.launch(world)
+  try {
+    await loaded(harness, "New laptop chip")
+    await harness.chat("/search battery laptop")
+    const reply = harness.chrome.locator(".message.moi").last()
+    await expect(reply).toContainText('match "battery laptop", best first:')
+    await expect(reply.locator("a").first()).toContainText("/articles/tech1")
+    await reply.locator("a").first().click()
+    await expect(harness.chrome.locator(".tab.web.active .tab_title")).toHaveCount(1)
+    await harness.chat("/search zebra")
+    await expect(harness.chrome.locator(".message.moi").last()).toHaveText('Nothing you were shown matches "zebra".')
+  } finally {
+    await harness.close()
+  }
+})
+
+test("nested rules, pins and groups shape the feed in the real app", async () => {
+  const feed =
+    `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/tech.xml\n* RSS: ${world.base_url}/rss/news.xml\n\n` +
+    "## Rules\n* Hide politics unless it is from news or someone I know.\n* Pin posts about science.\n* Group by source.\n"
+  const harness = await Harness.launch(world, { views: { feed } })
+  try {
+    const text = await loaded(harness, "Senate debates")
+    expect(text).not.toContain("Election results shake up tech policy")
+    expect(text.indexOf("RSS TECH")).toBeLessThan(text.indexOf("A tour of the new space telescope images"))
+    expect(text.indexOf("A tour of the new space telescope images")).toBeLessThan(text.indexOf("RSS NEWS"))
+    expect(text).toContain("pinned: topic science")
+  } finally {
+    await harness.close()
+  }
+})
+
 test("the status line shows the feed updating, then Idle", async () => {
   const harness = await Harness.launch(world)
   try {

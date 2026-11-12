@@ -59,6 +59,9 @@ class Settings(BaseModel):
     fast: Slot = Field(default_factory=local_slot)
     smart: Slot = Field(default_factory=local_slot)
     allow_content_to_hosted: bool = False
+    # A local embedding model (an OpenAI compatible /embeddings endpoint, such as Ollama with all-minilm); without
+    # one, item vectors come from feature hashing.
+    embed: Slot | None = None
     # Where signed packs of specs and site policy come from; none means no pack updates.
     pack_url: str | None = Field(default=None, pattern=r"^https://")
 

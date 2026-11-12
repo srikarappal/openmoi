@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from conftest import TOKEN, wait_until_refreshed
 from fastapi.testclient import TestClient
+from helpers import FixedClock
 
 from moi_brain.api import create_app
 from moi_brain.brain import Brain
@@ -144,14 +145,6 @@ def test_a_summarize_rule_for_videos_leaves_articles_alone(client, paths):
     ingest(client, [article(1)])
     assert client.get("/content/wanted").json() == []
 
-
-
-class FixedClock:
-    def __init__(self, moment: datetime):
-        self.moment = moment
-
-    def __call__(self) -> datetime:
-        return self.moment
 
 
 def test_a_failed_summary_is_tried_again_a_day_later(paths, settings, services):

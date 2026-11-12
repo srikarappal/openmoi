@@ -1,0 +1,397 @@
+{
+ "note": "Labeled stories for the cluster exit check: each story's three copies should land in one cluster; distractors share topics or words but are other stories.",
+ "stories": [
+  [
+   {
+    "source": "rss:wire",
+    "title": "Fed raises interest rates by half a point | Reuters",
+    "text": "The central bank lifted its benchmark rate by 50 basis points on Wednesday."
+   },
+   {
+    "source": "page:hn",
+    "title": "Fed raises interest rates by half a point",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Fed raises interest rates by half a point",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "SpaceX lands Starship booster on launch tower arms: what it means for Mars",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "SpaceX lands Starship booster on launch tower arms",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "SpaceX lands Starship booster on the launch tower arms",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Storm closes Bay Bridge overnight",
+    "text": "A powerful storm forced officials to close the Bay Bridge overnight as winds topped 70 miles per hour. Crews worked through the night to clear debris and the bridge is expected to reopen by the morning commute, the transit agency said in a statement. Drivers were told to use the tunnel instead."
+   },
+   {
+    "source": "page:hn",
+    "title": "Bay Bridge shut as storm hits",
+    "text": "A powerful storm forced officials to close the Bay Bridge overnight as winds topped 70 miles per hour. Crews worked through the night to clear debris and the bridge is expected to reopen by the morning commute, the transit agency said in a statement. Drivers were told to use the tunnel instead."
+   },
+   {
+    "source": "page:reddit",
+    "title": "Storm closes Bay Bridge overnight, reopening for morning commute",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Breaking: Wildfire forces evacuation of 3,000 homes near Boulder",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Wildfire forces evacuation of 3,000 homes near Boulder",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Wildfire forces evacuation of 3,000 homes near Boulder, Colorado",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "New laptop chip doubles battery life",
+    "text": "The new processor packs twice as many cores into the same power budget, the company said at its developer conference. Laptops with the chip ship in the spring, and early tests show battery life close to double that of last year's models when playing video or browsing the web."
+   },
+   {
+    "source": "page:hn",
+    "title": "Chipmaker unveils processor at developer conference",
+    "text": "The new processor packs twice as many cores into the same power budget, the company said at its developer conference. Laptops with the chip ship in the spring, and early tests show battery life close to double that of last year's models when playing video or browsing the web."
+   },
+   {
+    "source": "page:reddit",
+    "title": "New laptop chip doubles battery life, early tests show",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Automobile maker recalls two million vehicles over brakes",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Car maker recalls two million cars over brakes",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Car maker recalls two million vehicles over faulty brakes",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Physician shortage leaves rural clinics without care",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Doctor shortage leaves rural clinics without care",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Rural doctors shortage leaves clinics without care",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Puppy rescued from flooded storm drain after six hours",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Dog rescued from flooded storm drain after six hours",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Puppy rescued from a flooded storm drain after 6 hours",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Open source database hits version 10 with new storage engine",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Open source database hits version 10",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Open source database hits version 10 with a new storage engine",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Supreme Court hears arguments on social media age limits",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Supreme Court hears arguments on social media age limits [video]",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Supreme Court hears arguments over social media age limits",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Researchers grow working kidney tissue in the lab - AP News",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Researchers grow working kidney tissue in the lab",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Researchers grow working kidney tissue in lab",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Amazon cuts prices on Kindle lineup ahead of holidays",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Amazon cuts prices on Kindle lineup ahead of the holidays",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Amazon cuts Kindle lineup prices ahead of holidays",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "City council approves new bike lanes on Market Street",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "City council approves new bike lanes on Market Street (2026)",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Council approves new bike lanes on Market Street",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Volcano erupts in Iceland, flights diverted across Europe",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Volcano erupts in Iceland, flights diverted",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Iceland volcano erupts, flights diverted across Europe",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Study finds four day work week boosts productivity",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Study finds four day work week boosts productivity [pdf]",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Study: four day work week boosts productivity",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Python 3.15 released with faster startup and a new JIT",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Python 3.15 released",
+    "text": "Faster startup and a new JIT compiler."
+   },
+   {
+    "source": "page:reddit",
+    "title": "Python 3.15 released with faster startup and new JIT",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Museum returns stolen bronze statues to Nigeria",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Museum returns stolen bronze statues to Nigeria",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "British museum returns stolen bronze statues to Nigeria",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Heat wave breaks records across southern Europe",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Heat wave breaks records across southern Europe | BBC",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Heatwave breaks records across southern Europe",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Electric car sales overtake petrol in Norway for good",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Electric automobile sales overtake petrol in Norway",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "Electric car sales overtake petrol cars in Norway",
+    "text": ""
+   }
+  ],
+  [
+   {
+    "source": "rss:wire",
+    "title": "Rare comet visible to the naked eye this weekend",
+    "text": ""
+   },
+   {
+    "source": "page:hn",
+    "title": "Rare comet visible to naked eye this weekend",
+    "text": ""
+   },
+   {
+    "source": "page:reddit",
+    "title": "A rare comet will be visible to the naked eye this weekend",
+    "text": ""
+   }
+  ]
+ ],
+ "distractors": [
+  {
+   "source": "rss:wire",
+   "title": "Fed holds interest rates steady in March",
+   "text": ""
+  },
+  {
+   "source": "page:hn",
+   "title": "SpaceX delays next Starship launch to spring",
+   "text": ""
+  },
+  {
+   "source": "page:reddit",
+   "title": "Storm knocks out power to 40,000 homes in Oakland",
+   "text": ""
+  },
+  {
+   "source": "rss:wire",
+   "title": "New phone chip promises faster photos",
+   "text": ""
+  },
+  {
+   "source": "page:hn",
+   "title": "Python 3.14 released with free threading",
+   "text": ""
+  },
+  {
+   "source": "page:reddit",
+   "title": "Car maker opens new battery factory in Texas",
+   "text": ""
+  },
+  {
+   "source": "rss:wire",
+   "title": "Museum opens new wing for modern art",
+   "text": ""
+  },
+  {
+   "source": "page:hn",
+   "title": "Heat wave hits India as monsoon stalls",
+   "text": ""
+  },
+  {
+   "source": "page:reddit",
+   "title": "Dog show crowns a poodle best in show",
+   "text": ""
+  },
+  {
+   "source": "rss:wire",
+   "title": "Wildfire near Boulder is now fully contained",
+   "text": ""
+  }
+ ]
+}

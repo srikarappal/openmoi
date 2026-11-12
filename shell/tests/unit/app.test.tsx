@@ -192,6 +192,11 @@ describe("the chat", () => {
       "same: ",
     ])
     expect(query(".chat_view")?.textContent).toBe("Changes apply to Tech")
+    await show({ chat: [{ entry_id: 3, role: "moi", text: "Found: https://news.example/1 and more" }], chat_view: "Tech" })
+    expect(texts(".message .message_text")).toEqual(["Found: https://news.example/1 and more"])
+    await click(query(".message_text a"))
+    expect(last_sent()).toEqual({ type: "open_link", url: "https://news.example/1" })
+    await show({ chat: [{ entry_id: 1, role: "you", text: "no shorts" }, PENDING], chat_view: "Tech" })
     await click(query(".proposal_actions .confirm"))
     expect(last_sent()).toEqual({ type: "proposal_apply", proposal_id: "p1" })
     await click(document.querySelectorAll(".proposal_actions button")[1])

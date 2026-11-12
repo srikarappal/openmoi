@@ -27,6 +27,7 @@ import type {
   ContentWanted,
   HealthVerdict,
   RunReport,
+  SearchHit,
 } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
@@ -170,6 +171,10 @@ export class BrainClient {
 
   moment(view_id: string, kind: MomentKind): Promise<{ status: string }> {
     return this.request("POST", "/moments", { view_id, kind })
+  }
+
+  search(query: string, limit = 20): Promise<SearchHit[]> {
+    return this.request("GET", `/search?q=${encodeURIComponent(query)}&limit=${limit}`)
   }
 
   mirror(days: number): Promise<Mirror> {

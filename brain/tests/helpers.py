@@ -3,6 +3,7 @@
 import json
 import secrets
 import threading
+from datetime import datetime
 
 import httpx
 from websockets.exceptions import ConnectionClosed
@@ -13,6 +14,14 @@ from moi_brain.relay import EXTENSION_PROOF, HUB_PROOF, proof
 
 def ok_reply(content: str) -> httpx.Response:
     return httpx.Response(200, json={"choices": [{"message": {"content": content}}], "usage": {"prompt_tokens": 1000, "completion_tokens": 100}})
+
+
+class FixedClock:
+    def __init__(self, moment: datetime):
+        self.moment = moment
+
+    def __call__(self) -> datetime:
+        return self.moment
 
 
 class Recorder:

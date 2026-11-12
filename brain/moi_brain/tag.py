@@ -56,8 +56,8 @@ class TagReply(BaseModel):
 def rule_topics(rules: list[Rule]) -> set[str]:
     topics: set[str] = set()
     for rule in rules:
-        for condition in (rule.when, rule.unless):
-            if condition and condition.field == "topic":
+        for condition in rule.conditions():
+            if condition.field == "topic":
                 values = condition.value if isinstance(condition.value, list) else [condition.value]
                 topics |= {str(value).strip().lower() for value in values if str(value).strip()}
     return topics

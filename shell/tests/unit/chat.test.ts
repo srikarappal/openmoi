@@ -292,6 +292,17 @@ describe("ChatController mirror", () => {
   })
 })
 
+describe("ChatController search", () => {
+  it("searches what you were shown and lists the hits", async () => {
+    const hit = { item: { source_id: "rss:news", url: "https://news.example/1", title: "Lithium recycling", text: null, published_at: "2026-11-01T10:00:00Z", fetched_at: "2026-11-01T10:00:00Z" }, score: 1 }
+    const search = vi.fn(async () => [hit])
+    const { chat } = make_chat({ search } as unknown as Partial<BrainClient>)
+    await chat.send("/search lithium")
+    expect(search).toHaveBeenCalledWith("lithium")
+    expect(last_reply(chat)).toBe('One item matches "lithium", best first:\n* Lithium recycling (rss:news, 2026-11-01) https://news.example/1')
+  })
+})
+
 describe("ChatController sharing", () => {
   const PROPOSAL = { proposal_id: "p9", view_id: "ai", changes: [{ file: "views/ai.md", diff: "+# AI" }], lens_action: null, reply: "AI news as a new view, ai. Its look is made fresh from its Layout." }
 

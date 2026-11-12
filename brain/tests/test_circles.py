@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from conftest import TOKEN, wait_until_refreshed
 from fastapi.testclient import TestClient
+from helpers import FixedClock
 
 from moi_brain.api import create_app
 from moi_brain.brain import NOBODY_KNOWN, Brain
@@ -15,14 +16,6 @@ from moi_brain.store import Store
 
 NOW = datetime(2026, 11, 10, 9, 0, tzinfo=UTC)
 LIST = "https://x.com/me/following"
-
-
-class FixedClock:
-    def __init__(self, moment: datetime):
-        self.moment = moment
-
-    def __call__(self) -> datetime:
-        return self.moment
 
 
 def post(handle: str | None, number: int, site: str = "https://x.com") -> object:
