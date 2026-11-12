@@ -69,6 +69,8 @@ class Gateway:
         self.log_path = log_path
         self.http = http
         self.log_lock = threading.Lock()
+        # What this thread's model calls have cost so far, for budgets such as an agent run's.
+        self.costs = threading.local()
 
     def slot(self, slot_name: SlotName) -> Slot:
         slot = getattr(self.settings, slot_name)
@@ -173,6 +175,7 @@ class Gateway:
         tokens_in = int(usage.get("prompt_tokens") or 0)
         tokens_out = int(usage.get("completion_tokens") or 0)
         cost = (tokens_in * slot.input_cost_per_million + tokens_out * slot.output_cost_per_million) / 1_000_000
+        self.costs.total = getattr(self.costs, "total", 0.0) + cost
         line = {
             "ts": datetime.now(UTC).isoformat(),
             "task": task,
@@ -189,6 +192,10 @@ class Gateway:
                 os.replace(self.log_path, self.log_path.with_name(f"{self.log_path.name}.1"))
             with self.log_path.open("a", encoding="utf-8") as handle:
                 handle.write(f"{json.dumps(line)}\n")
+
+    def spent(self) -> float:
+        """What this thread's model calls have cost so far, in dollars."""
+        return getattr(self.costs, "total", 0.0)
 
     def recent_calls(self, limit: int = 20) -> list[dict[str, Any]]:
         if not self.log_path.exists():

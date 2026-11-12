@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from "react"
 import { createRoot } from "react-dom/client"
 import { linked_parts, matching_commands } from "../shared/commands"
-import type { Activity, ChatEntry, GateChoice, OmniHit, ShellCommand, ShellState, StopScreen } from "../shared/types"
+import type { Activity, AgentRun, ChatEntry, GateChoice, OmniHit, ShellCommand, ShellState, StopScreen } from "../shared/types"
 
 interface ShellBridge {
   command(command: ShellCommand): void
@@ -118,6 +118,108 @@ function DiffView({ file, diff }: { file: string; diff: string }) {
   )
 }
 
+const PLAN_STATUS: Record<AgentRun["status"], string> = {
+  proposed: "Waiting for your approval",
+  running: "Running",
+  paused: "Waiting for your answer",
+  done: "Done",
+  stopped: "Stopped",
+  failed: "Failed",
+  declined: "Not run",
+}
+
+function Linked({ text }: { text: string }) {
+  return (
+    <>
+      {linked_parts(text).map((part, index) =>
+        part.url ? (
+          <a key={index} href={part.url} onClick={(event) => open_link(event, part.url ?? "")}>
+            {part.text}
+          </a>
+        ) : (
+          part.text
+        ),
+      )}
+    </>
+  )
+}
+
+// A plan an agent made: what it will do and its budget before it runs, its steps as they happen, then its result.
+function PlanCard({ plan }: { plan: AgentRun }) {
+  const [answer, set_answer] = useState("")
+  const budget = `${plan.budget.max_steps} steps, ${plan.budget.max_seconds} s, $${plan.budget.max_cost_usd.toFixed(2)} at most; expires ${new Date(plan.expires_at).toLocaleString()}`
+  return (
+    <div className="plan">
+      <div className="plan_summary">{plan.summary}</div>
+      <div className="plan_status">
+        {PLAN_STATUS[plan.status]}
+        {plan.reason ? ` (${plan.reason})` : ""}
+      </div>
+      <ol className="plan_steps">
+        {plan.steps.map((step, index) => {
+          const done = plan.trace.find((entry) => entry.step === index + 1)
+          return (
+            <li key={index} className={done ? (done.ok ? "step done" : "step failed") : "step"}>
+              <span className="step_tool">{step.tool.replaceAll("_", " ")}</span> <span className="step_why">{step.why}</span>
+              {done && <span className="step_outcome"> : {done.outcome}</span>}
+            </li>
+          )
+        })}
+      </ol>
+      <div className="plan_budget">{budget}</div>
+      {plan.status === "paused" && (
+        <form
+          className="plan_answer"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (answer.trim()) send({ type: "answer_plan", plan_id: plan.plan_id, answer: answer.trim() })
+          }}
+        >
+          <label>
+            {plan.question}
+            <input value={answer} onChange={(event) => set_answer(event.target.value)} />
+          </label>
+          <button type="submit">Answer</button>
+        </form>
+      )}
+      {plan.result && (
+        <div className="plan_result">
+          <div className="result_answer">
+            <Linked text={plan.result.answer} />
+          </div>
+          {plan.result.citations.map((citation) => (
+            <div key={citation.number} className="result_citation">
+              <Linked text={`[${citation.number}] ${citation.title} ${citation.url}`} />
+            </div>
+          ))}
+          {plan.result.shortlist.map((entry) => (
+            <div key={entry.item_id} className="result_pick">
+              <Linked text={`${entry.title}: ${entry.why} ${entry.url}`} />
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="plan_actions">
+        {plan.status === "proposed" && (
+          <>
+            <button className="primary approve" onClick={() => send({ type: "approve_plan", plan_id: plan.plan_id })}>
+              Approve and run
+            </button>
+            <button className="decline" onClick={() => send({ type: "decline_plan", plan_id: plan.plan_id })}>
+              Cancel
+            </button>
+          </>
+        )}
+        {(plan.status === "running" || plan.status === "paused" || (plan.kind === "watch" && plan.status === "done" && plan.next_run_at)) && (
+          <button className="stop" onClick={() => send({ type: "stop_plan", plan_id: plan.plan_id })}>
+            Stop
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function open_link(event: MouseEvent, url: string): void {
   event.preventDefault()
   send({ type: "open_link", url })
@@ -138,6 +240,7 @@ function ChatMessage({ entry }: { entry: ChatEntry }) {
           ),
         )}
       </div>
+      {entry.plan && <PlanCard plan={entry.plan} />}
       {proposal && (
         <div className="proposal">
           {proposal.changes.map((change) => (

@@ -134,8 +134,10 @@ export async function perform(page: ActionPage, decision: ActionDecision): Promi
 }
 
 export class ActionController {
-  // The tier 2 action on the confirm sheet.
+  // The action on the confirm sheet, and those an agent proposed waiting for it, one at a time.
   pending: ActionDecision | null = null
+  private readonly queued: ActionDecision[] = []
+  private readonly offered = new Set<string>()
   private readonly waiting = new Map<string, { decision: ActionDecision; timer: ReturnType<typeof setTimeout> }>()
 
   constructor(
@@ -166,19 +168,31 @@ export class ActionController {
     await this.execute(decision)
   }
 
+  // An allowed action an agent's plan proposed, already through the gate: it waits its turn on the confirm sheet.
+  offer(decision: ActionDecision): void {
+    if (!decision.allowed || !decision.confirm || this.offered.has(decision.request_id)) return
+    this.offered.add(decision.request_id)
+    if (this.pending) this.queued.push(decision)
+    else this.pending = decision
+    this.hooks.changed()
+  }
+
   async confirm(request_id: string): Promise<void> {
     const decision = this.pending
     if (!decision || decision.request_id !== request_id) return
-    this.pending = null
-    this.hooks.changed()
+    this.next()
     await this.execute(decision)
   }
 
   async decline(request_id: string): Promise<void> {
     if (!this.pending || this.pending.request_id !== request_id) return
-    this.pending = null
-    this.hooks.changed()
+    this.next()
     await this.brain.action_result(request_id, "declined")
+  }
+
+  private next(): void {
+    this.pending = this.queued.shift() ?? null
+    this.hooks.changed()
   }
 
   async undo(request_id: string): Promise<void> {

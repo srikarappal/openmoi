@@ -521,3 +521,51 @@ test("no click, no action: a lens or the injected words in a post cannot act", a
     await harness.close()
   }
 })
+
+test("an agent shows its plan first, runs only once approved, asks when it needs to and cites what it read", async () => {
+  const harness = await Harness.launch(world)
+  try {
+    await loaded(harness, "New laptop chip")
+    await harness.chat("/agent research laptop chip battery")
+    const card = harness.chrome.locator(".plan").last()
+    await expect(card.locator(".plan_status")).toHaveText("Waiting for your approval")
+    await expect(card.locator(".step_tool")).toHaveText(["search store", "read item"])
+    expect(await world.model_calls("agent_read")).toHaveLength(0)
+    await card.locator(".approve").click()
+    await expect(card.locator(".plan_status")).toHaveText("Done", { timeout: 20_000 })
+    await expect(card.locator(".result_answer")).toContainText("New laptop chip doubles battery life [1].")
+    await expect(card.locator(".result_citation a").first()).toContainText("/articles/tech1")
+
+    await harness.chat("/agent shop ASK me about the laptop chip")
+    const asking = harness.chrome.locator(".plan").last()
+    await asking.locator(".approve").click()
+    await expect(asking.locator(".plan_answer")).toContainText("What is your budget?", { timeout: 20_000 })
+    await asking.locator(".plan_answer input").fill("Under $50")
+    await asking.locator(".plan_answer button").click()
+    await expect(asking.locator(".plan_status")).toHaveText("Done", { timeout: 20_000 })
+  } finally {
+    await harness.close()
+  }
+})
+
+test("an action an agent proposes waits on the confirm sheet and runs only when you confirm", async () => {
+  const feed = `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/acts.xml\n`
+  const harness = await Harness.launch(world, { views: { feed }, assets: ACT_SPECS(new URL(world.base_url).hostname) })
+  try {
+    await loaded(harness, "our bakery opens Saturday")
+    const acted_before = (await world.hits("/acted?what=like")).length
+    await harness.chat("/agent research bakery opens saturday and like it")
+    const card = harness.chrome.locator(".plan").last()
+    await card.locator(".approve").click()
+    await expect(card.locator(".plan_status")).toHaveText("Done", { timeout: 20_000 })
+    await expect(harness.chrome.locator(".confirm_title")).toContainText("Like on")
+    expect((await world.hits("/acted?what=like")).length).toBe(acted_before)
+    await harness.chrome.locator(".confirm_actions .confirm").click()
+    await expect(harness.chrome.locator(".notice", { hasText: "Like done on" })).toBeVisible({ timeout: 20_000 })
+    expect((await world.hits("/acted?what=like")).length).toBe(acted_before + 1)
+    const log = await harness.brain<Array<{ kind: string; origin?: string }>>("/actions/log")
+    expect(log.filter((entry) => entry.kind === "request").map((entry) => entry.origin)).toEqual(["plan"])
+  } finally {
+    await harness.close()
+  }
+})

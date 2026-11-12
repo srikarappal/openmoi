@@ -32,6 +32,8 @@ import type {
   Answer,
   ShopStart,
   ActionDecision,
+  AgentKind,
+  AgentRun,
   LensVerdict,
 } from "../shared/types"
 
@@ -176,6 +178,34 @@ export class BrainClient {
 
   moment(view_id: string, kind: MomentKind): Promise<{ status: string }> {
     return this.request("POST", "/moments", { view_id, kind })
+  }
+
+  plan_agent(kind: AgentKind, request: string): Promise<AgentRun> {
+    return this.request("POST", "/agents", { kind, request })
+  }
+
+  agent_run(plan_id: string): Promise<AgentRun> {
+    return this.request("GET", `/agents/${encodeURIComponent(plan_id)}`)
+  }
+
+  agent_step(plan_id: string, step: "approve" | "decline" | "stop"): Promise<AgentRun> {
+    return this.request("POST", `/agents/${encodeURIComponent(plan_id)}/${step}`, {})
+  }
+
+  answer_agent(plan_id: string, answer: string): Promise<AgentRun> {
+    return this.request("POST", `/agents/${encodeURIComponent(plan_id)}/answer`, { answer })
+  }
+
+  agents_due(): Promise<string[]> {
+    return this.request("GET", "/agents/due")
+  }
+
+  pending_actions(): Promise<ActionDecision[]> {
+    return this.request("GET", "/actions/pending")
+  }
+
+  proposal(proposal_id: string): Promise<Proposal> {
+    return this.request("GET", `/proposals/${encodeURIComponent(proposal_id)}`)
   }
 
   check_action(item_id: string, action: string, text: string, origin: "gesture" | "plan" = "gesture"): Promise<ActionDecision> {

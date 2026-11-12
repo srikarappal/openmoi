@@ -42,6 +42,7 @@ function fake_brain(fields: Record<string, unknown> = {}) {
     update_packs: vi.fn(async () => ({ status: "no pack channel" })),
     add_content: vi.fn(async () => ({ status: "summarized" })),
     watch_report: vi.fn(async () => ({ changed: false, alert: null })),
+    agents_due: vi.fn(async () => []),
     weekly_mirror: vi.fn(async () => null),
     moment: vi.fn(async () => ({ status: "recorded" })),
     open_early: vi.fn(async () => ({ status: "open" })),

@@ -444,3 +444,21 @@ describe("ChatController Google after the L1 review", () => {
     vi.useRealTimers()
   })
 })
+
+describe("ChatController agents", () => {
+  it("shows a plan to approve, follows its updates and offers what it proposes", async () => {
+    const plan = { plan_id: "p1", status: "proposed", reason: "left out propose_action: an agent may not place_order" }
+    const plan_agent = vi.fn(async () => plan)
+    const { chat } = make_chat({ plan_agent } as unknown as Partial<BrainClient>)
+    await chat.send("/agent shop a desk lamp")
+    expect(plan_agent).toHaveBeenCalledWith("shop", "a desk lamp")
+    const entry = chat.list().at(-1)
+    expect(entry?.plan).toEqual(plan)
+    expect(entry?.text).toBe("Here is the plan. (left out propose_action: an agent may not place_order.) Approve it and I will run it.")
+    chat.update_plan({ ...plan, status: "running" } as never)
+    chat.update_plan({ plan_id: "unknown", status: "done" } as never)
+    expect(chat.list().at(-1)?.plan?.status).toBe("running")
+    chat.offer_proposal({ proposal_id: "e1", view_id: "feed", changes: [{ file: "memory/likes.md", diff: "+* lamps" }], lens_action: null, reply: "" }, "An agent proposes this.")
+    expect(chat.list().at(-1)).toMatchObject({ text: "An agent proposes this.", status: "pending", proposal: { proposal_id: "e1" } })
+  })
+})

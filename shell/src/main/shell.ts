@@ -37,6 +37,7 @@ import { MineController, chrome_mine_key, tab_mine_key } from "./mine"
 import { ActivityTracker } from "./activity"
 import { RelayLink } from "./relay_link"
 import { ActionController, TabPage, loaded, type ActionPage } from "./actions"
+import { AgentWatcher } from "./agent_watch"
 import { Player } from "./player"
 import { SmokeTester } from "./smoke"
 import { ReaderPool } from "./readers"
@@ -89,6 +90,7 @@ export class Shell implements ViewHost {
   readonly lens_gen: LensGenerator
   readonly player: Player
   readonly actions: ActionController
+  readonly agents: AgentWatcher
   private omnibox: Omnibox | null = null
   private omnibox_ticket = 0
   readonly electron: ElectronDriver
@@ -169,6 +171,12 @@ export class Shell implements ViewHost {
       changed: () => this.push_state(),
       item_changed: (item) => this.views.item_changed(item),
     })
+    this.agents = new AgentWatcher(brain, {
+      update: (run) => this.chat.update_plan(run),
+      notify: (text) => this.notify(text),
+      offer_proposal: (proposal, why) => this.chat.offer_proposal(proposal, why),
+      offer_action: (decision) => this.actions.offer(decision),
+    })
     this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload, this.lens_tokens, path.join(dist_dir, "axe.min.js")), {
       say: (text) => this.chat.say(text),
       on_new_lens: (view_id, kind) => this.reload_lens(view_id, kind),
@@ -248,6 +256,8 @@ export class Shell implements ViewHost {
     this.relay.start()
     await this.scheduler.tick()
     this.scheduler.start()
+    // Standing tasks you approved (watch) run again when due.
+    setInterval(() => this.agents.run_due().catch((error) => this.notify(`A standing task could not run: ${explain(error)}`)), MINUTE_MS)
     powerMonitor.on("resume", () => {
       this.scheduler.tick().catch(ignore)
     })
@@ -710,6 +720,17 @@ export class Shell implements ViewHost {
         return
       case "undo_action":
         await this.actions.undo(command.request_id)
+        return
+      case "approve_plan":
+        this.chat.update_plan(await this.brain.agent_step(command.plan_id, "approve"))
+        this.agents.follow(command.plan_id)
+        return
+      case "decline_plan":
+      case "stop_plan":
+        this.chat.update_plan(await this.brain.agent_step(command.plan_id, command.type === "stop_plan" ? "stop" : "decline"))
+        return
+      case "answer_plan":
+        this.chat.update_plan(await this.brain.answer_agent(command.plan_id, command.answer))
         return
       case "collection_view": {
         const view = await this.brain.collection_view(command.name)

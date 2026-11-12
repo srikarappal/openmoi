@@ -3,6 +3,7 @@
 import base64
 import hmac
 from datetime import datetime
+from operator import attrgetter
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
@@ -18,6 +19,7 @@ from moi_brain.config import ModelChange, ModelInfo
 from moi_brain.edits import EditScope, Proposal, StaleProposal
 from moi_brain.extractors import ExtractorSpec
 from moi_brain.actions import ActionDecision, ActionRequest, ActionResult
+from moi_brain.agents import AgentKind, AgentRun
 from moi_brain.answers import Answer
 from moi_brain.health import RunReport, Verdict
 from moi_brain.lens_gen import LensVerdict
@@ -321,6 +323,68 @@ class HighlightRequest(BaseModel):
     item_id: str = Field(min_length=1, max_length=200)
     quote: str = Field(default="", max_length=5000)
     note: str = Field(default="", max_length=5000)
+
+
+class AgentRequest(BaseModel):
+    kind: AgentKind
+    request: str = Field(min_length=1, max_length=2000)
+
+
+class AgentAnswer(BaseModel):
+    answer: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/agents")
+def plan_agent(body: AgentRequest, brain: BrainDep) -> AgentRun:
+    return brain.plan_agent(body.kind, body.request)
+
+
+@router.get("/agents")
+def agent_runs(brain: BrainDep) -> list[AgentRun]:
+    return sorted(brain.agent_runs.values(), key=attrgetter("created_at"), reverse=True)[:50]
+
+
+@router.get("/agents/due")
+def agents_due(brain: BrainDep) -> list[str]:
+    return brain.agents_due()
+
+
+@router.get("/agents/{plan_id}")
+def agent_run(plan_id: str, brain: BrainDep) -> AgentRun:
+    return brain.agent_run(plan_id)
+
+
+@router.post("/agents/{plan_id}/approve")
+def approve_agent(plan_id: str, brain: BrainDep) -> AgentRun:
+    return brain.approve_agent(plan_id)
+
+
+@router.post("/agents/{plan_id}/decline")
+def decline_agent(plan_id: str, brain: BrainDep) -> AgentRun:
+    return brain.decline_agent(plan_id)
+
+
+@router.post("/agents/{plan_id}/stop")
+def stop_agent(plan_id: str, brain: BrainDep) -> AgentRun:
+    return brain.stop_agent(plan_id)
+
+
+@router.post("/agents/{plan_id}/answer")
+def answer_agent(plan_id: str, body: AgentAnswer, brain: BrainDep) -> AgentRun:
+    return brain.answer_agent(plan_id, body.answer)
+
+
+@router.get("/proposals/{proposal_id}")
+def proposal(proposal_id: str, brain: BrainDep) -> Proposal:
+    found = brain.editor.proposals.get(proposal_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="no such proposal")
+    return found
+
+
+@router.get("/actions/pending")
+def pending_actions(brain: BrainDep) -> list[ActionDecision]:
+    return brain.pending_plan_actions()
 
 
 @router.post("/actions/check")

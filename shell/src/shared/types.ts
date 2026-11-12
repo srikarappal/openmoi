@@ -305,6 +305,46 @@ export interface ActionDecision {
   anchor: ActionAnchor | null
 }
 
+export type AgentKind = "digest" | "shop" | "research" | "cleanup" | "watch"
+
+export interface PlanStep {
+  tool: string
+  args: Record<string, unknown>
+  why: string
+}
+
+export interface TraceEntry {
+  step: number
+  tool: string
+  ok: boolean
+  outcome: string
+  seconds: number
+}
+
+// A task an agent planned for you: approved, it runs within its budget and leaves a trace.
+export interface AgentRun {
+  plan_id: string
+  kind: AgentKind
+  request: string
+  summary: string
+  steps: PlanStep[]
+  budget: { max_steps: number; max_seconds: number; max_cost_usd: number }
+  created_at: string
+  expires_at: string
+  status: "proposed" | "running" | "paused" | "done" | "stopped" | "failed" | "declined"
+  reason: string
+  trace: TraceEntry[]
+  result: { answer: string; citations: Citation[]; shortlist: Array<{ item_id: string; title: string; url: string; why: string }> } | null
+  question: string
+  answer: string
+  action_ids: string[]
+  proposal_ids: string[]
+  notices: string[]
+  cost_usd: number
+  next_run_at: string | null
+  runs: number
+}
+
 export interface ShopStart {
   view_id: string
   query: string
@@ -407,6 +447,8 @@ export interface ChatEntry {
   text: string
   proposal?: Proposal
   status?: "pending" | "applied" | "discarded"
+  // A plan an agent made, for you to approve, then its run as it goes.
+  plan?: AgentRun
 }
 
 export interface TabInfo {
@@ -490,6 +532,10 @@ export type ShellCommand =
   | { type: "confirm_action"; request_id: string }
   | { type: "decline_action"; request_id: string }
   | { type: "undo_action"; request_id: string }
+  | { type: "approve_plan"; plan_id: string }
+  | { type: "decline_plan"; plan_id: string }
+  | { type: "stop_plan"; plan_id: string }
+  | { type: "answer_plan"; plan_id: string; answer: string }
   | { type: "collection_view"; name: string }
   | { type: "select_tab"; tab_id: number }
   | { type: "close_tab"; tab_id: number }

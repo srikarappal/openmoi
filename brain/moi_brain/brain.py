@@ -5,6 +5,7 @@ import queue
 import re
 import sys
 import threading
+import uuid
 from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -17,7 +18,8 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from moi_brain.compile import BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
+from moi_brain.compile import VIEW_ID, BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
+from moi_brain.agents import AgentKind, AgentRun, AgentRunner, ComposerReply, ItemSummary, PlanDraft, PlanStep, composer_messages, load_runs, plan_expiry, planner_messages, summary_messages
 from moi_brain.actions import KINDS, RATE_CAPS, RATE_WINDOW, UNDO_SECONDS, ActionDecision, ActionKind, ActionRequest, ActionResult, AuditLog, new_request_id, policy_flag, state_key
 from moi_brain.answers import MAX_SOURCES, Answer, AnswerReply, answer_prompt, cited
 from moi_brain.collections import READ_LATER, collection_name, collection_title, export_json, export_markdown, is_collection_name
@@ -314,6 +316,9 @@ class Brain:
         self.policies = merged_policy(load_policy(paths.site_policy), installed_pack(paths.packs))
         self.health = HealthBook(paths.extractor_health)
         self.audit = AuditLog(paths.state / "actions.jsonl")
+        self.agent_runs: dict[str, AgentRun] = load_runs(paths.state / "agents")
+        self.runners: dict[str, AgentRunner] = {}
+        self.plan_decisions: dict[str, ActionDecision] = {}
         self.ranker = Ranker(paths.ranker)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
         self.relay = RelayHub(paths.relay_trust, self.queue_relay_event, self.relay_config)
@@ -827,7 +832,13 @@ class Brain:
         if kind.tier == 3:
             return f"openMoi never does this for you. The page is open: {kind.label.lower()} there yourself if you want to."
         if request.origin == "plan":
-            return "No plan you approved asks for this."
+            run = self.agent_runs.get(request.plan_id or "")
+            if run is None or run.status not in ("running", "paused", "done"):
+                return "No plan you approved asks for this."
+            if now > run.expires_at:
+                return "The plan that asks for this has expired."
+            if request.item_id not in run.refs and not any(step.tool == "propose_action" and step.args.get("item_id") == request.item_id for step in run.steps):
+                return "The plan asks for this on an item it never found."
         if kind.needs_text and not text:
             return f"Write what to say first: {kind.label.lower()} needs your words."
         if not kind.needs_text and text:
@@ -854,6 +865,143 @@ class Brain:
             self.store.update_extra(item_id, {state_key(action): "no" if action.startswith("un") and policy_flag(action) != action else "yes"})
         item = self.store.get_item(item_id)
         return self.with_actions([ViewItem(item=item)])[0].item if item else None
+
+    def plan_agent(self, kind: AgentKind, request: str) -> AgentRun:
+        """A plan for a task in your words, for you to approve: the smart model sees the request, your memory files and
+        your view names, never web text. Steps it may not take are left out and said so."""
+        now = self.clock()
+        memory = {name: self.memory.topic_text(name) for name in TOPIC_FILES}
+        views = self.compiler.view_ids()
+        draft = self.gateway.complete_json("smart", "agent_plan", planner_messages(kind, request, memory, views, now), True, PlanDraft)
+        steps, dropped = self.checked_steps(draft.steps, views)
+        run = AgentRun(
+            plan_id=uuid.uuid4().hex, kind=kind, request=request, summary=draft.summary or f"{kind}: {request}", steps=steps, budget=draft.budget,
+            created_at=now, expires_at=plan_expiry(kind, now), reason="; ".join(dropped),
+        )
+        self.save_run(run)
+        return run
+
+    def checked_steps(self, steps: list[PlanStep], views: list[str]) -> tuple[list[PlanStep], list[str]]:
+        """The steps a plan may take: known views, actions of tier 2 at most, real items. The rest are left out."""
+        kept, dropped = [], []
+        for step in steps:
+            problem = ""
+            view_id = step.args.get("view_id")
+            if step.tool in ("search_store", "open_source_page") and view_id is not None and view_id not in views:
+                problem = f"there is no view {view_id}"
+            elif step.tool == "build_view" and not VIEW_ID.fullmatch(str(step.args.get("view_id", ""))):
+                problem = "a new view needs a plain name"
+            elif step.tool == "propose_action":
+                kind = KINDS.get(str(step.args.get("action", "")))
+                if kind is None or kind.tier > 2:
+                    problem = f"an agent may not {step.args.get('action')}"
+                elif self.store.get_item(str(step.args.get("item_id", ""))) is None:
+                    problem = "an action on an item that is not there"
+            elif step.tool == "open_source_page" and view_id is None:
+                problem = "which view to read"
+            if problem:
+                dropped.append(f"left out {step.tool}: {problem}")
+            else:
+                kept.append(step)
+        return kept, dropped
+
+    def save_run(self, run: AgentRun) -> None:
+        self.agent_runs[run.plan_id] = run
+        write_atomic(self.paths.state / "agents" / f"{run.plan_id}.json", run.model_dump_json())
+
+    def agent_run(self, plan_id: str) -> AgentRun:
+        run = self.agent_runs.get(plan_id)
+        if run is None:
+            raise BadInput("No plan has that id.")
+        return run
+
+    def approve_agent(self, plan_id: str) -> AgentRun:
+        """You approved the plan: it runs now. A standing task you approved runs again when it is due."""
+        run = self.agent_run(plan_id)
+        if run.status not in ("proposed", "done") or (run.status == "done" and run.kind != "watch"):
+            raise BadInput(f"That plan is {run.status}.")
+        if self.clock() > run.expires_at:
+            raise BadInput("That plan has expired; ask again.")
+        run.trace, run.result = [], None
+        runner = AgentRunner(self, run)
+        self.runners[plan_id] = runner
+        runner.start()
+        return run
+
+    def decline_agent(self, plan_id: str) -> AgentRun:
+        run = self.agent_run(plan_id)
+        if run.status == "proposed":
+            run.status = "declined"
+            self.save_run(run)
+        return run
+
+    def stop_agent(self, plan_id: str) -> AgentRun:
+        run = self.agent_run(plan_id)
+        if plan_id in self.runners:
+            self.runners[plan_id].stop()
+        if run.status in ("proposed", "done") and run.kind == "watch":
+            run.status, run.next_run_at, run.reason = "stopped", None, "you stopped it"
+            self.save_run(run)
+        return run
+
+    def answer_agent(self, plan_id: str, answer: str) -> AgentRun:
+        run = self.agent_run(plan_id)
+        if run.status != "paused" or plan_id not in self.runners:
+            raise BadInput("That plan is not waiting for an answer.")
+        self.runners[plan_id].give_answer(answer)
+        return run
+
+    def agents_due(self) -> list[str]:
+        """Standing tasks whose next run is due and whose plan has not expired."""
+        now = self.clock()
+        return [run.plan_id for run in self.agent_runs.values() if run.kind == "watch" and run.status == "done" and run.next_run_at and run.next_run_at <= now < run.expires_at]
+
+    def find_items(self, query: str, view_id: str | None, limit: int) -> list[Item]:
+        if view_id and not query:
+            return [view_item.item for view_item in self.view_page(view_id, [], limit).items]
+        hits = [hit.item for hit in self.search(query, limit * 3)] if query else []
+        if view_id:
+            wanted = set(self.compiler.compiled(view_id).source_ids())
+            hits = [item for item in hits if item.source_id in wanted or any(item.source_id.startswith(f"{source}:") for source in wanted)]
+        return hits[:limit]
+
+    def get_item(self, item_id: str) -> Item | None:
+        return self.store.get_item(item_id)
+
+    def summarize_item(self, item: Item) -> tuple[ItemSummary, float]:
+        before = self.gateway.spent()
+        summary = self.gateway.complete_json("fast", "agent_read", summary_messages(item), True, ItemSummary)
+        return summary, self.gateway.spent() - before
+
+    def compose(self, run: AgentRun, sources: list[dict[str, object]]) -> tuple[ComposerReply, float]:
+        before = self.gateway.spent()
+        reply = self.gateway.complete_json("smart", "agent_compose", composer_messages(run.kind, run.request, sources, run.answer), True, ComposerReply)
+        return reply, self.gateway.spent() - before
+
+    def propose_view(self, view_id: str, description: str) -> str:
+        return self.propose_edit(view_id, description, None, "view").proposal_id
+
+    def propose_memory(self, request: str) -> str:
+        return self.propose_edit(self.compiler.view_ids()[0], request, None, "memory").proposal_id
+
+    def refresh_view(self, view_id: str) -> str:
+        pages = self.start_refresh(view_id)
+        return f"reading {view_id} again; {len(pages)} pages are read while you use openMoi"
+
+    def plan_action(self, run: AgentRun, item_id: str, action: str, text: str) -> str:
+        """An action a plan proposes, through the gate as origin plan: allowed ones wait on your confirm sheet."""
+        decision = self.check_action(ActionRequest(item_id=item_id, action=action, text=text, origin="plan", plan_id=run.plan_id))
+        self.plan_decisions[decision.request_id] = decision
+        return decision.request_id
+
+    def pending_plan_actions(self) -> list[ActionDecision]:
+        """Allowed actions agents proposed that have no outcome yet: for the confirm sheet."""
+        done = {str(entry.get("request_id")) for entry in self.audit.entries() if entry.get("kind") == "result"}
+        return [decision for request_id, decision in self.plan_decisions.items() if decision.allowed and request_id not in done]
+
+    def notify(self, run: AgentRun, text: str) -> None:
+        run.notices.append(text)
+        self.save_run(run)
 
     def save_item(self, name: str, item_id: str, saved: bool = True) -> CollectionInfo:
         """Puts an item in a collection, or takes it out."""

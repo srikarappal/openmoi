@@ -374,3 +374,38 @@ describe("the confirm sheet", () => {
     expect(query(".confirm_sheet")).toBeNull()
   })
 })
+
+describe("the plan card", () => {
+  const plan = {
+    plan_id: "p1", kind: "shop" as const, request: "a desk lamp", summary: "I will shop for a desk lamp", reason: "",
+    steps: [{ tool: "search_store", args: {}, why: "what you saw" }, { tool: "read_item", args: {}, why: "the best ones" }],
+    budget: { max_steps: 12, max_seconds: 300, max_cost_usd: 0.25 }, created_at: "2026-11-12T12:00:00Z", expires_at: "2026-11-13T12:00:00Z",
+    status: "proposed" as const, trace: [], result: null, question: "", answer: "", action_ids: [], proposal_ids: [], notices: [], cost_usd: 0, next_run_at: null, runs: 0,
+  }
+
+  it("shows the plan and its budget before it runs, then its steps, a question, its result and Stop", async () => {
+    await show({ chat: [{ entry_id: 1, role: "moi", text: "Here is the plan.", plan }] })
+    expect(texts(".plan_summary")).toEqual(["I will shop for a desk lamp"])
+    expect(texts(".plan_steps .step_tool")).toEqual(["search store", "read item"])
+    expect(texts(".plan_budget")[0]).toContain("12 steps, 300 s, $0.25 at most")
+    await click(query(".plan_actions .approve"))
+    expect(last_sent()).toEqual({ type: "approve_plan", plan_id: "p1" })
+    await click(query(".plan_actions .decline"))
+    expect(last_sent()).toEqual({ type: "decline_plan", plan_id: "p1" })
+    const paused = { ...plan, status: "paused" as const, question: "What is your budget?", trace: [{ step: 1, tool: "search_store", ok: true, outcome: "found 2 items", seconds: 0.1 }] }
+    await show({ chat: [{ entry_id: 1, role: "moi", text: "Here is the plan.", plan: paused }] })
+    expect(texts(".plan_steps .step_outcome")).toEqual([" : found 2 items"])
+    await type_into(query(".plan_answer input"), "Under $50")
+    await submit(query(".plan_answer"))
+    expect(last_sent()).toEqual({ type: "answer_plan", plan_id: "p1", answer: "Under $50" })
+    await click(query(".plan_actions .stop"))
+    expect(last_sent()).toEqual({ type: "stop_plan", plan_id: "p1" })
+    const done = { ...paused, status: "done" as const, result: { answer: "The lamp [1].", citations: [{ number: 1, item_id: "i1", title: "Lamp", url: "https://a.example/1" }], shortlist: [{ item_id: "i1", title: "Lamp", url: "https://a.example/1", why: "It fits." }] } }
+    await show({ chat: [{ entry_id: 1, role: "moi", text: "Here is the plan.", plan: done }] })
+    expect(texts(".result_answer")).toEqual(["The lamp [1]."])
+    expect(texts(".result_pick")).toEqual(["Lamp: It fits. https://a.example/1"])
+    expect(query(".plan_actions .stop")).toBeNull()
+    await click(query(".result_pick a"))
+    expect(last_sent()).toEqual({ type: "open_link", url: "https://a.example/1" })
+  })
+})

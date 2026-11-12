@@ -1,6 +1,6 @@
 // Chat commands: "/memory", "/feed", "/sources", "/layout", "/settings", "/newview", "/model", "/help".
 // Anything without a slash stays free form and openMoi works out from context what to change.
-import type { Answer, CollectionInfo, EditScope, Mirror, ModelChange, ModelInfo, Overview, SearchHit, SlotInfo, SourceMirror, ViewMirror } from "./types"
+import type { AgentKind, Answer, CollectionInfo, EditScope, Mirror, ModelChange, ModelInfo, Overview, SearchHit, SlotInfo, SourceMirror, ViewMirror } from "./types"
 
 export interface CommandHelp {
   name: string
@@ -21,6 +21,7 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/mirror", usage: "/mirror [days]", summary: "what each source showed you and how much passed your rules" },
   { name: "/search", usage: "/search <words>", summary: "find items you were shown, by their words and by meaning" },
   { name: "/ask", usage: "/ask <question>", summary: "answer a question from what you read, with links to where it came from" },
+  { name: "/agent", usage: "/agent digest|shop|research|cleanup|watch <task>", summary: "a task done for you: planned first, run once you approve" },
   { name: "/shop", usage: "/shop <what you want>", summary: "search your stores, ranked your way, with the lowest prices you have seen" },
   { name: "/collections", usage: "/collections", summary: "your Read later, Watch later and other lists, with how many items each" },
   { name: "/export", usage: "/export [md|json] [collection]", summary: "save this view, or a collection, as a Markdown or JSON file" },
@@ -45,6 +46,7 @@ export type ChatCommand =
   | { kind: "search"; query: string }
   | { kind: "ask"; question: string }
   | { kind: "shop"; query: string }
+  | { kind: "agent"; agent: AgentKind; request: string }
   | { kind: "collections" }
   | { kind: "export"; format: "md" | "json"; collection: string | null }
   | { kind: "import"; url: string }
@@ -76,6 +78,7 @@ export function parse_model(words: string[]): ChatCommand {
 
 // "What did I read about lithium?" or "Have I watched anything on traffic?" asks your history; it is a question
 // (it ends with a question mark), so "When I see crypto posts, hide them" stays a request for an edit.
+const AGENTS = new Set<AgentKind>(["digest", "shop", "research", "cleanup", "watch"])
 const HISTORY_QUESTION = /^(what|which|who|when|where|did|do|have|had|how many|how much)\b.*\b(i|me|my)\b.*\b(read|see|saw|seen|watch|watched|open|opened|save|saved|highlight|highlighted|mark|marked|note|noted|bought|liked)\b[^?]*\?\s*$/i
 
 export function parse_chat(input: string): ChatCommand {
@@ -97,6 +100,12 @@ export function parse_chat(input: string): ChatCommand {
     return Number.isInteger(days) && days >= 1 && days <= 30 && words.length <= 1 ? { kind: "mirror", days } : usage_error(command)
   }
   if (command === "/search") return rest ? { kind: "search", query: rest } : usage_error(command)
+  if (command === "/agent") {
+    const agent = words[0]?.toLowerCase() as AgentKind
+    const request = words.slice(1).join(" ")
+    if (!AGENTS.has(agent) || (!request && agent !== "digest" && agent !== "cleanup")) return usage_error(command)
+    return { kind: "agent", agent, request: request || (agent === "digest" ? "catch me up" : "tidy up what I follow") }
+  }
   if (command === "/shop") return rest ? { kind: "shop", query: rest } : usage_error(command)
   if (command === "/ask") return rest ? { kind: "ask", question: rest } : usage_error(command)
   if (command === "/collections") return words.length ? usage_error(command) : { kind: "collections" }

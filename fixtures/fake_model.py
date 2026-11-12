@@ -313,6 +313,46 @@ def ask(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"answer": "Nothing you read answers that.", "used": []})
 
 
+def agent_plan(payload: dict[str, Any], base_url: str) -> str:
+    """Plans by task: a digest reads what is new in the first view; the rest search the request's words. ASK adds a
+    question first, NOTIFY a notice, and a request naming an action proposes it for the first item found."""
+    request = request_of(payload)
+    words = request["request"]
+    if request["task"] == "digest":
+        steps = [{"tool": "search_store", "args": {"view_id": request["views"][0], "limit": 5}, "why": "what is new"}]
+    else:
+        query = " ".join(re.findall(r"[a-z]{4,}", words.lower())[:3])
+        steps = [{"tool": "search_store", "args": {"query": query, "limit": 5}, "why": "what you were shown about it"}]
+    if "ASK" in words:
+        steps.insert(0, {"tool": "ask_user", "args": {"question": "What is your budget?"}, "why": "to know your limit"})
+    steps.append({"tool": "read_item", "args": {"limit": 3}, "why": "the ones that matter"})
+    if "NOTIFY" in words:
+        steps.append({"tool": "notify", "args": {"text": "Checked again."}, "why": "to tell you"})
+    if "ORDER" in words:
+        steps.append({"tool": "propose_action", "args": {"item_id": "anything", "action": "place_order"}, "why": "to buy it"})
+    if "SLOW" in words:
+        steps = [{"tool": "ask_user", "args": {"question": "Still there?"}, "why": "to wait"}] * 2 + steps
+    budget = {"max_steps": 12, "max_seconds": 2 if "TIGHT" in words else 300, "max_cost_usd": 0.25}
+    return json.dumps({"summary": f"I will {request['task']}: {words}", "steps": steps, "budget": budget})
+
+
+def agent_read(payload: dict[str, Any], base_url: str) -> str:
+    """A summary of the item as data, never following what it says."""
+    request = request_of(payload)
+    return json.dumps({"summary": f"About {request['title']}.", "facts": [request["title"][:60]], "price": request.get("price", "")})
+
+
+def agent_compose(payload: dict[str, Any], base_url: str) -> str:
+    """Cites every item, shortlists them all and proposes a like on the first only when the request asks for one."""
+    request = request_of(payload)
+    items = request["items"]
+    answer = " ".join(f"{item['title']} [{item['n']}]." for item in items)
+    shortlist = [{"n": item["n"], "why": f"It fits: {item['title'][:40]}"} for item in items]
+    wants_like = "like" in request["request"].lower().split()
+    actions = [{"n": items[0]["n"], "action": "like", "text": ""}] if wants_like and items else []
+    return json.dumps({"answer": answer or "Nothing found.", "shortlist": shortlist, "proposed_actions": actions})
+
+
 def extractor(payload: dict[str, Any], base_url: str) -> str:
     request = request_of(payload)
     skeleton = request["skeleton"]
@@ -348,7 +388,7 @@ def update(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"update": changed, "what_changed": new["title"] if changed else ""})
 
 
-HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "lens_patch": lens_patch, "judge_lens": judge_lens, "ask": ask, "extractor": extractor, "update": update, "summarize": summarize, "oracle": oracle}
+HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "lens_patch": lens_patch, "judge_lens": judge_lens, "ask": ask, "agent_plan": agent_plan, "agent_read": agent_read, "agent_compose": agent_compose, "extractor": extractor, "update": update, "summarize": summarize, "oracle": oracle}
 
 
 def model_reply(task: str, payload: dict[str, Any], base_url: str) -> str:

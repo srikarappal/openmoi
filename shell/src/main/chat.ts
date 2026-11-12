@@ -1,7 +1,7 @@
 // The chat panel: slash commands for each kind of setting, free form for everything else.
 // Every change to your .md files is a proposed edit you confirm or discard; /model, /settings and /help answer directly.
 import { format_answer, format_collections, format_mirror, format_model, format_overview, format_search, help_text, parse_chat, type ChatCommand } from "../shared/commands"
-import type { ChatEntry, EditScope, Proposal } from "../shared/types"
+import type { AgentRun, ChatEntry, EditScope, Proposal } from "../shared/types"
 import type { Track } from "./activity"
 import { sleep } from "../shared/timing"
 import { BrainError, type BrainClient } from "./brain"
@@ -118,6 +118,11 @@ export class ChatController {
       case "search":
         this.say(format_search(command.query, await this.brain.search(command.query)))
         return
+      case "agent": {
+        const run = await this.hooks.track("Planning it", () => this.brain.plan_agent(command.agent, command.request))
+        this.add({ role: "moi", text: `Here is the plan. ${run.reason ? `(${run.reason}.) ` : ""}Approve it and I will run it.`, plan: run })
+        return
+      }
       case "shop": {
         const started = await this.brain.shop(command.query, view_id)
         this.say(`Looking for "${started.query}" in ${started.view_id}${started.created ? ", a new Shop view (its stores are in views/shop.md)" : ""}.`)
@@ -256,6 +261,19 @@ export class ChatController {
     this.requests.delete(proposal_id)
     this.hooks.changed()
     await this.brain.discard_edit(proposal_id).catch(ignore)
+  }
+
+  // A run's latest state shows in the chat entry of its plan.
+  update_plan(run: AgentRun): void {
+    const entry = this.entries.find((each) => each.plan?.plan_id === run.plan_id)
+    if (!entry) return
+    entry.plan = run
+    this.hooks.changed()
+  }
+
+  // An edit an agent proposed, for you to confirm or discard like any other.
+  offer_proposal(proposal: Proposal, why: string): void {
+    this.add({ role: "moi", text: why, proposal, status: "pending" })
   }
 
   private pending(proposal_id: string): ChatEntry | undefined {

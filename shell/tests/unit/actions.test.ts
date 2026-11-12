@@ -188,3 +188,27 @@ describe("ActionController", () => {
     expect(brain.action_result).toHaveBeenLastCalledWith("r1", "failed", "no network")
   })
 })
+
+describe("ActionController offers from agents", () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it("puts allowed actions an agent proposed on the confirm sheet one at a time, each once", async () => {
+    const { controller, brain, hooks } = make_controller(decision())
+    const first = decision({ request_id: "a1", confirm: true, tier: 1 })
+    const second = decision({ request_id: "a2", confirm: true, tier: 2, action: "reply", label: "Reply", text: "Hi" })
+    controller.offer(first)
+    controller.offer(second)
+    controller.offer(first)
+    controller.offer(decision({ request_id: "a3", allowed: false, confirm: false }))
+    expect(controller.pending?.request_id).toBe("a1")
+    await controller.decline("a1")
+    expect(controller.pending?.request_id).toBe("a2")
+    expect(brain.action_result).toHaveBeenCalledWith("a1", "declined")
+    hooks.open_page.mockResolvedValueOnce(Object.assign(new FakePage(), { body: "" }) as never)
+    const confirming = controller.confirm("a2")
+    await vi.advanceTimersByTimeAsync(20_000)
+    await confirming
+    expect(controller.pending).toBeNull()
+  })
+})
