@@ -20,6 +20,20 @@ HANDLE = re.compile(r"@([\w.]+)")
 HIDE_TOPIC = re.compile(r"\b(?:hide|no)\s+(\w+)")
 UNLESS = re.compile(r"\b(?:unless|except)\b.*\bfrom\s+(\w+)")
 FIRST = re.compile(r"@?(\w+) (?:always )?first")
+UNDER = re.compile(r"under \$([\d,.]+)(k?)")
+PRICE = re.compile(r"\$[\d,]+(?:\.\d+)?k?")
+# Phrases that need a judgment: the question the fake model declares and the rule that tests its answer.
+JUDGED_PHRASES = (
+    (("only events", "events and birthdays"), "event", "Is this about an event or a birthday?", "yes_no", "eq", "no"),
+    (("pets ok", "pets allowed"), "pets", "Does this listing allow pets?", "yes_no", "eq", "no"),
+    (("rage bait", "angry", "anger"), "angry", "Is this written to make people angry?", "yes_no", "eq", "yes"),
+    (("job changes",), "job_change", "Is this about someone starting a new job?", "yes_no", "eq", "no"),
+)
+JUDGE_WORDS = {
+    "event": ("event", "birthday", "meetup", "party", "concert"),
+    "angry": ("outrage", "furious", "disgrace", "destroyed"),
+    "job_change": ("new role", "new job", "joined", "started at"),
+}
 
 
 def last_user_text(payload: dict[str, Any]) -> str:
@@ -35,18 +49,45 @@ def echo(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"echo": last_user_text(payload)})
 
 
+def judge(name: str, words: str) -> str:
+    """The fake model's answer to one judgment: by keywords, a price as written, unknown when the item does not say."""
+    if name == "pets":
+        if "no pets" in words:
+            return "no"
+        return "yes" if any(phrase in words for phrase in ("pets ok", "pet friendly", "pets allowed")) else "unknown"
+    if name == "price":
+        match = PRICE.search(words)
+        return match.group() if match else "unknown"
+    if name in JUDGE_WORDS:
+        return "yes" if any(word in words for word in JUDGE_WORDS[name]) else "no"
+    return "unknown"
+
+
 def tag(payload: dict[str, Any], base_url: str) -> str:
     request = request_of(payload)
     tags = []
     for item in request["items"]:
         words = f"{item['title']} {item['text']}".lower()
         topics = [topic for topic in request["topics"] if any(word in words for word in SYNONYMS.get(topic, (topic,)))]
-        tags.append({"item_id": item["item_id"], "topics": topics})
+        answers = {question["name"]: judge(question["name"], words) for question in request.get("questions", [])}
+        tags.append({"item_id": item["item_id"], "topics": topics, "answers": answers})
     return json.dumps({"tags": tags})
 
 
 def condition(field: str, op: str, value: Any) -> dict[str, Any]:
     return {"field": field, "op": op, "value": value}
+
+
+def judged_rule(text: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """A rule that needs a judgment, with the judgment it declares."""
+    if (match := UNDER.search(text)) is not None:
+        limit = float(match.group(1).replace(",", "")) * (1000 if match.group(2) else 1)
+        judgment = {"name": "price", "question": "What is the price or monthly rent in dollars?", "answer": "number"}
+        return {"when": condition("judged:price", "gt", limit), "do": "hide"}, judgment
+    for phrases, name, question, answer, op, value in JUDGED_PHRASES:
+        if any(phrase in text for phrase in phrases):
+            return {"when": condition(f"judged:{name}", op, value), "do": "hide"}, {"name": name, "question": question, "answer": answer}
+    return None
 
 
 def view_rule(line: str) -> dict[str, Any] | None:
@@ -77,11 +118,17 @@ def memory_rule(line: str, do: str) -> dict[str, Any]:
 
 def compile_rules(payload: dict[str, Any], base_url: str) -> str:
     request = request_of(payload)
-    rules = [rule for line in request["view_rules"] if (rule := view_rule(line))]
+    rules, judgments = [], []
+    for line in request["view_rules"]:
+        if (found := judged_rule(line.lower())) is not None:
+            rules.append(found[0])
+            judgments.append(found[1])
+        elif (rule := view_rule(line)) is not None:
+            rules.append(rule)
     rules += [memory_rule(line, "hide") for line in request["dislikes"]]
     rules += [memory_rule(line, "boost") for line in request["likes"]]
     summary = "; ".join(line.rstrip(".") for line in [*request["view_rules"], *request["dislikes"], *request["likes"]])
-    return json.dumps({"rules": rules, "summary": f"{summary}." if summary else ""})
+    return json.dumps({"rules": rules, "judgments": judgments, "summary": f"{summary}." if summary else ""})
 
 
 def bullet_lines(text: str, section: str | None) -> list[str]:

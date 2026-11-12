@@ -302,7 +302,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 * FastAPI with plain `def` handlers (no async code), bound to 127.0.0.1, every request carrying the launch token (compared in constant time) and naming 127.0.0.1 as its host, so a web page rebinding a domain to your machine is turned away. State and cache files are written atomically and a damaged one is rebuilt.
 * SQLite through the standard `sqlite3` module; two tables (11.2).
 * Ingest: raw records -> Item, canonical URL with tracking params stripped, dedupe by source id plus native id and by canonical URL.
-* Tagging: new items are stored at once and queued; a background worker sends batches of 10 to the fast model, which picks topics from the watch list (a few common topics plus every topic your rules and memory name). Tagging against a closed list keeps tags and rules in sync. A view with topic rules shows only tagged items (unless tagging is paused), so nothing you asked to hide slips through while a slow local model catches up. `media_kind` comes from the source (YouTube shorts, X video), not the model.
+* Tagging: new items are stored at once and queued; a background worker sends batches of 10 to the fast model, which picks topics from the watch list (a few common topics plus every topic your rules and memory name). Tagging against a closed list keeps tags and rules in sync. The same call answers the judgments a view's rules declare (34.3). A view with topic rules shows only tagged items (unless tagging is paused), so nothing you asked to hide slips through while a slow local model catches up. `media_kind` comes from the source (YouTube shorts, X video), not the model.
 * Compile: `views/<view>.md` + `memory/likes.md` + `memory/dislikes.md` -> compiled JSON (11.4), validated by pydantic, cached by file hash. A failed compile keeps the previous version and shows the error in chat.
 * Ranking: drop hidden items and items you saw more than 12 hours ago (so a reload or a new look shows the same feed), apply limits, score = recency decay × source weight + boosts, sort, pages of 30. Each item carries plain reasons ("boost: Maya", "recent").
 * Rung 1 refresh runs in a background thread; views serve cached items while it runs.
@@ -604,8 +604,14 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class Judgment(BaseModel):
+    name: str  # lowercase, such as event or rent
+    question: str  # "Is this about an event or a birthday?"
+    answer: Literal["yes_no", "number"]
+
+
 class Condition(BaseModel):
-    field: Literal["source_id", "author_handle", "topic", "media_kind", "text", "age_hours"]
+    field: str  # source_id, author_handle, topic, media_kind, text, age_hours or judged:<name>
     op: Literal["eq", "in", "contains", "gt", "lt"]
     value: str | float | list[str]
 
@@ -632,6 +638,7 @@ class CompiledView(BaseModel):
     file_hash: str
     sources: list[SourceRef]
     rules: list[Rule]
+    judgments: list[Judgment]  # questions the tagging pass answers for every item (34.3)
     layout: str
     summary: str  # plain words echo shown in chat
     warnings: list[str]  # lines the compiler could not use
@@ -784,7 +791,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 400 brain (unit, property, API integration and 26 user journeys; 100% line and branch coverage), 328 shell and extension unit (97% of lines), 26 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 445 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 328 shell and extension unit (97% of lines), 27 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -1324,11 +1331,11 @@ Sites tune their feeds for their own goals: time on site, ads, outrage. openMoi 
 | 1 | Editions | reader tabs scroll X, Instagram and LinkedIn before 7am -> your rules keep 15 -> 7am edition -> view closed until 6pm | read ahead built; schedule not built |
 | 2 | You missed nothing | reader follows a chronological Following feed down to the last post you saw -> "nothing else from your 40 people since yesterday" -> you stop because you know | seen tracking built; the claim not built |
 | 3 | Intent gate | open openMoi -> "why are you here?" -> a 5 minute break gets 10 items then a stop screen, research gets a deep list, friends gets only people | not built |
-| 4 | Unbundled platforms | Facebook -> only events and birthdays; LinkedIn -> only job changes of people you know; YouTube -> new uploads from subscriptions, no sidebar; Instagram -> close friends, no Reels | `Page:` sources and rules built; Facebook and Instagram untested |
+| 4 | Unbundled platforms | Facebook -> only events and birthdays; LinkedIn -> only job changes of people you know; YouTube -> new uploads from subscriptions, no sidebar; Instagram -> close friends, no Reels | `Page:` sources, rules and judgments built; Facebook and Instagram untested |
 | 5 | Notification firewall | reader opens each site's notifications page -> replies from people you know pass, likes and "trending" drop -> one batch at noon -> every app's push turned off | `Page:` sources built; batching not built |
 | 6 | Algorithm mirror | keep rate and topics per source -> weekly "X showed you 600 posts, 7% passed your rules, a third were anger" -> X earns your time or loses its place | keep rate and topics built; report not built |
 | 7 | Watch for me | visa slot page, school portal, a Marketplace seller -> reader checks at human pace -> one notice when it changes -> no more compulsive checking | not built |
-| 8 | Hunts across sites | Zillow, Craigslist and Facebook Marketplace -> "pets ok, not ground floor, under $3k" -> one listing on 3 sites merged -> only new matches; the same for jobs, used cars and deals | `Page:` sources and rules built; merging not built |
+| 8 | Hunts across sites | Zillow, Craigslist and Facebook Marketplace -> "pets ok, not ground floor, under $3k" -> one listing on 3 sites merged -> only new matches; the same for jobs, used cars and deals | `Page:` sources, rules and judgments built; merging not built |
 | 9 | Watch before you watch | 40 minute video -> transcript summary plus the 6 minutes worth watching -> watch those or nothing | not built |
 | 10 | Your reading as memory | every article you open -> 3 line note in the journal -> "what was that lithium piece?" answered from what you actually read | journal of opens built; notes not built |
 | 11 | Updates, not repeats | new item on a story you followed -> "what changed since you read it Oct 3" -> retellings hidden | not built |
@@ -1366,11 +1373,12 @@ Five building blocks and four smaller pieces cover all 12. Two of the gaps are g
 * A closed view shows its next edition time and nothing else. "Open anyway" is one click and is counted (34.6 history).
 * **Intent gate (3):** the first iteration is a chooser of your views at launch, each with its own visit length. An intent is a view; no new mechanism.
 
-### 34.3 Rules that use model judgments (4, 5, 6, 8)
+### 34.3 Rules that use model judgments (4, 5, 6, 8) `[built]`
 
 * **Missing:** rules test only source, author, topic, media type, text and age (11.4).
 * **Design:** a judgment is a named question the view's Rules imply: "is this an event or a birthday?", "monthly rent in dollars", "pets allowed?", "written to make you angry?". The compiler lists judgments next to topics; the tagging pass answers both in one call per batch, against a closed list as today; answers land in `extra` as `judged:<name>`; `Condition.field` gains `judged:<name>` so rules test them like topics. An item not yet judged waits like an untagged one.
 * **Folds in:** L2's ragebait score becomes one judgment. Listing fields (price, floor, pets) come from the extractor where the page has them and from a judgment where it does not.
+* **As built:** a rule that keeps several kinds ("only events and birthdays") gets one judgment covering them all, so one hide rule keeps every kind; checked with Nemotron 3.5 on OpenRouter, 3 of 3 runs. Answers are normalized ("$2,800/mo" is 2800, "3k" is 3000) and a question the model skips is answered unknown. Views that use one judgment name share its answers.
 
 ### 34.4 People and duplicates across sites (4, 5, 6, 8, 11)
 

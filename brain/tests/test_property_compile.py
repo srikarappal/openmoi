@@ -159,13 +159,14 @@ RULE = st.builds(
 @given(rules=st.lists(RULE, max_size=6))
 def test_usable_rules_can_all_run_and_settle(rules):
     """Usable rules never hold a countless limit or a weightless boost, keep their order and are a fixed point."""
-    usable = usable_rules(rules)
+    usable, judgments = usable_rules(rules)
+    assert judgments == []
     runnable = [rule for rule in rules if not (rule.do == "limit" and not rule.count_per_day)]
     assert len(usable) == len(runnable)
     for kept, original in zip(usable, runnable):
         expected_weight = (original.weight or DEFAULT_BOOST) if original.do == "boost" else original.weight
         assert kept == original.model_copy(update={"weight": expected_weight})
-    assert usable_rules(usable) == usable
+    assert usable_rules(usable)[0] == usable
 
 
 @FAST

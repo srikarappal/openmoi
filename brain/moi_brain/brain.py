@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from moi_brain.compile import BadInput, CompiledView, Compiler, ViewInfo, check_view_id
+from moi_brain.compile import BadInput, CompiledView, Compiler, Judgment, ViewInfo, check_view_id
 from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, save_settings
 from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
@@ -28,7 +28,7 @@ from moi_brain.memory import TOPIC_FILES, Memory
 from moi_brain.rank import PAGE_SIZE, Order, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
-from moi_brain.tag import Tagger, rule_topics, watch_list
+from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
 
 # A read scrolls a source page step by step at human pace; daily_steps caps how far it scrolls each source per day.
 PILOT_BUDGET = {"page_loads": 1, "scroll_steps": 5, "min_step_interval_ms": 1500, "daily_steps": 200}
@@ -112,6 +112,11 @@ def url_prefix(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
 
 
+def needs_tags(compiled: CompiledView) -> bool:
+    """A view whose rules test topics or judgments shows an item only once the tagging pass has looked at it."""
+    return bool(rule_topics(compiled.rules) or compiled.judgments)
+
+
 def seen_long_ago(entries: list[tuple[Item, datetime | None]], seen_before: datetime) -> set[str]:
     """Ids of items you saw before seen_before: they still count toward daily limits but are not shown again."""
     return {item.item_id for item, seen_at in entries if seen_at and seen_at < seen_before}
@@ -137,7 +142,7 @@ class Brain:
         self.fetcher = FeedFetcher(self.http, paths.channel_cache, youtube_base)
         self.memory = Memory(paths)
         self.compiler = Compiler(paths, self.gateway, self.memory)
-        self.tagger = Tagger(self.store, self.gateway, paths.tagging_state, self.watch_list)
+        self.tagger = Tagger(self.store, self.gateway, paths.tagging_state, self.watch_list, self.watch_judgments)
         self.editor = Editor(paths, self.gateway)
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
@@ -272,7 +277,7 @@ class Brain:
         known = self.store.get_items([item.item_id for item in items])
         fresh = [item for item in items if item.item_id not in known]
         if tag_now:
-            fresh = self.tagger.tag(fresh, self.watch_list())
+            fresh, known = self.tag_now(fresh, known)
         stored = {item.item_id: item for item in self.store.upsert_items([*known.values(), *fresh], listed_at=now)}
         if not tag_now:
             self.tagger.enqueue(list(stored.values()))
@@ -280,8 +285,23 @@ class Brain:
         found = [known.get(item.item_id) or stored.get(item.item_id) or same_url.get(item.url) for item in items]
         return [item for item in found if item]
 
+    def tag_now(self, fresh: list[Item], known: dict[str, Item]) -> tuple[list[Item], dict[str, Item]]:
+        """Tags new items and any stored ones the background worker has not reached yet, so a page shown at once is
+        filtered by every rule; stored ones get their tags saved right away."""
+        topics, judgments = self.watch_list(), self.watch_judgments()
+        waiting = [item for item in known.values() if not item.tagged or not is_judged(item, judgments)]
+        tagged = {item.item_id: item for item in self.tagger.tag([*fresh, *waiting], topics, judgments) if item.tagged}
+        self.store.update_tags([tagged[item.item_id] for item in waiting if item.item_id in tagged])
+        return [tagged.get(item.item_id, item) for item in fresh], {item_id: tagged.get(item_id, item) for item_id, item in known.items()}
+
     def watch_list(self) -> list[str]:
         return watch_list(self.compiler.all_compiled())
+
+    def watch_judgments(self) -> list[Judgment]:
+        return watch_judgments(self.compiler.all_compiled())
+
+    def retag_if_needed(self) -> None:
+        self.tagger.ensure_current(self.watch_list(), self.clock(), self.watch_judgments())
 
     def ingest(self, source_id: str, records: list[dict[str, Any]], page_url: str | None = None) -> list[Item]:
         self.source_status[(source_id, source_id)] = "ok"
@@ -293,7 +313,7 @@ class Brain:
         Topic rules need tags before the page can be shown, so those pages are tagged right away.
         """
         compiled = self.compiler.compiled(check_view_id(view_id))
-        items = self.store_records(source_id, records, page_url, tag_now=bool(rule_topics(compiled.rules)))
+        items = self.store_records(source_id, records, page_url, tag_now=needs_tags(compiled))
         ranked, _ = rank(items, compiled.rules, self.clock(), limit=len(items), order="page")
         return items, ranked
 
@@ -317,12 +337,12 @@ class Brain:
         self, view_id: str, exclude_ids: list[str], limit: int = PAGE_SIZE, order: Order = "recency"
     ) -> ViewPage:
         compiled = self.compiler.compiled(view_id)
-        self.tagger.ensure_current(self.watch_list(), self.clock())
+        self.retag_if_needed()
         now = self.clock()
         entries = self.store.items_with_seen(compiled.source_ids(), now - VIEW_WINDOW)
         items, long_seen = [item for item, _ in entries], seen_long_ago(entries, now - SEEN_KEEP)
-        if rule_topics(compiled.rules) and self.tagger.healthy:
-            items = [item for item in items if item.tagged]
+        if needs_tags(compiled) and self.tagger.healthy:
+            items = [item for item in items if item.tagged and is_judged(item, compiled.judgments)]
         ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order)
         with self.lock:
             refreshing = view_id in self.refreshing or self.tagger.busy
@@ -400,7 +420,7 @@ class Brain:
                 key = lens_key(proposal.view_id, kind)
                 if self.lenses.pointer(key).version:
                     self.lenses.rollback(key, compiled.layout_hash)
-        self.tagger.ensure_current(self.watch_list(), self.clock())
+        self.retag_if_needed()
         return proposal
 
     def lens_html(self, view_id: str, kind: str) -> str:

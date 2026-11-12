@@ -7,7 +7,7 @@
 <main id="feed"></main>
 <script>
   // A feed that never ends, like a social site: ten posts at a time, more whenever you scroll near the bottom.
-  // Every fourth post is about crypto, so a rule hiding crypto keeps three in four.
+  // Every fourth post is about crypto, so a rule hiding crypto keeps three in four; every third is a birthday party.
   const feed = document.getElementById("feed")
   let count = 0
 
@@ -17,7 +17,8 @@
       post.className = "stream-entry"
       post.dataset.id = `post${count}`
       const topic = count % 4 === 0 ? " about crypto" : ""
-      post.innerHTML = `<span class="who">@writer${count % 5}</span><p>Endless post ${count}${topic}</p><a href="/pages/endless/${count}">open</a>`
+      const occasion = count % 3 === 1 ? " at a birthday party" : ""
+      post.innerHTML = `<span class="who">@writer${count % 5}</span><p>Endless post ${count}${topic}${occasion}</p><a href="/pages/endless/${count}">open</a>`
       feed.append(post)
     }
   }

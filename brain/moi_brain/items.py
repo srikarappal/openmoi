@@ -22,6 +22,8 @@ WEB_SCHEMES = {"http", "https"}
 SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov"}
 WHITESPACE = re.compile(r"\s+")
 MAX_TEXT = 4000
+# Answers the tagging pass gives to the questions rules ask live in Item.extra under judged:<name>.
+JUDGED_PREFIX = "judged:"
 
 
 class Item(BaseModel):

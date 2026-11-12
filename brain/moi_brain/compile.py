@@ -12,12 +12,12 @@ import time
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from moi_brain.config import Paths
 from moi_brain.feeds import CHANNEL_ID, read_takeout
 from moi_brain.files import read_text, write_atomic
-from moi_brain.items import page_source_id, rss_source_id, youtube_source_id
+from moi_brain.items import JUDGED_PREFIX, page_source_id, rss_source_id, youtube_source_id
 from moi_brain.lenses import SITE_PREFIX
 from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import bullets, parse_sections, section_text
@@ -25,14 +25,17 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "3"
+COMPILER_VERSION = "4"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
 DEFAULT_BOOST = 3.0
+FIXED_FIELDS = ("source_id", "author_handle", "topic", "media_kind", "text", "age_hours")
+JUDGMENT_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+MAX_QUESTION = 200
 RETRY_AFTER_SECONDS = 60.0
 RULES_PROMPT = """You turn rules written in plain words into JSON for openMoi, a personal feed reader.
-Reply with one JSON object: {"rules": [<rule>, ...], "summary": "<one short sentence>"}.
+Reply with one JSON object: {"rules": [<rule>, ...], "judgments": [<judgment>, ...], "summary": "<one short sentence>"}.
 
 A rule is {"when": <condition>, "unless": <condition or null>, "do": "hide" | "boost" | "limit", "weight": <number>, "count_per_day": <integer or null>}.
 A condition is {"field": <field>, "op": "eq" | "in" | "contains" | "gt" | "lt", "value": <string, number or list of strings>}.
@@ -43,6 +46,13 @@ Fields:
 * media_kind: image, short_video, long_video or video. Shorts and reels are short_video.
 * text: words in the title or text; use op contains.
 * age_hours: hours since publishing; use gt or lt.
+* judged:<name>: the answer to a question a model answers for every item, for what no field above can say: an event, a job
+  change, a price or rent, pets allowed, written to make people angry. Declare each one you use in "judgments" as
+  {"name": "<lowercase_name>", "question": "<a question about one item>", "answer": "yes_no" or "number"}.
+  A yes_no answer is "yes", "no" or "unknown": test it with eq. A number answer (a price, rent, a count) is tested with gt or lt.
+  To keep only items with a property ("only events"), hide the ones judged "no". When one rule keeps several kinds
+  ("only events and birthdays"), declare one judgment whose question covers them all ("Is this about an event or a
+  birthday?"), so a single hide rule keeps every one of them.
 
 "hide", "no" and "never" mean do hide. "first" or "always show" mean boost with weight 10; "more of" means boost with weight 3.
 "at most N a day" means limit with count_per_day N.
@@ -55,10 +65,44 @@ class BadInput(ValueError):
     """A request named something that cannot exist, such as a view id with a slash."""
 
 
+def judgment_name(raw: object) -> object:
+    """A model's "Pets Allowed" or "pets-allowed" read as pets_allowed; anything else is left for validation to refuse."""
+    return re.sub(r"[^a-z0-9_]+", "_", raw.strip().lower()).strip("_") if isinstance(raw, str) else raw
+
+
+class Judgment(BaseModel):
+    """A question the tagging pass answers for every item, so a rule can test what no fixed field says.
+    Views that use one name share its answers: the first view to declare the name sets the question."""
+
+    name: str = Field(pattern=JUDGMENT_NAME.pattern)
+    question: str = Field(min_length=3, max_length=MAX_QUESTION)
+    answer: Literal["yes_no", "number"] = "yes_no"
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def plain_name(cls, name: object) -> object:
+        return judgment_name(name)
+
+    @field_validator("question", mode="before")
+    @classmethod
+    def short_question(cls, question: object) -> object:
+        return question.strip()[:MAX_QUESTION] if isinstance(question, str) else question
+
+
 class Condition(BaseModel):
-    field: Literal["source_id", "author_handle", "topic", "media_kind", "text", "age_hours"]
+    field: str
     op: Literal["eq", "in", "contains", "gt", "lt"]
     value: str | float | list[str]
+
+    @field_validator("field")
+    @classmethod
+    def known_field(cls, field: str) -> str:
+        """A fixed field, or judged:<name> for a judgment the view declares."""
+        if field.startswith(JUDGED_PREFIX):
+            field = f"{JUDGED_PREFIX}{judgment_name(field.removeprefix(JUDGED_PREFIX))}"
+        if field in FIXED_FIELDS or (field.startswith(JUDGED_PREFIX) and JUDGMENT_NAME.fullmatch(field.removeprefix(JUDGED_PREFIX))):
+            return field
+        raise ValueError(f"unknown field: {field}")
 
 
 class Rule(BaseModel):
@@ -84,6 +128,7 @@ class CompiledView(BaseModel):
     file_hash: str
     sources: list[SourceRef] = Field(default_factory=list)
     rules: list[Rule] = Field(default_factory=list)
+    judgments: list[Judgment] = Field(default_factory=list)
     layout: str = ""
     summary: str = ""
     warnings: list[str] = Field(default_factory=list)
@@ -98,6 +143,7 @@ class CompiledView(BaseModel):
 
 class RulesDraft(BaseModel):
     rules: list[Rule] = Field(default_factory=list)
+    judgments: list[Judgment] = Field(default_factory=list)
     summary: str = ""
 
 
@@ -155,14 +201,21 @@ def source_ids(sources: list[SourceRef]) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
-def usable_rules(rules: list[Rule]) -> list[Rule]:
-    """Rules that can run: a boost without a weight gets the default, a limit without a count is dropped."""
+def judged_names(rule: Rule) -> set[str]:
+    return {condition.field.removeprefix(JUDGED_PREFIX) for condition in (rule.when, rule.unless) if condition and condition.field.startswith(JUDGED_PREFIX)}
+
+
+def usable_rules(rules: list[Rule], judgments: list[Judgment] | None = None) -> tuple[list[Rule], list[Judgment]]:
+    """Rules that can run, with the judgments they use: a boost without a weight gets the default, a limit without a count
+    is dropped, so is a rule testing a judgment nobody declared; a judgment no rule tests is never asked."""
+    declared = {judgment.name: judgment for judgment in reversed(judgments or [])}
     usable = []
     for rule in rules:
-        if rule.do == "limit" and not rule.count_per_day:
+        if (rule.do == "limit" and not rule.count_per_day) or not judged_names(rule) <= declared.keys():
             continue
         usable.append(rule.model_copy(update={"weight": rule.weight or DEFAULT_BOOST}) if rule.do == "boost" else rule)
-    return usable
+    used = set().union(*(judged_names(rule) for rule in usable))
+    return usable, [declared[name] for name in sorted(used)]
 
 
 def rules_prompt(rules_text: str, likes: str, dislikes: str, sources: list[str]) -> list[dict[str, str]]:
@@ -277,10 +330,10 @@ class Compiler:
         try:
             if not use_model:
                 raise LlmError("still compiling")
-            rules, rules_summary = self.compile_rules(section_text(sections, "rules"), sources)
+            rules, judgments, rules_summary = self.compile_rules(section_text(sections, "rules"), sources)
             succeeded = True
         except LlmError as error:
-            rules, rules_summary, succeeded = (previous.rules if previous else []), "", False
+            rules, judgments, rules_summary, succeeded = (previous.rules if previous else []), (previous.judgments if previous else []), "", False
             warnings.append(f"Rules not updated: {error}")
         compiled = CompiledView(
             view_id=view_id,
@@ -288,16 +341,18 @@ class Compiler:
             file_hash=file_hash,
             sources=sources,
             rules=rules,
+            judgments=judgments,
             layout=section_text(sections, "layout"),
             summary=" ".join(part for part in (describe_sources(sources), rules_summary) if part),
             warnings=warnings,
         )
         return compiled, succeeded
 
-    def compile_rules(self, rules_text: str, sources: list[SourceRef]) -> tuple[list[Rule], str]:
+    def compile_rules(self, rules_text: str, sources: list[SourceRef]) -> tuple[list[Rule], list[Judgment], str]:
         likes, dislikes = self.memory.likes(), self.memory.dislikes()
         if not (bullets(rules_text) or bullets(likes) or bullets(dislikes)):
-            return [], ""
+            return [], [], ""
         prompt = rules_prompt(rules_text, likes, dislikes, source_ids(sources))
         draft = self.gateway.complete_json("fast", "compile_rules", prompt, True, RulesDraft)
-        return usable_rules(draft.rules), draft.summary.strip()
+        rules, judgments = usable_rules(draft.rules, draft.judgments)
+        return rules, judgments, draft.summary.strip()

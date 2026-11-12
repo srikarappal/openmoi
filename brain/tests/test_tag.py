@@ -129,7 +129,7 @@ def test_new_topics_send_recent_items_back_through_the_worker_once(tagger, tmp_p
     wait_idle(tagger)
     assert tagger.store.get_item(recent.item_id).topics == ["sourdough"]
     assert tagger.store.get_item(old.item_id).tagged is False
-    assert json.loads((tmp_path / "tagged.json").read_text()) == TOPICS
+    assert json.loads((tmp_path / "tagged.json").read_text()) == {"topics": TOPICS, "questions": {}}
     calls = len(services.model_calls("tag"))
     tagger.ensure_current(TOPICS, NOW)
     wait_idle(tagger)
@@ -192,7 +192,7 @@ def test_a_topic_removed_and_added_back_is_tagged_again(tagger, tmp_path, servic
     tagger.ensure_current(with_ai, NOW)
     wait_idle(tagger)
     tagger.ensure_current(list(BASE_TOPICS), NOW)
-    assert json.loads((tmp_path / "tagged.json").read_text()) == list(BASE_TOPICS)
+    assert json.loads((tmp_path / "tagged.json").read_text())["topics"] == list(BASE_TOPICS)
     calls = len(services.model_calls("tag"))
     tagger.ensure_current(with_ai, NOW)
     wait_idle(tagger)

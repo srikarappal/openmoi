@@ -187,7 +187,7 @@ def test_usable_rules_fill_boost_weight_and_drop_countless_limits():
     boost = Rule(when=Condition(field="topic", op="eq", value="art"), do="boost")
     limit = Rule(when=Condition(field="source_id", op="eq", value="x"), do="limit")
     hide = Rule(when=Condition(field="topic", op="eq", value="crypto"), do="hide")
-    assert usable_rules([boost, limit, hide]) == [boost.model_copy(update={"weight": 3.0}), hide]
+    assert usable_rules([boost, limit, hide]) == ([boost.model_copy(update={"weight": 3.0}), hide], [])
 
 
 def test_hyphenated_site_views_and_handles_ending_a_sentence():

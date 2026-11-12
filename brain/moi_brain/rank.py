@@ -5,7 +5,7 @@ from operator import itemgetter
 from typing import Literal
 
 from moi_brain.compile import Condition, Rule
-from moi_brain.items import Item, ViewItem, source_matches
+from moi_brain.items import JUDGED_PREFIX, Item, ViewItem, source_matches
 
 PAGE_SIZE = 30
 HALF_LIFE_HOURS = 24.0
@@ -27,6 +27,8 @@ def wanted_values(condition: Condition) -> list[str]:
 
 
 def item_values(field: str, item: Item) -> list[str]:
+    if field.startswith(JUDGED_PREFIX):
+        return [item.extra.get(field, "").lower()]
     if field == "topic":
         return [topic.lower() for topic in item.topics]
     if field == "text":
@@ -48,12 +50,23 @@ def compare_number(value: float, op: str, target: str) -> bool:
     return abs(value - number) < 0.5
 
 
+def judged_number(item: Item, field: str, op: str, target: str) -> bool:
+    """A number judgment compared with the rule's number; an unknown answer never matches either way."""
+    try:
+        value = float(item.extra.get(field, ""))
+    except ValueError:
+        return False
+    return compare_number(value, op, target)
+
+
 def matches(condition: Condition | None, item: Item, now: datetime) -> bool:
     if condition is None:
         return False
     wanted = wanted_values(condition)
     if condition.field == "age_hours":
         return bool(wanted) and compare_number(age_hours(item, now), condition.op, wanted[0])
+    if condition.field.startswith(JUDGED_PREFIX) and condition.op in ("gt", "lt"):
+        return bool(wanted) and judged_number(item, condition.field, condition.op, wanted[0])
     if condition.field == "source_id":
         return any(source_matches(item.source_id, value) for value in wanted)
     values = item_values(condition.field, item)
@@ -68,9 +81,15 @@ def applies(rule: Rule, item: Item, now: datetime) -> bool:
     return matches(rule.when, item, now) and not matches(rule.unless, item, now)
 
 
+def plain(value: object) -> str:
+    """A rule's value as you would write it: 3000, not 3000.0."""
+    return str(int(value)) if isinstance(value, float) and value.is_integer() else str(value)
+
+
 def describe(condition: Condition) -> str:
     values = condition.value if isinstance(condition.value, list) else [condition.value]
-    return f"{FIELD_LABELS.get(condition.field, condition.field)} {', '.join(str(value) for value in values)}"
+    label = FIELD_LABELS.get(condition.field, condition.field.removeprefix(JUDGED_PREFIX))
+    return f"{label} {', '.join(plain(value) for value in values)}"
 
 
 def reasons(item: Item, boosts: list[Rule], now: datetime) -> list[str]:

@@ -125,3 +125,20 @@ test("a page you add as a source keeps reading as you scroll, filtered by your r
     await harness.close()
   }
 })
+
+test("a rule only a model can judge filters a page source in the real app", async () => {
+  const feed = `# Feed\n\n## Sources\n* Page: ${world.base_url}/pages/endless.html\n\n## Rules\n* Only events and birthdays.\n`
+  const harness = await Harness.launch(world, { views: { feed } })
+  try {
+    const text = await eventually(
+      () => harness.lens_text(),
+      (shown) => posts_in(shown) >= 3,
+      60_000,
+    )
+    const posts = text.match(/Endless post \d+[^\n]*/g) ?? []
+    expect(posts.length).toBeGreaterThanOrEqual(3)
+    expect(posts.every((post) => post.includes("birthday party"))).toBe(true)
+  } finally {
+    await harness.close()
+  }
+})
