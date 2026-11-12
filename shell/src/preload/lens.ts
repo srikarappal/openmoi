@@ -70,6 +70,10 @@ contextBridge.exposeInMainWorld("moi", {
   act: (item_id: string, action: string, text = "") => {
     if (by_you()) send({ type: "act", item_id: String(item_id), action: String(action), text: String(text) })
   },
+  // Looks up a name a post mentions in the view's store: one search page, on your click only.
+  lookup: (item_id: string, entity: string) => {
+    if (by_you()) send({ type: "lookup", item_id: String(item_id), entity: String(entity) })
+  },
   highlight: (item_id: string, quote = "", note = "") => {
     if (by_you()) send({ type: "highlight", item_id: String(item_id), quote: String(quote), note: String(note) })
   },

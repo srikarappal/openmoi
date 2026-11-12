@@ -10,6 +10,7 @@ import json
 import math
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 SYNONYMS = {
     "politics": ("politic", "election", "senate", "congress"),
@@ -159,6 +160,54 @@ def compile_rules(payload: dict[str, Any], base_url: str) -> str:
     rules += [memory_rule(line, "boost") for line in request["likes"]]
     summary = "; ".join(line.rstrip(".") for line in [*request["view_rules"], *request["dislikes"], *request["likes"]])
     return json.dumps({"rules": rules, "judgments": judgments, "summary": f"{summary}." if summary else ""})
+
+
+MATCH_WORDS = [
+    ("mention", "mentions"),
+    ("review", "enrich"),
+    ("attach", "enrich"),
+    ("meeting", "time_window"),
+    ("story", "same_story"),
+    ("stories", "same_story"),
+    ("person", "same_person"),
+    ("friends everywhere", "same_person"),
+    ("creator", "same_person"),
+    ("cheapest", "same_product"),
+    ("price board", "same_product"),
+    ("across stores", "same_product"),
+]
+
+
+def source_word(name: str) -> str:
+    """The word a person would use for a source: facebook for page:facebook.com/..., amazon for shop:amazon.com."""
+    rest = name.split(":", 1)[1] if ":" in name else name
+    return (urlparse(f"https://{rest}").hostname or rest).removeprefix("www.").split(".")[0] if ":" in name else name
+
+
+def compile_match(payload: dict[str, Any], base_url: str) -> str:
+    """A match kind from its words; for mentions and enrich, lead and target are the sources named first and second,
+    else the view's first source and its last (where its stores come)."""
+    request = request_of(payload)
+    text = request["match"].lower()
+    kind = next((kind for word, kind in MATCH_WORDS if word in text), "union")
+    named = sorted((text.find(source_word(name)), name) for name in request["sources"] if source_word(name) and text.find(source_word(name)) >= 0)
+    if len(named) >= 2:
+        lead, target = named[0][1], named[1][1]
+    else:
+        lead, target = request["sources"][0], request["sources"][-1]
+    if kind not in ("mentions", "enrich"):
+        lead, target = None, None
+    return json.dumps({"kind": kind, "lead": lead, "target": target, "summary": f"Combined as {kind.replace('_', ' ')}."})
+
+
+MENTIONED = re.compile(r"(?:got the|bought the|love my|bought a|got a) ([A-Za-z0-9][\w -]{2,60}?)(?=[.,!]| and |$)")
+
+
+def mentions(payload: dict[str, Any], base_url: str) -> str:
+    """Products a post names after "got the", "bought a" or "love my"; nothing else, whatever the post asks."""
+    request = request_of(payload)
+    found = [{"n": item["n"], "entities": MENTIONED.findall(f"{item['title']} {item['text']}")[:3]} for item in request["items"]]
+    return json.dumps({"mentions": found})
 
 
 def bullet_lines(text: str, section: str | None) -> list[str]:
@@ -391,7 +440,7 @@ def update(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"update": changed, "what_changed": new["title"] if changed else ""})
 
 
-HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "lens_patch": lens_patch, "judge_lens": judge_lens, "ask": ask, "agent_plan": agent_plan, "agent_read": agent_read, "agent_compose": agent_compose, "extractor": extractor, "update": update, "summarize": summarize, "oracle": oracle}
+HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "lens_patch": lens_patch, "judge_lens": judge_lens, "ask": ask, "agent_plan": agent_plan, "agent_read": agent_read, "agent_compose": agent_compose, "compile_match": compile_match, "mentions": mentions, "extractor": extractor, "update": update, "summarize": summarize, "oracle": oracle}
 
 
 def model_reply(task: str, payload: dict[str, Any], base_url: str) -> str:

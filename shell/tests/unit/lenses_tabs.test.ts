@@ -175,6 +175,16 @@ describe("LensContext", () => {
     expect([...context.rendered.keys()]).toEqual(["c"])
   })
 
+  it("knows the address of each item shown with a card until the next render", () => {
+    const context = new LensContext("view:feed", "feed", new FakeWebContentsView() as never)
+    const related = { item_id: "copy", source_id: "rss:blog", title: "Same story", url: "https://blog.example/s", price_text: "", label: "same story on blog" }
+    context.send({ type: "render", items: [{ ...view_item("a"), related: [related] }], cursor: null })
+    context.send({ type: "append", items: [view_item("b")], cursor: null })
+    expect([...context.related]).toEqual([["copy", "https://blog.example/s"]])
+    context.send({ type: "render", items: [view_item("c")], cursor: null })
+    expect(context.related.size).toBe(0)
+  })
+
   it("runs page fetches one at a time and a failed one does not stop the next", async () => {
     const context = new LensContext("view:feed", "feed", new FakeWebContentsView() as never)
     const order: string[] = []
@@ -265,6 +275,25 @@ describe("LensManager pacing for actions", () => {
       await flush()
     }
     expect(events.on_event.mock.calls.map((call) => `${call[1].type} ${call[1].item_id} ${call[1].action ?? ""}`.trim())).toEqual(["act a reply", "act b add_to_cart", "act b like", "save c"])
+  })
+})
+
+describe("LensManager look up", () => {
+  it("looks up only on a click, each name at the pace of clicks", async () => {
+    const events = { on_ready: vi.fn(), on_event: vi.fn() }
+    const lenses = new LensManager(new FakeHost(), events)
+    const context = await lenses.open("view:buying", "buying", "<p>lens</p>")
+    const contents = context.view.webContents
+    const now = vi.spyOn(Date, "now").mockReturnValue(40_000)
+    lens_event(contents, { type: "lookup", item_id: "p", entity: "Instant Pot Duo" })
+    press(contents)
+    lens_event(contents, { type: "lookup", item_id: "p", entity: "Instant Pot Duo" })
+    lens_event(contents, { type: "lookup", item_id: "p", entity: "Instant Pot Duo" })
+    now.mockReturnValue(40_200)
+    press(contents)
+    lens_event(contents, { type: "lookup", item_id: "p", entity: "Hydro Flask bottle" })
+    expect(events.on_event.mock.calls.map((call) => call[1].entity)).toEqual(["Instant Pot Duo", "Hydro Flask bottle"])
+    now.mockRestore()
   })
 })
 

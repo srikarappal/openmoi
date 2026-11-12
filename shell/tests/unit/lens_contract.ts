@@ -47,6 +47,10 @@ export class FakeMoi {
     this.sent.push({ type: "act", item_id, action, text })
   }
 
+  lookup(item_id: string, entity: string): void {
+    this.sent.push({ type: "lookup", item_id, entity })
+  }
+
   highlight(item_id: string, quote = "", note = ""): void {
     this.sent.push({ type: "highlight", item_id, quote, note })
   }

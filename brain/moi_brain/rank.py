@@ -7,6 +7,7 @@ from typing import Literal
 
 from moi_brain.compile import AllOf, AnyOf, Condition, NotOf, Rule, When
 from moi_brain.items import JUDGED_PREFIX, Item, ViewItem, site_host, source_matches
+from moi_brain.mashups import MAX_RELATED, as_related, site_of
 from moi_brain.ranker import Ranker, features, recency
 from moi_brain.stories import UPDATE_KEY, story_key
 
@@ -185,15 +186,33 @@ def kept_share(items: list[Item], rules: list[Rule], now: datetime, circles: Cir
     return {source_id: kept.get(source_id, 0) / total for source_id, total in totals.items()}
 
 
+def story_keys(scored: list[Scored]) -> dict[str, str]:
+    """Each item's story: its cluster, and one story for every copy of one URL."""
+    keys: dict[str, str] = {}
+    by_url: dict[str, str] = {}
+    for _, item, _ in scored:
+        keys[item.item_id] = by_url.setdefault(item.url, story_key(item))
+    return keys
+
+
+def story_copies(scored: list[Scored], chosen: set[str]) -> dict[str, list[Item]]:
+    """For a story desk: each kept card's copies of its story from other sources, best scored first."""
+    keys = story_keys(scored)
+    card_of = {keys[item.item_id]: item for _, item, _ in scored if item.item_id in chosen}
+    copies: dict[str, list[Item]] = {}
+    for _, item, _ in scored:
+        card = card_of.get(keys[item.item_id])
+        if card and item.item_id != card.item_id and item.source_id != card.source_id and item.url != card.url:
+            copies.setdefault(card.item_id, []).append(item)
+    return copies
+
+
 def best_copy_per_story(scored: list[Scored], shown: set[str] | frozenset[str]) -> tuple[list[Scored], dict[str, list[str]]]:
     """One item per story (its cluster, and every copy of one URL), in score order, with the other sources each kept
     copy appeared on. A copy already shown or seen stays its story's copy, so a newer copy never brings the same story
     back, unless the update pass found it adds something; otherwise the best scored copy the rules let through, so a
     story hidden in one source still shows from another source a rule allows."""
-    keys: dict[str, str] = {}
-    by_url: dict[str, str] = {}
-    for _, item, _ in scored:
-        keys[item.item_id] = by_url.setdefault(item.url, story_key(item))
+    keys = story_keys(scored)
     kept: dict[str, Item] = {}
     for _, item, _ in scored:
         if item.item_id in shown:
@@ -221,6 +240,8 @@ def rank(
     seen: set[str] | frozenset[str] = frozenset(),
     learned: Ranker | None = None,
     explore: bool = True,
+    people: dict[str, str] | None = None,
+    with_copies: bool = False,
 ) -> tuple[list[ViewItem], bool]:
     """A page of view items with reasons, plus whether more remain beyond it.
 
@@ -229,6 +250,8 @@ def rank(
     top topics unless the view turned exploring off.
     Excluded ids (already shown or seen) use up daily limits first: what you already read that day counts before
     anything newer competes for what is left. Seen ids, still shown, stay their story's copy.
+    A same_person recipe passes each item's person, which groups the page unless a group_by rule does; a same_story
+    recipe asks for each card's copies from other sources, shown with it.
     """
     scored: list[Scored] = []
     for position, item in enumerate(items):
@@ -245,7 +268,9 @@ def rank(
         pinned = PIN_SCORE if any(rule.do == "pin" for rule in moved) else 0.0
         scored.append((base + boost_total + pinned, item, moved))
     scored.sort(key=itemgetter(0), reverse=True)
+    every = scored
     scored, also = best_copy_per_story(scored, set(exclude_ids) | set(seen))
+    copies = story_copies(every, {entry[1].item_id for entry in scored}) if with_copies else {}
     already = [entry for entry in scored if entry[1].item_id in exclude_ids]
     candidates = [entry for entry in scored if entry[1].item_id not in exclude_ids]
     remaining = [entry for entry in apply_limits([*already, *candidates], rules, now, circles) if entry[1].item_id not in exclude_ids]
@@ -253,7 +278,7 @@ def rank(
     explored: set[str] = set()
     if trained and explore:
         remaining, explored = with_explore(remaining, learned.top_topics())
-    groups = {entry[1].item_id: group_of(entry[1], rules, now, circles) for entry in remaining}
+    groups = {entry[1].item_id: group_of(entry[1], rules, now, circles) or (people or {}).get(entry[1].item_id) for entry in remaining}
     if any(groups.values()):
         remaining = grouped(remaining, groups)
     page = []
@@ -262,7 +287,8 @@ def rank(
         if item.item_id in explored:
             plain.append("explore: outside your usual topics")
         summary_only = any(rule.do == "summarize_only" and applies(rule, item, now, circles) for rule in rules)
-        page.append(ViewItem(item=item, reasons=story_reasons(item, also, plain), group=groups[item.item_id], summary_only=summary_only))
+        related = [as_related(copy, f"same story on {site_of(copy) or copy.source_id}") for copy in copies.get(item.item_id, [])[:MAX_RELATED]]
+        page.append(ViewItem(item=item, reasons=story_reasons(item, also, plain), related=related, group=groups[item.item_id], summary_only=summary_only))
     return page, len(remaining) > limit
 
 

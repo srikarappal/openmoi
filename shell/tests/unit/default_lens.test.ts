@@ -243,6 +243,41 @@ describe("default lens actions", () => {
   })
 })
 
+describe("default lens recipes", () => {
+  it("shows what a recipe puts with a card, each opening its own original, and Look up only where it can", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    const related = [
+      { item_id: "r1", source_id: "shop:amazon.com/s?k=a", title: "Hydro Flask 32 oz <b>bottle</b>", url: "https://www.amazon.com/x/dp/B1", price_text: "$44.95", label: "mentions: Hydro Flask bottle" },
+    ]
+    const mentions = [
+      { entity: "Hydro Flask bottle", status: "found" as const, can_look_up: false },
+      { entity: "Instant Pot Duo", status: "unresolved" as const, can_look_up: true },
+      { entity: "Mystery thing", status: "unresolved" as const, can_look_up: false },
+    ]
+    moi.render([{ ...view_item("p"), related, mentions }, view_item("q")], null)
+    const document = dom.window.document
+    const card = document.querySelector("[data-item-id='p']") as HTMLElement
+    expect(card.querySelector(".related_item")?.textContent).toBe("mentions: Hydro Flask bottle: Hydro Flask 32 oz <b>bottle</b> · $44.95")
+    expect(card.querySelector(".related_item b")).toBeNull()
+    expect(Array.from(card.querySelectorAll(".mention"), (node) => node.textContent)).toEqual(["Hydro Flask bottle: found", "Instant Pot Duo: not looked up", "Mystery thing: not looked up"])
+    expect(Array.from(card.querySelectorAll(".look_up"), (node) => node.textContent)).toEqual(["Look up Instant Pot Duo"])
+    expect(document.querySelector("[data-item-id='q'] .related, [data-item-id='q'] .mentions")).toBeNull()
+    ;(card.querySelector(".related_item") as HTMLElement).click()
+    ;(card.querySelector(".look_up") as HTMLElement).click()
+    expect(moi.sent.slice(1)).toEqual([
+      { type: "open", item_id: "r1" },
+      { type: "lookup", item_id: "p", entity: "Instant Pot Duo" },
+    ])
+    const lookup = { item_id: "r2", source_id: "shop:amazon.com/s?k=b", title: "Instant Pot Duo 6 qt", url: "https://www.amazon.com/y/dp/B2", price_text: "$79.00", label: "mentions: Instant Pot Duo" }
+    moi.update([{ ...view_item("p"), related: [...related, lookup], mentions: [mentions[0], { entity: "Instant Pot Duo", status: "found", can_look_up: false }] }])
+    expect(Array.from(card.querySelectorAll(".mention"), (node) => node.textContent)).toEqual(["Hydro Flask bottle: found", "Instant Pot Duo: found"])
+    expect(card.querySelectorAll(".look_up")).toHaveLength(0)
+    expect(card.querySelectorAll(".related_item")).toHaveLength(2)
+    moi.update([{ item: view_item("p").item, reasons: [] }])
+    expect(card.querySelectorAll(".related_item")).toHaveLength(2)
+  })
+})
+
 describe("default lens reader mode", () => {
   it("reads only a Mine page as a whole article; a saved article with its copy stays a card, alone or appended", () => {
     const { dom, moi } = run_lens(DEFAULT_LENS)

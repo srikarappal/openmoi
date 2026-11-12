@@ -9,6 +9,8 @@ export const LENS_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 
 const MAX_IDS_PER_MESSAGE = 200
 const MAX_ID_LENGTH = 200
 const MAX_TEXT_LENGTH = 5_000
+// The longest name a post mentions that a lens may ask to look up (the brain allows 100).
+const MAX_ENTITY_LENGTH = 100
 const INLINE_SCRIPT = /<script\b(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script\s*>/gi
 // Runs before the lens: printing would put up a native dialog the lens could repeat forever, so it does nothing.
 const GUARD_SCRIPT = `Object.defineProperty(window, "print", { value: function print() {}, writable: false, configurable: false })`
@@ -94,6 +96,9 @@ export function parse_lens_message(raw: unknown): LensToHost | null {
       if (!is_id(message.item_id) || typeof message.action !== "string" || !/^[a-z_]{1,40}$/.test(message.action)) return null
       if (message.text !== undefined && !is_text(message.text)) return null
       return { type: "act", item_id: message.item_id, action: message.action, text: typeof message.text === "string" ? message.text : "" }
+    case "lookup":
+      if (!is_id(message.item_id) || typeof message.entity !== "string" || !message.entity.trim() || message.entity.length > MAX_ENTITY_LENGTH) return null
+      return { type: "lookup", item_id: message.item_id, entity: message.entity }
     case "highlight":
       if (!is_id(message.item_id) || !is_text(message.quote) || !is_text(message.note) || !(message.quote || message.note)) return null
       return { type: "highlight", item_id: message.item_id, quote: message.quote, note: message.note }

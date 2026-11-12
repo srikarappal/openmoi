@@ -31,7 +31,7 @@ from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
 from moi_brain.exports import SOURCE_IDS, read_export
 from moi_brain.extractors import ExtractorSpec, ExtractorStore, page_domain, path_pattern_for
-from moi_brain.files import read_json, write_atomic
+from moi_brain.files import read_json, read_text, write_atomic
 from moi_brain.google import GoogleAccount, GoogleError
 from moi_brain.health import HealthBook, OracleReply, RunReport, Verdict, oracle_prompt
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher, read_takeout
@@ -40,6 +40,8 @@ from moi_brain.items import (
     HANDLE,
     Event,
     Item,
+    Mention,
+    Related,
     ViewItem,
     is_private_host,
     normalize,
@@ -53,6 +55,21 @@ from moi_brain.items import (
 from moi_brain.lens_gen import LensVerdict, generate_lens, judge_lens
 from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway, LlmError
+from moi_brain.mashups import (
+    FOUND,
+    MentionFinder,
+    PeopleSuggestion,
+    as_related,
+    best_match,
+    collapse_products,
+    enrich_related,
+    in_source,
+    link_line,
+    people_links,
+    people_suggestions,
+    person_groups,
+    search_words,
+)
 from moi_brain.md import parse_sections, section_text
 from moi_brain.memory import JOURNAL_DAYS, TOPIC_FILES, Memory
 from moi_brain.mirror import MAX_DAYS, Mirror, build_mirror
@@ -133,6 +150,33 @@ class ContentWanted(BaseModel):
     url: str
     video: bool
     purpose: Literal["summary", "offline"] = "summary"
+
+
+class Lookup(BaseModel):
+    """A name a post mentions that you asked to look up in a mentions view's store."""
+
+    item_id: str
+    entity: str
+    asked_at: datetime
+
+
+class LookupState(BaseModel):
+    lookups: dict[str, list[Lookup]] = Field(default_factory=dict)
+
+
+class LookupStart(BaseModel):
+    view_id: str
+    entity: str
+    site: str
+
+
+class PeopleReply(BaseModel):
+    """A link between accounts that look like one person, as a change to people.md for you to confirm, and how many
+    more suggestions there are."""
+
+    proposal: Proposal | None = None
+    suggestion: PeopleSuggestion | None = None
+    more: int = 0
 
 
 class ShopStart(BaseModel):
@@ -233,6 +277,13 @@ class Overview(BaseModel):
 FeedReader = tuple[str, str, Callable[[], list[dict[str, Any]]]]
 MAX_RELAY_EVENTS = 50
 MAX_RELAY_INBOX = 200
+# A Look up you asked for waits this long for its store's search page before the name counts as not there.
+LOOKUP_WAIT = timedelta(minutes=10)
+MAX_LOOKUPS = 10
+# Names matched against what openMoi already holds, per open of a mentions view.
+MAX_RESOLVE = 30
+PEOPLE_WINDOW = timedelta(days=30)
+DAY_BOARD_LATER = "Day boards need your calendar, which comes with native apps; until then this view shows one stream."
 NEW_VIEW = "# {title}\n\n## Sources\n\n## Rules\n\n## Layout\n"
 
 
@@ -311,6 +362,7 @@ class Brain:
         self.compiler = Compiler(paths, self.gateway, self.memory, self.subscriptions)
         self.tagger = Tagger(self.store, self.gateway, paths.tagging_state, self.watch_list, self.watch_judgments)
         self.updater = Updater(self.store, self.gateway)
+        self.mention_finder = MentionFinder(self.store, self.gateway, self.clock)
         self.editor = Editor(paths, self.gateway)
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors, paths.packs / "extractors")
         self.policies = merged_policy(load_policy(paths.site_policy), installed_pack(paths.packs))
@@ -443,7 +495,7 @@ class Brain:
             if spec and spec.start_url and policy_for(self.policies, spec.start_url).status == "active":
                 policy = policy_for(self.policies, spec.start_url)
                 found.append(PageSource(source_id="x", page_type=spec.page_type, start_url=spec.start_url, spec=spec, budget=self.budget_for(spec.start_url), mode=policy.mode))
-        for url in self.shop_urls(compiled):
+        for url in [*self.shop_urls(compiled), *self.lookup_urls(compiled)]:
             if policy_for(self.policies, url).status == "active":
                 found.append(PageSource(source_id=shop_source_id(url), page_type="listing", start_url=url, spec=self.best_spec(url), budget=self.budget_for(url), mode=policy_for(self.policies, url).mode))
         for source in compiled.sources:
@@ -788,6 +840,139 @@ class Brain:
             state.queries[chosen] = query
             write_atomic(self.paths.state / "shop.json", state.model_dump_json())
         return ShopStart(view_id=chosen, query=query, created=created)
+
+    def lookup_state(self) -> LookupState:
+        try:
+            return LookupState.model_validate(read_json(self.paths.state / "lookups.json", {}))
+        except ValueError:
+            return LookupState()
+
+    def save_lookups(self, state: LookupState) -> None:
+        write_atomic(self.paths.state / "lookups.json", state.model_dump_json())
+
+    def store_search(self, compiled: CompiledView, entity: str) -> str | None:
+        """The search page of the store a mentions view looks names up in, for one name; None when its target is no
+        store of the view."""
+        target = compiled.match.target or ""
+        stores = [store for source in compiled.sources for store in source.stores if f"shop:{page_domain(store)}" == target]
+        urls = search_urls(stores[:1], entity)
+        return urls[0] if urls else None
+
+    def lookup_urls(self, compiled: CompiledView) -> list[str]:
+        """The store search pages for the names you asked to look up in this view, read like any page source."""
+        if compiled.match.kind != "mentions":
+            return []
+        urls = [self.store_search(compiled, lookup.entity) for lookup in self.lookup_state().lookups.get(compiled.view_id, [])]
+        return list(dict.fromkeys(url for url in urls if url))
+
+    def lookup(self, view_id: str, item_id: str, entity: str) -> LookupStart:
+        """You pressed Look up on a name a post mentions: its store's search page is read for it (one page, within the
+        site's budget), once; the view then shows what it found."""
+        compiled = self.compiler.compiled(check_view_id(view_id))
+        match = compiled.match
+        if match.kind != "mentions" or not match.target:
+            raise BadInput("Only a view that looks up what posts mention can look things up.")
+        waiting = [entry for entry, target_id, _, resolved_at in self.store.mentions_of([item_id], match.target).get(item_id, []) if not target_id and not resolved_at]
+        if entity not in waiting:
+            raise BadInput("That post names nothing like that still to look up.")
+        url = self.store_search(compiled, entity)
+        if url is None:
+            raise BadInput(f"{match.target} is not a store this view can search.")
+        with self.lock:
+            state = self.lookup_state()
+            pending = state.lookups.setdefault(view_id, [])
+            if not any(entry.item_id == item_id and entry.entity == entity for entry in pending):
+                if len(pending) >= MAX_LOOKUPS:
+                    raise BadInput(f"{MAX_LOOKUPS} lookups are waiting already; try again in a few minutes.")
+                pending.append(Lookup(item_id=item_id, entity=entity, asked_at=self.clock()))
+                self.save_lookups(state)
+        return LookupStart(view_id=view_id, entity=entity, site=page_domain(url))
+
+    def resolve_mentions(self, compiled: CompiledView, links: dict[str, list[tuple[str, str | None, float, datetime | None]]], now: datetime) -> None:
+        """Names not looked up yet are matched against what the target source already holds; a name you asked to look
+        up is matched against its own search's results once they came, and is not there when they hold no match or
+        none came in time. A name is looked up at most once."""
+        target = compiled.match.target or ""
+        with self.lock:
+            state = self.lookup_state()
+            pending = state.lookups.get(compiled.view_id, [])
+            done = []
+            tried = 0
+            for item_id, entries in links.items():
+                for entity, target_id, _, resolved_at in entries:
+                    if target_id or resolved_at:
+                        continue
+                    asked = next((entry for entry in pending if entry.item_id == item_id and entry.entity == entity), None)
+                    if asked:
+                        url = self.store_search(compiled, entity)
+                        candidates = self.store.items_from_family(shop_source_id(url), 20) if url else []
+                        if candidates or now - asked.asked_at > LOOKUP_WAIT:
+                            best = best_match(entity, candidates)
+                            self.store.resolve_mention(item_id, entity, target, best[0].item_id if best else None, best[1] if best else 0.0, now)
+                            done.append(asked)
+                    elif tried < MAX_RESOLVE:
+                        tried += 1
+                        held = [item for item, _ in self.store.search(search_words(entity), 40) if in_source(item.source_id, target)]
+                        if best := best_match(entity, held):
+                            self.store.resolve_mention(item_id, entity, target, best[0].item_id, best[1], now)
+            if done:
+                state.lookups[compiled.view_id] = [entry for entry in pending if entry not in done]
+                self.save_lookups(state)
+
+    def mention_cards(self, compiled: CompiledView, items: list[Item], now: datetime) -> tuple[list[Item], dict[str, list[Related]], dict[str, list[Mention]]]:
+        """For a mentions recipe: the lead source's posts that name something, each with what it names: found in the
+        target source, a possible match, being looked up, not there, or waiting for you to press Look up. Posts not read
+        for names yet go to the mention finder in the background."""
+        match = compiled.match
+        target = match.target or ""
+        lead = [item for item in items if in_source(item.source_id, match.lead or "")]
+        ids = [item.item_id for item in lead]
+        unread = self.store.unchecked_for_mentions(ids, target)
+        if unread:
+            self.mention_finder.enqueue(target, unread)
+        self.resolve_mentions(compiled, self.store.mentions_of(ids, target), now)
+        links = self.store.mentions_of(ids, target)
+        found = self.store.get_items([target_id for entries in links.values() for _, target_id, _, _ in entries if target_id])
+        asked = {(entry.item_id, entry.entity) for entry in self.lookup_state().lookups.get(compiled.view_id, [])}
+        searchable = self.store_search(compiled, "x") is not None
+        cards, related, mentions = [], {}, {}
+        for item in lead:
+            named = links.get(item.item_id, [])
+            if not named:
+                continue
+            cards.append(item)
+            for entity, target_id, confidence, resolved_at in named:
+                listing = found.get(target_id or "")
+                if listing:
+                    status = "found" if confidence >= FOUND else "possible"
+                    label = f"mentions: {entity}" if status == "found" else f"possible match for: {entity}"
+                    related.setdefault(item.item_id, []).append(as_related(listing, label))
+                else:
+                    status = "not_found" if resolved_at else "looking" if (item.item_id, entity) in asked else "unresolved"
+                mentions.setdefault(item.item_id, []).append(Mention(entity=entity, status=status, can_look_up=status == "unresolved" and searchable))
+        return cards, related, mentions
+
+    def enrich_page(self, ranked: list[ViewItem], target: str) -> dict[str, list[Related]]:
+        """For an enrich recipe: items of the target source about each card, from what openMoi already read."""
+        attached = {}
+        for view_item in ranked:
+            lead = view_item.item
+            held = [item for item, _ in self.store.search(search_words(lead.title or lead.text or ""), 40) if in_source(item.source_id, target)]
+            if found := enrich_related(lead, held):
+                attached[lead.item_id] = found
+        return attached
+
+    def people_reply(self) -> PeopleReply:
+        """The best suggestion of accounts that look like one person, as a change to people.md you confirm or not."""
+        links = people_links(self.memory.topic_text("people.md"))
+        suggestions = people_suggestions([item for item, _ in self.store.items_since(self.clock() - PEOPLE_WINDOW)], links)
+        if not suggestions:
+            return PeopleReply()
+        best = suggestions[0]
+        where = ", ".join(f"{site} (@{handle})" for site, handle in best.accounts)
+        reply = f"{best.name} on {where} look like one person. Link them in people.md?"
+        proposal = self.editor.propose_text("memory/people.md", f"{read_text(self.paths.memory / 'people.md').rstrip()}\n{link_line(best)}\n", reply, self.compiler.view_ids()[0])
+        return PeopleReply(proposal=proposal, suggestion=best, more=len(suggestions) - 1)
 
     def check_action(self, request: ActionRequest) -> ActionDecision:
         """The gate: an action you asked for on an item, checked against its tier, its origin, the site's write flags,
@@ -1270,14 +1455,33 @@ class Brain:
         circles = self.circles()
         if edition and compiled.time.edition_size:
             items = edition_items(compiled.time.edition_size, edition, entries, items, exclude_ids, compiled.rules, now, long_seen, circles)
+        match = compiled.match
+        related: dict[str, list[Related]] = {}
+        mentions: dict[str, list[Mention]] = {}
+        people = None
+        if match.kind == "same_product":
+            items, related = collapse_products(items)
+        elif match.kind == "same_person":
+            people = person_groups(items, people_links(self.memory.topic_text("people.md")))
+        elif match.kind == "mentions" and match.lead and match.target:
+            items, related, mentions = self.mention_cards(compiled, items, now)
+        elif match.kind == "enrich" and match.lead:
+            items = [item for item in items if in_source(item.source_id, match.lead)]
         seen = {item.item_id for item, seen_at in entries if seen_at}
-        ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles, seen, self.ranker, compiled.explore)
+        ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles, seen, self.ranker, compiled.explore, people, match.kind == "same_story")
+        if match.kind == "enrich" and match.target:
+            related = self.enrich_page(ranked, match.target)
+        if related or mentions:
+            ranked = [
+                view_item.model_copy(update={"related": related.get(view_item.item.item_id, view_item.related), "mentions": mentions.get(view_item.item.item_id, [])})
+                for view_item in ranked
+            ]
         saved_in = self.store.collections_of([view_item.item.item_id for view_item in ranked])
         ranked = [view_item.model_copy(update={"collections": saved_in.get(view_item.item.item_id, [])}) for view_item in ranked]
         ranked = self.with_actions(self.with_price_notes(ranked))
         with self.lock:
             reading = view_id in self.refreshing
-            refreshing = reading or self.tagger.busy or self.updater.busy
+            refreshing = reading or self.tagger.busy or self.updater.busy or (compiled.match.kind == "mentions" and self.mention_finder.busy)
         source_ids = set(compiled.source_ids())
         current = {(source_id, location) for source_id, location, _ in self.feed_readers(compiled)} | {(source_id, source_id) for source_id in source_ids}
         problems = [f"{source_id}: {status}" for source_id, status in self.status_by_source(current).items() if status != "ok"]
@@ -1286,6 +1490,8 @@ class Brain:
         if circles.empty and any(condition.field == "author_in" for rule in compiled.rules for condition in rule.conditions()):
             problems.append(NOBODY_KNOWN)
         problems += self.policy_warnings(compiled) + self.judgment_conflicts(compiled)
+        if match.kind == "time_window":
+            problems.append(DAY_BOARD_LATER)
         return ViewPage(
             view_id=view_id,
             items=ranked,

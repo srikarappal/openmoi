@@ -11,7 +11,7 @@ const FEED_SOURCE = { source_id: "page:feed.example.com", start_url: "https://fe
 const PAGE = { view_id: "feed", items: [], has_more: false, refreshing: false, warnings: [], version: "v1", summary: "", lens_stale: false, layout_hash: "h" } as unknown as ViewPage
 
 function make_views(outcomes: FillOutcome[], pages: ViewPage[] = [], page_sources: PageSource[] = [X_SOURCE]) {
-  const context = { key: view_lens_key("feed"), view_id: "feed", rendered: new Map(), send: vi.fn(), serial: <T>(work: () => Promise<T>) => work() } as unknown as LensContext
+  const context = { key: view_lens_key("feed"), view_id: "feed", rendered: new Map(), related: new Map(), send: vi.fn(), serial: <T>(work: () => Promise<T>) => work() } as unknown as LensContext
   const brain = {
     refresh: vi.fn(async () => ({ page_sources })),
     view_page: vi.fn(async () => pages.shift() ?? PAGE),
@@ -256,6 +256,37 @@ describe("ViewController rendering", () => {
     await views.on_event(context, { type: "open", item_id: "ghost" })
     await views.on_event(context, { type: "play", item_id: "ghost" })
     expect(brain.events.mock.calls).toEqual([[[{ view_id: "feed", item_id: "a", event_kind: "seen" }]]])
+  })
+
+  it("opens an item shown with a card at its own address and records the open", async () => {
+    const { views, context, brain, hooks } = render_setup([])
+    context.related.set("copy", "https://blog.example/chip")
+    await views.on_event(context, { type: "open", item_id: "copy" })
+    expect(hooks.open_original).toHaveBeenCalledWith("https://blog.example/chip")
+    expect(brain.events).toHaveBeenCalledWith([{ view_id: "feed", item_id: "copy", event_kind: "open" }])
+  })
+
+  it("looks up a name a post mentions, then reads the view's new page source; a refused one says why", async () => {
+    const { views, context, brain, hooks } = render_setup([])
+    context.rendered.set("p1", { item_id: "p1", url: "https://www.facebook.com/p/1" } as never)
+    const lookup = vi.fn(async () => ({ view_id: "feed", entity: "Hydro Flask bottle", site: "amazon.com" }))
+    Object.assign(brain, { lookup })
+    await views.on_event(context, { type: "lookup", item_id: "p1", entity: "Hydro Flask bottle" })
+    expect(lookup).toHaveBeenCalledWith("feed", "p1", "Hydro Flask bottle")
+    expect(hooks.notify).toHaveBeenCalledWith('Looking up "Hydro Flask bottle" on amazon.com.')
+    expect(brain.refresh).toHaveBeenCalledWith("feed", false)
+    expect((context.send as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[0].type === "update")).toEqual([])
+    const found = { item: { item_id: "p1", url: "https://www.facebook.com/p/1" }, reasons: [], mentions: [{ entity: "Instant Pot Duo", status: "found", can_look_up: false }] }
+    brain.view_page.mockResolvedValue({ ...PAGE, items: [found, { item: { item_id: "other" }, reasons: [] }] } as never)
+    await views.on_event(context, { type: "lookup", item_id: "p1", entity: "Instant Pot Duo" })
+    expect((context.send as ReturnType<typeof vi.fn>).mock.calls.filter((call) => call[0].type === "update").map((call) => call[0].items)).toEqual([[found]])
+    lookup.mockRejectedValueOnce(new Error("That post names nothing like that still to look up."))
+    brain.refresh.mockClear()
+    await views.on_event(context, { type: "lookup", item_id: "p1", entity: "the order" })
+    expect(hooks.notify).toHaveBeenLastCalledWith("Could not look it up: That post names nothing like that still to look up.")
+    expect(brain.refresh).not.toHaveBeenCalled()
+    await views.on_event(context, { type: "lookup", item_id: "ghost", entity: "x" })
+    expect(lookup).toHaveBeenCalledTimes(3)
   })
 
   it("saves and unsaves items, telling every lens that shows them, and keeps highlights", async () => {

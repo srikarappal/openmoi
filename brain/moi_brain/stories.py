@@ -60,9 +60,13 @@ class UpdateReply(BaseModel):
     what_changed: str = ""
 
 
+def text_words(text: str) -> frozenset[str]:
+    """The words of a text that tell stories apart: three letters or more, or a number, and no stop words."""
+    return frozenset(word for word in WORD.findall(text[:MAX_STORY_TEXT].lower()) if (len(word) >= 3 or word.isdigit()) and word not in STOP_WORDS)
+
+
 def story_words(item: Item) -> frozenset[str]:
-    text = (item.title or item.text or "")[:MAX_STORY_TEXT].lower()
-    return frozenset(word for word in WORD.findall(text) if (len(word) >= 3 or word.isdigit()) and word not in STOP_WORDS)
+    return text_words(item.title or item.text or "")
 
 
 def numbers_differ(first: frozenset[str], second: frozenset[str]) -> bool:

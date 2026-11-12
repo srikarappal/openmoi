@@ -11,7 +11,7 @@ from moi_brain.compile import HANDLE
 from moi_brain.md import COMMENT, bullets, parse_sections, section_text
 
 MAX_IMPORT = 20_000
-KEPT_SECTIONS = ("Sources", "Rules", "Layout", "Time")
+KEPT_SECTIONS = ("Sources", "Match", "Rules", "Layout", "Time")
 PERSONAL_SOURCES = re.compile(r"^\s*(following|watch)\s*:", re.IGNORECASE)
 NAME = re.compile(r"[^a-z0-9_]+")
 MAX_NAME = 40

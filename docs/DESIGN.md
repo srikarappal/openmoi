@@ -875,8 +875,8 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 | L3 Full lens engine | Test gate, visual judge, patch mode, media proxy, tokens, gesture binding | Lens contract | built |
 | L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file | built |
 | L5 Actions and gate | Tiers, executors, verify, audit, injection defense | Read only boundary, shell and brain split | built |
-| L6 Agents | Runtime, tools, standing tasks | Brain, gate | not built |
-| L7 Recipes and mashups | Match kinds, identity and entity links | View as a .md file | not built |
+| L6 Agents | Runtime, tools, standing tasks | Brain, gate | built |
+| L7 Recipes and mashups | Match kinds, identity and entity links | View as a .md file | built (time_window waits for L8) |
 | L8 Native apps | Swift helper, app ladder | Source adapter | not built |
 | L9 Launch hardening | Packaging, socket RPC, privacy modes, kill switch, legal | LLM gateway, shell and brain split | not built |
 
@@ -1120,7 +1120,7 @@ The 99% success exit needs test accounts on X and Amazon; against the fake world
 
 The usefulness half of the exit needs a real model and a person rating 20 shortlists; with the fake model the eval checks the machinery and the gate.
 
-## 23. L7 Recipes and mashups `[not built]`
+## 23. L7 Recipes and mashups `[built]`
 
 The MVP already treats every view as a recipe: a .md file with sources, rules and layout, merged as a union. L7 adds ways to combine sources beyond a union.
 
@@ -1154,8 +1154,8 @@ You write it the same way as any view:
 # What my friends are buying
 
 ## Sources
-* Facebook feed
-* Amazon, for products my friends mention
+* Page: https://www.facebook.com/
+* Shop: amazon
 
 ## Match
 Products mentioned in Facebook posts, looked up on Amazon.
@@ -1179,12 +1179,32 @@ CREATE TABLE entity_links (
     target_source_id TEXT NOT NULL,
     target_item_id TEXT,
     confidence REAL NOT NULL,
-    resolved_at TEXT NOT NULL,
+    resolved_at TEXT,
     PRIMARY KEY (item_id, entity, target_source_id)
 );
 ```
 
 **Guardrails:** recipes inherit every budget, the gate and the privacy switch; a recipe never raises a source's budget; costly recipes show page loads per open before you confirm; writes inside a mashup go to the item's own source; shared recipes strip people and personal rules.
+
+**As built (Nov 12, 2026):**
+
+```
+view .md -> ## Match in words -> fast model -> {kind, lead, target} -> checked against the view's own sources
+  -> view page: items read as usual -> recipe -> rank -> cards with related items and mentions -> lens
+```
+
+| Piece | Built | Not verified |
+|---|---|---|
+| Match section | `## Match` in plain words, compiled by the fast model (`compile_match`) to a kind, and for mentions and enrich a lead and a target among the view's own sources, families (`youtube`) and stores (`shop:amazon.com`); a pair the view does not have is a warning and a union. No Match, no model call. Match is a section chat edits may change, and `/share` and imports keep it | Real model wording |
+| same_story | One card per story (the L2 clusters, or one URL), with its copies from the other sources under it: "same story on blog" | |
+| same_person | Items grouped by person: a linked account (`* Maya Kim: x @maya, facebook @maya.kim`, or a bare `@handle` for any site) groups under the name; an unlinked account stays its own ("Sam Lee on x") however alike the names. `/people` suggests accounts on two sites with one full name as a change to people.md you confirm; avatars, bio links and mutual mentions do not suggest yet | Suggestions from avatars, bio links, mutual mentions |
+| same_product | One card per product, its cheapest listing, the product's other listings under it ("also at amazon.com", each store once): the same listing, a barcode number in the item's fields or a model number in the title (WH-1000XM5 is WH1000XM5; sizes such as 16GB or 1080p are not models) join for sure; titles alike across different stores join as "possible match"; titles with different numbers never do | |
+| mentions | The fast model reads the lead source's posts in the background, ten a call, once each, for the names of things they mention (data, never instructions). A name is matched against what openMoi already holds from the target store (a model number, or most of its words: found; some: possible match). The rest show Look up: one press reads that store's search page once, within the site's budget, and the name is found there or marked not found, never looked up again. A view reads no store page on its own: its summary says so. At most 10 lookups wait per view | Real store pages in a real session |
+| enrich | The lead source's items, each with up to five items of the target source about it (a shared model number, or titles alike), from what openMoi already read | |
+| time_window | Compiles, then warns that a Day board needs the calendar | Waits for L8 |
+| Lens | Related items show under a card and open their own original; mentions show with their state and a Look up button; after a lookup the shown cards update in place. Look up needs your click and is paced per name | |
+
+Two changes to the data above: `resolved_at` stays empty while a name waits to be looked up, and a second small table, `mention_checks`, records which posts were read for names, so a post naming nothing is not read again.
 
 ## 24. L8 Native apps and System OS `[not built]`
 

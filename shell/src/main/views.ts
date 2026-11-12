@@ -244,6 +244,25 @@ export class ViewController {
     return true
   }
 
+  // Look up on a name a post mentions: the brain adds its store's search page to the view's page sources, which are
+  // read now (only the ones not read lately), and the view shows what was found.
+  private async look_up(context: LensContext, item: Item, entity: string): Promise<void> {
+    try {
+      const started = await this.brain.lookup(context.view_id, item.item_id, entity)
+      this.hooks.notify(`Looking up "${started.entity}" on ${started.site}.`)
+    } catch (error) {
+      this.hooks.notify(`Could not look it up: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+    await this.refresh(context, false)
+    // Cards already shown learn in place what was found, without the view starting over.
+    await context.serial(async () => {
+      const page = await this.brain.view_page(context.view_id, [])
+      const shown = page.items.filter((view_item) => context.rendered.has(view_item.item.item_id))
+      if (shown.length) context.send({ type: "update", items: shown, cursor: null })
+    })
+  }
+
   // An item an action changed (liked, followed) shows its new state in every lens showing it.
   item_changed(item: Item): void {
     for (const context of this.lenses.all()) {
@@ -516,7 +535,13 @@ export class ViewController {
 
   async on_event(context: LensContext, message: LensToHost): Promise<void> {
     const item = "item_id" in message ? context.rendered.get(message.item_id) : undefined
-    if (message.type === "open" && item) {
+    const related = message.type === "open" && !item ? context.related.get(message.item_id) : undefined
+    if (message.type === "open" && related) {
+      await this.brain.events([{ view_id: context.view_id, item_id: message.item_id, event_kind: "open" }])
+      this.hooks.open_original(related)
+    } else if (message.type === "lookup" && item) {
+      await this.look_up(context, item, message.entity)
+    } else if (message.type === "open" && item) {
       const recorded = await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "open" }])
       this.hooks.open_original(item.url)
       if (recorded?.notes?.includes(item.item_id)) this.take_note(item).catch((error) => this.hooks.notify(`No note was taken: ${error}`))

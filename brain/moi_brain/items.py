@@ -47,9 +47,33 @@ class Item(BaseModel):
     extra: dict[str, str] = Field(default_factory=dict)
 
 
+class Related(BaseModel):
+    """Another item a recipe shows with a card: a copy of the same story, the same product in another store, what a
+    post mentions, a review video. Opening it opens its own original; acting on it acts on its own site."""
+
+    item_id: str
+    source_id: str
+    title: str
+    url: str
+    price_text: str = ""
+    # Why it is here, in a few words: "same story", "cheaper at amazon.com", "possible match", "mentions: air fryer".
+    label: str = ""
+
+
+class Mention(BaseModel):
+    """Something a post names that a mentions recipe looks up: found, a possible match, being looked up, not found, or
+    waiting for you to press Look up (can_look_up)."""
+
+    entity: str
+    status: Literal["found", "possible", "looking", "not_found", "unresolved"]
+    can_look_up: bool = False
+
+
 class ViewItem(BaseModel):
     item: Item
     reasons: list[str] = Field(default_factory=list)
+    related: list[Related] = Field(default_factory=list)
+    mentions: list[Mention] = Field(default_factory=list)
     # The value a group_by rule groups this item under; the lens heads each run of one group.
     group: str | None = None
     # A summarize_only rule matched: the card shows the summary in place of the item's own text.

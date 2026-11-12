@@ -18,6 +18,11 @@
   .text { color: var(--text); opacity: 0.88; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
   .details { font-weight: 600; font-size: 14px; }
   .price_note { font-size: 12.5px; color: var(--accent); }
+  .related { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+  .related_item { border: none; background: none; color: var(--text); text-align: left; padding: 2px 0; font-size: 12.5px; cursor: pointer; }
+  .related_item .related_label { color: var(--muted); }
+  .mentions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+  .look_up { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; cursor: pointer; }
   .summary { border-left: 3px solid var(--accent); padding-left: 8px; margin-top: 6px; }
   .watching { font-size: 13px; opacity: 0.8; margin-top: 4px; }
   .summary.pending { color: var(--muted); font-style: italic; }
@@ -149,6 +154,8 @@
     const details = [item.extra.price_text, item.extra.rating_text, item.extra.site].filter(Boolean).join(" · ")
     if (details) body.append(element("div", "details", details))
     if (item.extra.price_note) body.append(element("div", "price_note", item.extra.price_note))
+    if ((view_item.mentions || []).length) body.append(mention_row(item, view_item.mentions))
+    if ((view_item.related || []).length) body.append(related_list(view_item.related))
     if ((item.available_actions || []).length) body.append(action_bar(item))
     const row = element("div", "row")
     const chips = element("div", "chips")
@@ -177,6 +184,41 @@
     node.addEventListener("click", () => moi.open(item.item_id))
     seen_observer.observe(node)
     return node
+  }
+
+  // What a recipe shows with a card: the same story elsewhere, the product in another store, what a post mentions.
+  // Each opens its own original.
+  function related_list(related) {
+    const list = element("div", "related")
+    for (const entry of related) {
+      const link = element("button", "related_item")
+      link.dataset.relatedId = entry.item_id
+      link.append(element("span", "related_label", `${entry.label}: `), document.createTextNode([entry.title, entry.price_text].filter(Boolean).join(" · ")))
+      link.addEventListener("click", (event) => {
+        event.stopPropagation()
+        moi.open(entry.item_id)
+      })
+      list.append(link)
+    }
+    return list
+  }
+
+  const MENTION_STATUS = { found: "found", possible: "possible match", looking: "looking it up", not_found: "not found", unresolved: "not looked up" }
+
+  // What a post names, and for one not looked up yet a Look up button: one search page, only when you press it.
+  function mention_row(item, mentions) {
+    const row = element("div", "mentions")
+    for (const mention of mentions) {
+      row.append(element("span", "mention", `${mention.entity}: ${MENTION_STATUS[mention.status] || mention.status}`))
+      if (!mention.can_look_up) continue
+      const button = element("button", "look_up", `Look up ${mention.entity}`)
+      button.addEventListener("click", (event) => {
+        event.stopPropagation()
+        moi.lookup(item.item_id, mention.entity)
+      })
+      row.append(button)
+    }
+    return row
   }
 
   function is_youtube(item) {
@@ -396,6 +438,13 @@
         const acts = body.querySelector(".acts")
         if (acts && (view_item.item.available_actions || []).length) acts.replaceWith(action_bar(view_item.item))
         if (view_item.item.extra.blocks && !body.querySelector(".read_here")) body.querySelector(".less").before(read_here_button(node, view_item.item))
+        if (Array.isArray(view_item.mentions) || Array.isArray(view_item.related)) {
+          for (const old of body.querySelectorAll(".mentions, .related")) old.remove()
+          const found = []
+          if ((view_item.mentions || []).length) found.push(mention_row(view_item.item, view_item.mentions))
+          if ((view_item.related || []).length) found.push(related_list(view_item.related))
+          if (found.length) (body.querySelector(".acts") || body.querySelector(".row")).before(...found)
+        }
         for (const old of body.querySelectorAll(".summary, .watching")) old.remove()
         if (node.dataset.summaryOnly === "1" && view_item.item.extra.summary) for (const text of body.querySelectorAll(".text")) text.remove()
         body.querySelector(".row").before(...summary_parts(view_item.item, node.dataset.summaryOnly === "1"))

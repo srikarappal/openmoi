@@ -151,6 +151,16 @@ export class ChatController {
         this.say(`Saved a copy of ${view_id} to send: ${path}. People, following lists and watched pages are left out.`)
         return
       }
+      case "people": {
+        const found = await this.brain.people_suggest()
+        if (!found.proposal) {
+          this.say("No accounts look like one person yet: openMoi suggests a link when one full name posts on two sites.")
+          return
+        }
+        const more = found.more ? ` (${found.more} more: say /people again after this one.)` : ""
+        this.add({ role: "moi", text: `${found.proposal.reply}${more}`, proposal: found.proposal, status: "pending" })
+        return
+      }
       case "help":
         this.say(help_text())
         return

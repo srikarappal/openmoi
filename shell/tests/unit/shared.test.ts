@@ -172,6 +172,7 @@ describe("parse_lens_message", () => {
     [{ type: "highlight", item_id: "a", quote: "a line", note: "" }, { type: "highlight", item_id: "a", quote: "a line", note: "" }],
     [{ type: "act", item_id: "a", action: "like" }, { type: "act", item_id: "a", action: "like", text: "" }],
     [{ type: "act", item_id: "a", action: "reply", text: "hi" }, { type: "act", item_id: "a", action: "reply", text: "hi" }],
+    [{ type: "lookup", item_id: "a", entity: "Instant Pot Duo", x: 1 }, { type: "lookup", item_id: "a", entity: "Instant Pot Duo" }],
   ])("accepts %j", (raw, expected) => {
     expect(parse_lens_message(raw)).toEqual(expected)
   })
@@ -196,6 +197,10 @@ describe("parse_lens_message", () => {
     { type: "act", item_id: "a", action: "Place Order" },
     { type: "act", item_id: "a", action: "like", text: "x".repeat(6000) },
     { type: "act", item_id: "a" },
+    { type: "lookup", item_id: "a" },
+    { type: "lookup", item_id: "a", entity: "   " },
+    { type: "lookup", item_id: "a", entity: "x".repeat(101) },
+    { type: "lookup", entity: "Instant Pot" },
   ])("rejects %j", (raw) => {
     expect(parse_lens_message(raw)).toBeNull()
   })

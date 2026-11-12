@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import SEARCH_LIMIT, Brain, CollectionInfo, ShopStart, ContentWanted, MineRequest, MomentKind, Overview, PageSource, SearchHit, ViewPage, ViewSchedule, WatchReport
+from moi_brain.brain import SEARCH_LIMIT, Brain, CollectionInfo, ContentWanted, LookupStart, MineRequest, MomentKind, Overview, PageSource, PeopleReply, SearchHit, ShopStart, ViewPage, ViewSchedule, WatchReport
 from moi_brain.content import MAX_CONTENT
 from moi_brain.watch import MAX_WATCH_TEXT
 from moi_brain.mirror import Mirror
@@ -410,6 +410,22 @@ class ShopRequest(BaseModel):
 @router.post("/shop")
 def shop(body: ShopRequest, brain: BrainDep) -> ShopStart:
     return brain.shop(body.query, body.view_id)
+
+
+class LookupRequest(BaseModel):
+    view_id: str = Field(min_length=1, max_length=100)
+    item_id: str = Field(min_length=1, max_length=100)
+    entity: str = Field(min_length=1, max_length=100)
+
+
+@router.post("/lookup")
+def lookup(body: LookupRequest, brain: BrainDep) -> LookupStart:
+    return brain.lookup(body.view_id, body.item_id, body.entity)
+
+
+@router.post("/people/suggest")
+def people_suggest(brain: BrainDep) -> PeopleReply:
+    return brain.people_reply()
 
 
 class AskRequest(BaseModel):

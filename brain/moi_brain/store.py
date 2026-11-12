@@ -85,6 +85,21 @@ CREATE TABLE IF NOT EXISTS moments (
     kind TEXT NOT NULL CHECK (kind IN ('visit', 'extended', 'early'))
 )
 """
+# What a mentions recipe found an item naming, and what it was looked up as in the recipe's target source: a target
+# item once found (or found to be missing: resolved with no target), nothing while it waits.
+ENTITY_LINKS_TABLE = """
+CREATE TABLE IF NOT EXISTS entity_links (
+    item_id TEXT NOT NULL,
+    entity TEXT NOT NULL,
+    target_source_id TEXT NOT NULL,
+    target_item_id TEXT,
+    confidence REAL NOT NULL,
+    resolved_at TEXT,
+    PRIMARY KEY (item_id, entity, target_source_id)
+)
+"""
+# Items a mentions recipe already read for names, with or without any, so none is read twice.
+MENTION_CHECKS_TABLE = "CREATE TABLE IF NOT EXISTS mention_checks (item_id TEXT NOT NULL, target_source_id TEXT NOT NULL, checked_at TEXT NOT NULL, PRIMARY KEY (item_id, target_source_id))"
 FOLLOW_TTL = timedelta(days=30)
 HISTORY_PREFIX = "history:"
 SEARCH_WORD = re.compile(r"[^\W_]+", re.UNICODE)
@@ -98,6 +113,11 @@ INDEXES = (
 
 def search_row(item: Item) -> tuple[str, str, str, str]:
     return (item.item_id, item.title or "", item.text or "", " ".join(part for part in (item.author_name, item.author_handle) if part))
+
+
+def like_prefix(text: str) -> str:
+    """Text for a LIKE pattern that matches only itself: its % and _ escaped."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def iso(moment: datetime | None) -> str | None:
@@ -125,6 +145,8 @@ class Store:
                 self.connection.execute(VECTORS_TABLE)
                 self.connection.execute(COLLECTIONS_TABLE)
                 self.connection.execute(PRICES_TABLE)
+                self.connection.execute(ENTITY_LINKS_TABLE)
+                self.connection.execute(MENTION_CHECKS_TABLE)
                 self.index_for_search()
                 for index in INDEXES:
                     self.connection.execute(index)
@@ -255,6 +277,60 @@ class Store:
                 "SELECT item_json, seen_at FROM items WHERE COALESCE(published_at, fetched_at) >= ?", (iso(since),)
             ).fetchall()
         return [(Item.model_validate_json(item_json), datetime.fromisoformat(seen_at) if seen_at else None) for item_json, seen_at in rows]
+
+    def unchecked_for_mentions(self, item_ids: list[str], target: str) -> list[str]:
+        """The items not yet read for what they name, for one target source."""
+        if not item_ids:
+            return []
+        marks = ", ".join("?" for _ in item_ids)
+        with self.lock:
+            done = {row[0] for row in self.connection.execute(f"SELECT item_id FROM mention_checks WHERE target_source_id = ? AND item_id IN ({marks})", (target, *item_ids))}
+        return [item_id for item_id in item_ids if item_id not in done]
+
+    def add_mentions(self, target: str, found: dict[str, list[str]], now: datetime) -> None:
+        """What each item names, waiting to be looked up in the target source; the items count as read for names."""
+        with self.lock, self.connection:
+            self.connection.executemany(
+                "INSERT OR IGNORE INTO entity_links (item_id, entity, target_source_id, target_item_id, confidence, resolved_at) VALUES (?, ?, ?, NULL, 0, NULL)",
+                [(item_id, entity, target) for item_id, entities in found.items() for entity in entities],
+            )
+            self.connection.executemany(
+                "INSERT OR REPLACE INTO mention_checks (item_id, target_source_id, checked_at) VALUES (?, ?, ?)",
+                [(item_id, target, iso(now)) for item_id in found],
+            )
+
+    def mentions_of(self, item_ids: list[str], target: str) -> dict[str, list[tuple[str, str | None, float, datetime | None]]]:
+        """Per item: (entity, target item id, confidence, resolved at) for what it names, in the order found."""
+        if not item_ids:
+            return {}
+        marks = ", ".join("?" for _ in item_ids)
+        with self.lock:
+            rows = self.connection.execute(
+                f"SELECT item_id, entity, target_item_id, confidence, resolved_at FROM entity_links WHERE target_source_id = ? AND item_id IN ({marks}) ORDER BY rowid",
+                (target, *item_ids),
+            ).fetchall()
+        found: dict[str, list[tuple[str, str | None, float, datetime | None]]] = {}
+        for item_id, entity, target_item_id, confidence, resolved_at in rows:
+            found.setdefault(item_id, []).append((entity, target_item_id, confidence, datetime.fromisoformat(resolved_at) if resolved_at else None))
+        return found
+
+    def resolve_mention(self, item_id: str, entity: str, target: str, target_item_id: str | None, confidence: float, now: datetime) -> None:
+        """A mention looked up: found as an item of the target source, or (no target item) not there."""
+        with self.lock, self.connection:
+            self.connection.execute(
+                "UPDATE entity_links SET target_item_id = ?, confidence = ?, resolved_at = ? WHERE item_id = ? AND entity = ? AND target_source_id = ?",
+                (target_item_id, confidence, iso(now), item_id, entity, target),
+            )
+
+    def items_from_family(self, ref: str, limit: int) -> list[Item]:
+        """The newest items of a source or of its family (every search on shop:amazon.com), whatever their age."""
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT item_json FROM items WHERE source_id = ? OR source_id LIKE ? ESCAPE '\\' OR source_id LIKE ? ESCAPE '\\' OR source_id LIKE ? ESCAPE '\\' "
+                "ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT ?",
+                (ref, *(f"{like_prefix(ref)}{separator}%" for separator in (":", "/", "?")), limit),
+            ).fetchall()
+        return [Item.model_validate_json(row[0]) for row in rows]
 
     def update_extra(self, item_id: str, values: dict[str, str]) -> None:
         with self.lock, self.connection:

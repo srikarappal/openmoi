@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator
 
@@ -19,7 +20,13 @@ from moi_brain.collections import COLLECTION_PREFIX, collection_name, is_collect
 from moi_brain.config import Paths
 from moi_brain.feeds import CHANNEL_ID, read_takeout
 from moi_brain.files import read_text, write_atomic
-from moi_brain.items import JUDGED_PREFIX, page_source_id, rss_source_id, watch_source_id, youtube_source_id
+from moi_brain.items import (
+    JUDGED_PREFIX,
+    page_source_id,
+    rss_source_id,
+    watch_source_id,
+    youtube_source_id,
+)
 from moi_brain.lenses import SITE_PREFIX
 from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import bullets, parse_sections, section_text
@@ -27,7 +34,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "17"
+COMPILER_VERSION = "18"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
@@ -61,6 +68,24 @@ MIN_WATCH_MINUTES = 5
 EVERY = re.compile(r"\bevery\s+(\d+)?\s*(minutes?|mins?|hours?|hrs?|days?)\b", re.IGNORECASE)
 MAX_VISIT_MINUTES = 600
 RETRY_AFTER_SECONDS = 60.0
+MatchKind = Literal["union", "same_story", "same_person", "same_product", "mentions", "enrich", "time_window"]
+# Kinds that join two of a view's sources: the lead's items show; the target's are looked up for them or attached.
+PAIRED_KINDS = ("mentions", "enrich")
+# What a recipe costs in page loads, said before you confirm it: only mentions ever reads more pages, and only when you ask.
+MATCH_COST = {"mentions": "Opening it reads no store pages; each Look up you press reads one search page."}
+MATCH_PROMPT = """You read how a view of openMoi, a personal feed reader, combines its sources, written in plain words.
+Reply with one JSON object: {"kind": "<kind>", "lead": <source or null>, "target": <source or null>, "summary": "<one short sentence>"}.
+kind is one of:
+* "same_story": items about the same story across sources, side by side ("each story with its articles and videos").
+* "same_person": items by one person across networks, one stream per person ("my friends everywhere", "a creator hub").
+* "same_product": listings of one product across stores, cheapest first ("a price board").
+* "mentions": items of the lead source that mention things (products, places, titles) looked up in the target source
+  ("products my friends post about, looked up on Amazon": lead is the friends' source, target the store).
+* "enrich": items of the target source attached to each item of the lead source ("each product with its review videos":
+  lead is the store, target the video source).
+* "time_window": items grouped around times such as meetings.
+* "union": anything else, all items in one stream.
+lead and target are names from the given sources, only for mentions and enrich; else null."""
 RULES_PROMPT = """You turn rules written in plain words into JSON for openMoi, a personal feed reader.
 Reply with one JSON object: {"rules": [<rule>, ...], "judgments": [<judgment>, ...], "summary": "<one short sentence>"}.
 
@@ -292,11 +317,23 @@ class SourceRef(BaseModel):
     watches: list[WatchRef] = Field(default_factory=list)
 
 
+class MatchSpec(BaseModel):
+    """How a view combines its sources beyond a union (its Match section)."""
+
+    kind: MatchKind = "union"
+    # For mentions and enrich: the source whose items show, and the one looked up for them or attached to them, as a
+    # source id or family ("x", "page:facebook.com", "youtube", "shop:amazon.com").
+    lead: str | None = Field(default=None, max_length=200)
+    target: str | None = Field(default=None, max_length=200)
+    summary: str = Field(default="", max_length=300)
+
+
 class CompiledView(BaseModel):
     view_id: str
     title: str
     file_hash: str
     sources: list[SourceRef] = Field(default_factory=list)
+    match: MatchSpec = Field(default_factory=MatchSpec)
     rules: list[Rule] = Field(default_factory=list)
     judgments: list[Judgment] = Field(default_factory=list)
     time: TimeSpec = Field(default_factory=TimeSpec)
@@ -466,6 +503,27 @@ def source_ids(sources: list[SourceRef]) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
+def match_sources(sources: list[SourceRef]) -> list[str]:
+    """The names a Match section may join: each source, its family (youtube for every channel) and each store."""
+    ids = source_ids(sources)
+    families = [source_id.split(":", 1)[0] for source_id in ids if source_id.startswith("youtube:")]
+    stores = [f"shop:{(urlparse(store).hostname or '').removeprefix('www.')}" for source in sources for store in source.stores]
+    return list(dict.fromkeys([*ids, *families, *stores]))
+
+
+def match_messages(match_text: str, names: list[str]) -> list[dict[str, str]]:
+    return [{"role": "system", "content": MATCH_PROMPT}, {"role": "user", "content": json.dumps({"match": match_text, "sources": names})}]
+
+
+def checked_match(draft: MatchSpec, names: list[str]) -> tuple[MatchSpec, list[str]]:
+    """The match as far as this view's sources allow: mentions and enrich need two different sources of the view."""
+    if draft.kind not in PAIRED_KINDS:
+        return draft.model_copy(update={"lead": None, "target": None}), []
+    if draft.lead not in names or draft.target not in names or draft.lead == draft.target:
+        return MatchSpec(), [f"Match: {draft.kind.replace('_', ' ')} needs two of this view's sources, one whose items show and one to look things up in."]
+    return draft, []
+
+
 def judged_names(rule: Rule) -> set[str]:
     return {condition.field.removeprefix(JUDGED_PREFIX) for condition in rule.conditions() if condition.field.startswith(JUDGED_PREFIX)}
 
@@ -622,20 +680,38 @@ class Compiler:
         except LlmError as error:
             rules, judgments, rules_summary, succeeded = (previous.rules if previous else []), (previous.judgments if previous else []), "", False
             warnings.append(f"Rules not updated: {error}")
+        match_text = section_text(sections, "match").strip()
+        try:
+            if match_text and not use_model:
+                raise LlmError("still compiling")
+            match, match_warnings = self.compile_match(match_text, sources)
+            warnings += match_warnings
+        except LlmError as error:
+            match, succeeded = (previous.match if previous else MatchSpec()), False
+            warnings.append(f"Match not updated: {error}")
         compiled = CompiledView(
             view_id=view_id,
             title=title or view_id,
             file_hash=file_hash,
             sources=sources,
+            match=match,
             rules=rules,
             judgments=judgments,
             time=time,
             explore=not any(NO_EXPLORE.search(line) for line in bullets(section_text(sections, "rules"))),
             layout=section_text(sections, "layout"),
-            summary=" ".join(part for part in (describe_sources(sources), rules_summary) if part),
+            summary=" ".join(part for part in (describe_sources(sources), match.summary, MATCH_COST.get(match.kind, ""), rules_summary) if part),
             warnings=warnings,
         )
         return compiled, succeeded
+
+    def compile_match(self, match_text: str, sources: list[SourceRef]) -> tuple[MatchSpec, list[str]]:
+        """The Match section in plain words as a match kind; none written is a union, with no model call."""
+        if not match_text:
+            return MatchSpec(), []
+        names = match_sources(sources)
+        draft = self.gateway.complete_json("fast", "compile_match", match_messages(match_text[:2000], names), True, MatchSpec)
+        return checked_match(draft, names)
 
     def compile_rules(self, rules_text: str, sources: list[SourceRef]) -> tuple[list[Rule], list[Judgment], str]:
         likes, dislikes = self.memory.likes(), self.memory.dislikes()

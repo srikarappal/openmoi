@@ -49,9 +49,29 @@ export interface SearchHit {
   score: number
 }
 
+// Another item a recipe shows with a card: a copy of the same story, the same product in another store, what a post
+// mentions, a review video. Opening it opens its own original.
+export interface Related {
+  item_id: string
+  source_id: string
+  title: string
+  url: string
+  price_text: string
+  label: string
+}
+
+// Something a post names that a mentions recipe looks up.
+export interface Mention {
+  entity: string
+  status: "found" | "possible" | "looking" | "not_found" | "unresolved"
+  can_look_up: boolean
+}
+
 export interface ViewItem {
   item: Item
   reasons: string[]
+  related?: Related[]
+  mentions?: Mention[]
   // The value a group_by rule groups this item under; the lens heads each run of one group.
   group?: string | null
   // A summarize_only rule matched: the card shows the summary in place of the item's own text.
@@ -224,6 +244,7 @@ export type LensToHost =
   | { type: "unsave"; item_id: string; collection: string }
   | { type: "highlight"; item_id: string; quote: string; note: string }
   | { type: "act"; item_id: string; action: string; text: string }
+  | { type: "lookup"; item_id: string; entity: string }
 
 export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability" | "text" | "transcript" | "structured"
 
@@ -354,6 +375,19 @@ export interface ShopStart {
   view_id: string
   query: string
   created: boolean
+}
+
+export interface LookupStart {
+  view_id: string
+  entity: string
+  site: string
+}
+
+// Accounts on different sites that look like one person, as a change to people.md for you to confirm.
+export interface PeopleReply {
+  proposal: Proposal | null
+  suggestion: { name: string; accounts: Array<[string, string]>; items: number } | null
+  more: number
 }
 
 export interface CollectionInfo {

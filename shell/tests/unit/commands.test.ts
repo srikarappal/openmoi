@@ -36,6 +36,7 @@ describe("parse_chat", () => {
     ["/export md watch later", { kind: "export", format: "md", collection: "watch later" }],
     ["/import https://gist.example/ai.md", { kind: "import", url: "https://gist.example/ai.md" }],
     ["/share", { kind: "share" }],
+    ["/people", { kind: "people" }],
     ["/google", { kind: "google", connect: false }],
     ["/google connect", { kind: "google", connect: true }],
     ["/newview Tech", { kind: "new_view", view_id: "tech", title: "Tech", description: "" }],

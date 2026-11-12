@@ -30,6 +30,8 @@ import type {
   SearchHit,
   CollectionInfo,
   Answer,
+  LookupStart,
+  PeopleReply,
   ShopStart,
   ActionDecision,
   AgentKind,
@@ -214,6 +216,14 @@ export class BrainClient {
 
   action_result(request_id: string, outcome: "done" | "failed" | "undone" | "declined", detail = ""): Promise<{ recorded: boolean; item: Item | null }> {
     return this.request("POST", "/actions/result", { request_id, outcome, detail })
+  }
+
+  lookup(view_id: string, item_id: string, entity: string): Promise<LookupStart> {
+    return this.request("POST", "/lookup", { view_id, item_id, entity })
+  }
+
+  people_suggest(): Promise<PeopleReply> {
+    return this.request("POST", "/people/suggest")
   }
 
   shop(query: string, view_id: string): Promise<ShopStart> {

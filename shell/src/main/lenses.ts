@@ -9,11 +9,11 @@ import { forget_lens, lens_preferences } from "./sessions"
 // A lens may open an item or ask for less like it at most this often: a click, not a script looping over items.
 // Less like this is paced per item (2 s) and per lens (one every 500 ms), so two different items in a row both count
 // but a lens firing it for every item does not.
-const ACTION_INTERVAL_MS: Partial<Record<LensToHost["type"], number>> = { open: 800, play: 800, less_like_this: 2_000, save: 300, unsave: 300, highlight: 500, act: 800 }
+const ACTION_INTERVAL_MS: Partial<Record<LensToHost["type"], number>> = { open: 800, play: 800, less_like_this: 2_000, save: 300, unsave: 300, highlight: 500, act: 800, lookup: 800 }
 const LESS_LIKE_THIS_PER_LENS_MS = 500
 // Actions, saves and less like this are paced per item; across items only this short gap per lens, so clicking two
 // cards in a row counts but a lens firing one for every item does not.
-const PER_LENS_MS: Partial<Record<LensToHost["type"], number>> = { less_like_this: LESS_LIKE_THIS_PER_LENS_MS, act: 150, save: 150, unsave: 150 }
+const PER_LENS_MS: Partial<Record<LensToHost["type"], number>> = { less_like_this: LESS_LIKE_THIS_PER_LENS_MS, act: 150, save: 150, unsave: 150, lookup: 150 }
 // Gesture binding: opening an item or less like this counts only this soon after a real click, key press or touch on
 // that lens, as the main process saw it. A lens script can fire its own events but cannot fake these.
 export const GESTURE_WINDOW_MS = 1_000
@@ -55,10 +55,12 @@ function control_script(gesture: Gesture): string {
   const target = gesture.pointer ? `document.elementFromPoint(${gesture.x}, ${gesture.y})` : "document.activeElement"
   return `(() => { const node = ${target}; const control = node && node.closest("[data-action]"); const card = node && node.closest("[data-item-id]"); return { action: control ? control.getAttribute("data-action") : null, item_id: card ? card.getAttribute("data-item-id") : null } })()`
 }
-const NEEDS_GESTURE = new Set<LensToHost["type"]>(["open", "play", "less_like_this", "save", "unsave", "highlight", "act"])
+const NEEDS_GESTURE = new Set<LensToHost["type"]>(["open", "play", "less_like_this", "save", "unsave", "highlight", "act", "lookup"])
 
 export class LensContext {
   readonly rendered = new Map<string, Item>()
+  // Items shown with a card (a copy of the story, the product in another store): the address each opens.
+  readonly related = new Map<string, string>()
   // The collections each rendered item is in, as last sent.
   readonly collections = new Map<string, string[]>()
   ready = false
@@ -74,11 +76,13 @@ export class LensContext {
     const contents_id = this.view.webContents.id
     if (message.type === "render") {
       this.rendered.clear()
+      this.related.clear()
       this.collections.clear()
       forget_media(contents_id)
     }
     for (const view_item of message.items) {
       this.rendered.set(view_item.item.item_id, view_item.item)
+      for (const related of view_item.related ?? []) this.related.set(related.item_id, related.url)
       if (view_item.collections) this.collections.set(view_item.item.item_id, view_item.collections)
     }
     this.view.webContents.send("moi:lens", { ...message, items: with_media(message.items, (url) => media_url(contents_id, url)) })
@@ -157,7 +161,7 @@ export class LensManager {
     const per_lens = PER_LENS_MS[message.type]
     const paces: Array<[string, number]> = [[`${context.key}\0${message.type}`, per_lens ?? interval]]
     if (per_lens !== undefined && "item_id" in message) {
-      const kind = message.type === "act" ? message.action : ""
+      const kind = message.type === "act" ? message.action : message.type === "lookup" ? message.entity : ""
       paces.push([`${context.key}\0${message.type}\0${message.item_id}\0${kind}`, interval])
     }
     if (paces.some(([key, wait]) => now - (this.last_action.get(key) ?? 0) < wait)) return false

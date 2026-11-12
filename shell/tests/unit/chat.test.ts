@@ -383,6 +383,21 @@ describe("ChatController sharing", () => {
   })
 })
 
+describe("ChatController people", () => {
+  it("offers a link between accounts that look like one person as a change to confirm, or says there is none", async () => {
+    const proposal = { proposal_id: "pp", view_id: "feed", changes: [], lens_action: null, reply: "Sam Lee on facebook (@sam.lee), x (@sam) look like one person. Link them in people.md?" }
+    const people_suggest = vi.fn(async () => ({ proposal, suggestion: { name: "Sam Lee", accounts: [["facebook", "sam.lee"], ["x", "sam"]], items: 3 }, more: 1 }))
+    const { chat } = make_chat({ people_suggest } as unknown as Partial<BrainClient>)
+    await chat.send("/people")
+    const [entry] = chat.list().filter((candidate) => candidate.proposal)
+    expect(entry.text).toBe(`${proposal.reply} (1 more: say /people again after this one.)`)
+    expect(entry.status).toBe("pending")
+    people_suggest.mockResolvedValueOnce({ proposal: null, suggestion: null, more: 0 } as never)
+    await chat.send("/people")
+    expect(last_reply(chat)).toBe("No accounts look like one person yet: openMoi suggests a link when one full name posts on two sites.")
+  })
+})
+
 describe("ChatController history imports", () => {
   it("stores a dropped export as your history and says how to show it", async () => {
     const import_history = vi.fn(async () => ({ source_id: "history:amazon", stored: 42 }))
