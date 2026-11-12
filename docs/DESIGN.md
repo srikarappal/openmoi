@@ -296,6 +296,7 @@ The few decisions later stages build on. These must be right in the MVP; everyth
 | X | Handwritten extractor spec for the home timeline, run in a reader tab in your Chrome (or openMoi's session) | 3 |
 | Any website ("Mine") | Readability for articles; generated extractor spec for listings | 3 |
 | Any site's feed page (`* Page: <url>` in Sources) | A reader tab that keeps scrolling as you do: Instagram, Facebook, a YouTube home, any listing; its extractor is generated from the page the first time. `(newest first)` after the address marks a page whose posts come in order, read until it reaches what was read before (34.6) | 3 |
+| Who you follow (`* Following: <url>` in Sources) | A page listing the accounts you follow, read about once a week into who you know (34.4); never shown as items | 3 |
 
 ### 9.3 Brain (Python 3.12, sync)
 
@@ -575,7 +576,12 @@ CREATE TABLE events (
 );
 ```
 
-Items expire after 30 days unless opened. Everything else the MVP stores is a file.
+```sql
+CREATE TABLE follows (host TEXT NOT NULL, handle TEXT NOT NULL, list_url TEXT NOT NULL, seen_at TEXT NOT NULL, PRIMARY KEY (host, handle, list_url));
+CREATE TABLE follow_lists (list_url TEXT PRIMARY KEY, read_at TEXT NOT NULL);
+```
+
+Items expire after 30 days unless opened; an account no following list named for 30 days is dropped. Everything else the MVP stores is a file.
 
 ### 11.3 Brain HTTP API
 
@@ -585,6 +591,7 @@ Items expire after 30 days unless opened. Everything else the MVP stores is a fi
 | `POST /refresh {view_id, force}` | Start the rung 1 refresh in a thread; returns the page sources the shell should read |
 | `POST /ingest {source_id, records, page_url, view_id?, kind?}` | Raw records to items; with a view id, also the Mine page ranked in page order and whether its lens is stale |
 | `POST /view/{view_id} {exclude_ids}` | Ranked page with reasons, excluding what the lens already shows, plus `refreshing`, `version`, `lens_stale` and `keep_rate` (per source, the share its rules let through, which sizes read ahead) |
+| `POST /follows {list_url, records}` | Accounts from a page listing who you follow (34.4) |
 | `GET /schedule`, `POST /schedule/done {view_id, edition}` | Views with a Time section, their editions and any read due now (never asks the model); a finished edition read |
 | `POST /events {events}` | `open`, `seen`, `less_like_this`; opens also go into the journal |
 | `POST /edit {view_id, text, item_id?, scope}` | Proposed section edits to .md files, shown as diffs; `scope` (memory, rules, sources, layout, view) limits what may change |
@@ -618,7 +625,7 @@ class Judgment(BaseModel):
 
 
 class Condition(BaseModel):
-    field: str  # source_id, author_handle, topic, media_kind, text, age_hours or judged:<name>
+    field: str  # source_id, author_handle, author_in, topic, media_kind, text, age_hours or judged:<name>
     op: Literal["eq", "in", "contains", "gt", "lt"]
     value: str | float | list[str]
 
@@ -798,7 +805,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 482 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 376 shell and extension unit (97% of lines), 30 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 502 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 379 shell and extension unit (97% of lines), 31 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -1392,7 +1399,7 @@ Five building blocks and four smaller pieces cover all 12. Two of the gaps are g
 ### 34.4 People and duplicates across sites (4, 5, 6, 8, 11)
 
 * **Missing:** `author_handle` belongs to one platform and duplicates merge only on an identical URL (11.2).
-* **People:** `memory/people.md` already holds handles per source and L7's identity links fill it. "People you know" needs your following lists: each platform's Following page read weekly as a `Page:` source into a `follows (source_id, handle, seen_at)` table, machine state rather than memory. `Condition.field` gains `author_in` (`people` or `following`); a stranger is an author in neither.
+* **People `[built]`:** `memory/people.md` already holds handles per source and L7's identity links fill it. "People you know" needs your following lists: each platform's Following page read weekly as a `Page:` source into a `follows (source_id, handle, seen_at)` table, machine state rather than memory. `Condition.field` gains `author_in` (`people` or `following`); a stranger is an author in neither. As built: a `Following:` source is read to its end within the daily budget; accounts are keyed by site (www., mobile. and twitter.com links count as one site); `known` means either circle; a rule about people with no one known yet warns instead of silently emptying the view. The rules compiler keeps a kind of item ("likes and trending notifications") as a judgment rather than hiding a whole source; checked with Nemotron 3.5, 3 of 3 runs.
 * **Duplicates:** L2 clusters for stories (simhash, then embeddings within 48 h); L7 `same_product` extended to listings (address, price and first image). One card per cluster with "also on".
 
 ### 34.5 Full content (9, 10, 11)
@@ -1433,8 +1440,8 @@ Facebook and Instagram through reader tabs are untested on the real sites (4, 5)
 | L1 Facebook (17) | Assist mode by default | Chosen per source in the site policy (34.7) |
 | View file (9.4) | Sources, Rules, Layout | Done: adds an optional Time section |
 | Sources (9.2) | RSS, YouTube, X, `Page:` | Adds `Watch:` and (done) a `(newest first)` mark on `Page:` |
-| Condition (11.4) | 6 fields | Adds `judged:<name>` and `author_in` |
-| Store (11.2) | 2 tables | Adds `follows` and `source_days` |
+| Condition (11.4) | 6 fields | Done: adds `judged:<name>` and `author_in` |
+| Store (11.2) | 2 tables | Adds `follows` (done) and `source_days` |
 | Page operations | extract, scroll, challenge, skeleton, readability | Adds transcript |
 
 ## 36. Order

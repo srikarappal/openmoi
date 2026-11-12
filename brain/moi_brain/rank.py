@@ -1,18 +1,43 @@
 """Rules plus recency: the whole ranking of the MVP."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from operator import itemgetter
 from typing import Literal
 
 from moi_brain.compile import Condition, Rule
-from moi_brain.items import JUDGED_PREFIX, Item, ViewItem, source_matches
+from moi_brain.items import JUDGED_PREFIX, Item, ViewItem, site_host, source_matches
 
 PAGE_SIZE = 30
 HALF_LIFE_HOURS = 24.0
 RECENT_HOURS = 6.0
-FIELD_LABELS = {"source_id": "source", "author_handle": "author", "media_kind": "media", "age_hours": "age"}
+FIELD_LABELS = {"source_id": "source", "author_handle": "author", "author_in": "author", "media_kind": "media", "age_hours": "age"}
 Order = Literal["recency", "page"]
 Scored = tuple[float, Item, list[Rule]]
+
+
+@dataclass(frozen=True)
+class Circles:
+    """Who the person knows: handles from memory/people.md (on any site) and (site, handle) pairs they follow."""
+
+    people: frozenset[str] = frozenset()
+    following: frozenset[tuple[str, str]] = frozenset()
+
+    def groups(self, item: Item) -> set[str]:
+        handle = (item.author_handle or "").lower()
+        found = set()
+        if handle and handle in self.people:
+            found |= {"people", "known"}
+        if handle and (site_host(item.url), handle) in self.following:
+            found |= {"following", "known"}
+        return found or {"stranger"}
+
+    @property
+    def empty(self) -> bool:
+        return not (self.people or self.following)
+
+
+NO_CIRCLES = Circles()
 
 
 def age_hours(item: Item, now: datetime) -> float:
@@ -59,10 +84,12 @@ def judged_number(item: Item, field: str, op: str, target: str) -> bool:
     return compare_number(value, op, target)
 
 
-def matches(condition: Condition | None, item: Item, now: datetime) -> bool:
+def matches(condition: Condition | None, item: Item, now: datetime, circles: Circles = NO_CIRCLES) -> bool:
     if condition is None:
         return False
     wanted = wanted_values(condition)
+    if condition.field == "author_in":
+        return bool(circles.groups(item) & set(wanted))
     if condition.field == "age_hours":
         return bool(wanted) and compare_number(age_hours(item, now), condition.op, wanted[0])
     if condition.field.startswith(JUDGED_PREFIX) and condition.op in ("gt", "lt"):
@@ -77,8 +104,8 @@ def matches(condition: Condition | None, item: Item, now: datetime) -> bool:
     return False
 
 
-def applies(rule: Rule, item: Item, now: datetime) -> bool:
-    return matches(rule.when, item, now) and not matches(rule.unless, item, now)
+def applies(rule: Rule, item: Item, now: datetime, circles: Circles = NO_CIRCLES) -> bool:
+    return matches(rule.when, item, now, circles) and not matches(rule.unless, item, now, circles)
 
 
 def plain(value: object) -> str:
@@ -100,7 +127,7 @@ def reasons(item: Item, boosts: list[Rule], now: datetime) -> list[str]:
     return found
 
 
-def apply_limits(scored: list[Scored], rules: list[Rule], now: datetime) -> list[Scored]:
+def apply_limits(scored: list[Scored], rules: list[Rule], now: datetime, circles: Circles = NO_CIRCLES) -> list[Scored]:
     """Keep at most count_per_day matching items per published day on your clock, best scored first.
 
     An item that one limit drops does not use up another limit's allowance."""
@@ -110,7 +137,7 @@ def apply_limits(scored: list[Scored], rules: list[Rule], now: datetime) -> list
     for entry in scored:
         item = entry[1]
         day = (item.published_at or item.fetched_at).astimezone().date().isoformat()
-        allowances = [((index, day), rule.count_per_day) for index, rule in limits if applies(rule, item, now)]
+        allowances = [((index, day), rule.count_per_day) for index, rule in limits if applies(rule, item, now, circles)]
         if all(counts.get(key, 0) < allowed for key, allowed in allowances):
             for key, _ in allowances:
                 counts[key] = counts.get(key, 0) + 1
@@ -118,13 +145,13 @@ def apply_limits(scored: list[Scored], rules: list[Rule], now: datetime) -> list
     return kept
 
 
-def kept_share(items: list[Item], rules: list[Rule], now: datetime) -> dict[str, float]:
+def kept_share(items: list[Item], rules: list[Rule], now: datetime, circles: Circles = NO_CIRCLES) -> dict[str, float]:
     """For each source, the share of its items no hide rule removes: how many raw items it takes to show one."""
     totals: dict[str, int] = {}
     kept: dict[str, int] = {}
     for item in items:
         totals[item.source_id] = totals.get(item.source_id, 0) + 1
-        if not any(rule.do == "hide" and applies(rule, item, now) for rule in rules):
+        if not any(rule.do == "hide" and applies(rule, item, now, circles) for rule in rules):
             kept[item.source_id] = kept.get(item.source_id, 0) + 1
     return {source_id: kept.get(source_id, 0) / total for source_id, total in totals.items()}
 
@@ -150,6 +177,7 @@ def rank(
     exclude_ids: set[str] | frozenset[str] = frozenset(),
     limit: int = PAGE_SIZE,
     order: Order = "recency",
+    circles: Circles = NO_CIRCLES,
 ) -> tuple[list[ViewItem], bool]:
     """A page of view items with reasons, plus whether more remain beyond it.
 
@@ -159,15 +187,15 @@ def rank(
     """
     scored: list[Scored] = []
     for position, item in enumerate(items):
-        if any(rule.do == "hide" and applies(rule, item, now) for rule in rules):
+        if any(rule.do == "hide" and applies(rule, item, now, circles) for rule in rules):
             continue
-        boosts = [rule for rule in rules if rule.do == "boost" and applies(rule, item, now)]
+        boosts = [rule for rule in rules if rule.do == "boost" and applies(rule, item, now, circles)]
         base = 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS) if order == "recency" else 1 - position / (len(items) + 1)
         scored.append((base + sum(rule.weight for rule in boosts), item, boosts))
     scored.sort(key=itemgetter(0), reverse=True)
     scored = best_copy_per_url(scored, exclude_ids)
     already = [entry for entry in scored if entry[1].item_id in exclude_ids]
     candidates = [entry for entry in scored if entry[1].item_id not in exclude_ids]
-    remaining = [entry for entry in apply_limits([*already, *candidates], rules, now) if entry[1].item_id not in exclude_ids]
+    remaining = [entry for entry in apply_limits([*already, *candidates], rules, now, circles) if entry[1].item_id not in exclude_ids]
     page = [ViewItem(item=item, reasons=reasons(item, boosts, now)) for _, item, boosts in remaining[:limit]]
     return page, len(remaining) > limit

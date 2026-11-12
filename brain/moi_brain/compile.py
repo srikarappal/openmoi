@@ -25,14 +25,14 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "6"
+COMPILER_VERSION = "8"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
 NEWEST_FIRST = re.compile(r"newest first|chronological|in order", re.IGNORECASE)
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
 DEFAULT_BOOST = 3.0
-FIXED_FIELDS = ("source_id", "author_handle", "topic", "media_kind", "text", "age_hours")
+FIXED_FIELDS = ("source_id", "author_handle", "author_in", "topic", "media_kind", "text", "age_hours")
 JUDGMENT_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 MAX_QUESTION = 200
 CLOCK = re.compile(r"\b(\d{1,2}):(\d{2})\s*([ap])\.?m\b\.?|\b(\d{1,2}):(\d{2})\b|\b(\d{1,2})\s*([ap])\.?m\b\.?|\b(noon|midnight)\b")
@@ -49,6 +49,8 @@ A condition is {"field": <field>, "op": "eq" | "in" | "contains" | "gt" | "lt", 
 Fields:
 * source_id: where an item comes from. Use one of the given sources, or "x", "youtube" or "rss" for a whole family.
 * author_handle: a handle without @, such as maya.
+* author_in: who the author is to the person: "people" (named in their people file), "following" (an account they follow),
+  "known" (either) or "stranger" (neither). Use eq. "Only people I know" hides author_in stranger.
 * topic: one short lowercase word such as politics, crypto or sports. Items are tagged with every topic you use.
 * media_kind: image, short_video, long_video or video. Shorts and reels are short_video.
 * text: words in the title or text; use op contains.
@@ -64,6 +66,10 @@ Fields:
 "hide", "no" and "never" mean do hide. "first" or "always show" mean boost with weight 10; "more of" means boost with weight 3.
 "at most N a day" means limit with count_per_day N.
 "unless" or "except" becomes the unless condition.
+Test source_id only when the rule names a whole source ("no X", "at most 20 from YouTube"). A kind of item ("likes and
+trending notifications", "job posts", "ads") is a judgment, never a whole source. For example "Hide likes and trending
+notifications" is the judgment {"name": "like_or_trend", "question": "Is this a like or a trending topic rather than a reply
+or a mention?", "answer": "yes_no"} with a rule that hides judged:like_or_trend eq yes.
 view_rules apply to this view. likes are boosts with weight 3 on that topic, author or source; dislikes are hides.
 Skip lines that are not rules. The summary describes every rule in plain words."""
 
@@ -137,6 +143,8 @@ class SourceRef(BaseModel):
     pages: list[str] = Field(default_factory=list)
     # The pages among them whose posts come newest first.
     ordered: list[str] = Field(default_factory=list)
+    # Pages listing the accounts you follow, read about once a week to know who is a stranger.
+    following: list[str] = Field(default_factory=list)
 
 
 class CompiledView(BaseModel):
@@ -178,7 +186,7 @@ def check_view_id(view_id: str) -> str:
 
 def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRef], list[str]]:
     """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://... (newest first)' or a bare feed URL."""
-    has_x, channels, feeds, pages, ordered, warnings = False, [], [], [], [], []
+    has_x, channels, feeds, pages, ordered, following, warnings = False, [], [], [], [], [], []
     for line in bullets(body):
         label, _, rest = line.partition(":")
         key = label.strip().lower()
@@ -196,6 +204,11 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
                 ordered += found_pages
             if not found_pages:
                 warnings.append(f"No page address found in: {line}")
+        elif key == "following":
+            found_lists = URL.findall(rest)
+            following += found_lists
+            if not found_lists:
+                warnings.append(f"No page address found in: {line}")
         elif X_LINE.match(line):
             has_x = True
         else:
@@ -205,8 +218,8 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
         sources.append(SourceRef(source_id="youtube", channels=list(dict.fromkeys(channels))))
     if feeds:
         sources.append(SourceRef(source_id="rss", feeds=list(dict.fromkeys(feeds))))
-    if pages:
-        sources.append(SourceRef(source_id="page", pages=list(dict.fromkeys(pages)), ordered=list(dict.fromkeys(ordered))))
+    if pages or following:
+        sources.append(SourceRef(source_id="page", pages=list(dict.fromkeys(pages)), ordered=list(dict.fromkeys(ordered)), following=list(dict.fromkeys(following))))
     return sources, warnings
 
 
@@ -295,6 +308,8 @@ def describe_sources(sources: list[SourceRef]) -> str:
             parts.append(f"{len(source.feeds)} RSS feed{'s' if len(source.feeds) != 1 else ''}")
         if source.pages:
             parts.append(f"{len(source.pages)} page{'s' if len(source.pages) != 1 else ''}")
+        if source.following:
+            parts.append(f"{len(source.following)} following list{'s' if len(source.following) != 1 else ''}")
     if not parts:
         return "No sources yet."
     listed = parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"

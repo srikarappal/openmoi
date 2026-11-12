@@ -66,6 +66,8 @@ export interface PageSource {
   budget: PilotBudget
   // Posts come newest first: reaching what was read before means nothing newer was missed.
   chronological?: boolean
+  // "follows": a page listing the accounts you follow, read into who you know rather than into items.
+  purpose?: "items" | "follows"
 }
 
 export interface ViewPage {

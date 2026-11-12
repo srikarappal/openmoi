@@ -388,3 +388,46 @@ describe("ViewController nothing missed", () => {
     expect(answers).toEqual([[1], []])
   })
 })
+
+describe("ViewController following lists", () => {
+  const FOLLOWING = { source_id: "page:x.com/me/following", start_url: "https://x.com/me/following", purpose: "follows" } as PageSource
+
+  it("reads a following list to its end into who you know, shows the view again and never reads it ahead", async () => {
+    const { views, context, sources, brain } = make_views([read(5)], [], [FOLLOWING, X_SOURCE])
+    Object.assign(brain, { follows: vi.fn(async () => ({ stored: 2 })), events: vi.fn(async () => ({ recorded: 1 })) })
+    sources.fill.mockImplementationOnce(async (...args: unknown[]) => {
+      const take = args[2] as (records: unknown[]) => Promise<number[]>
+      expect(await take([{ url: "https://x.com/maya" }])).toEqual([])
+      return { status: "ended", delivered: 1, driver: "chrome" } as FillOutcome
+    })
+    await views.refresh(context, false)
+    expect(fills(sources)).toEqual([
+      ["page:x.com/me/following", 2000, false, true],
+      ["x", 30, false, true],
+    ])
+    expect((brain as unknown as { follows: ReturnType<typeof vi.fn> }).follows).toHaveBeenCalledWith("https://x.com/me/following", [{ url: "https://x.com/maya" }])
+    expect(brain.ingest).not.toHaveBeenCalled()
+    expect((context.send as ReturnType<typeof vi.fn>).mock.calls.some((call) => call[0].type === "render")).toBe(true)
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(fills(sources).at(-1)?.[0]).toBe("x")
+  })
+
+  it("stores follows from a scheduled read without a lens", async () => {
+    const { views, sources, brain } = make_views([], [], [FOLLOWING])
+    Object.assign(brain, { follows: vi.fn(async () => ({ stored: 1 })) })
+    sources.fill.mockImplementationOnce(async (...args: unknown[]) => {
+      await (args[2] as (records: unknown[]) => Promise<number[]>)([{ url: "https://x.com/maya" }])
+      return { status: "ended", delivered: 1, driver: "chrome" } as FillOutcome
+    })
+    await views.read_for_edition("morning")
+    expect(fills(sources)).toEqual([["page:x.com/me/following", 2000, true, true]])
+  })
+
+  it("still reads a due following list when an edition opens by itself", async () => {
+    const EDITION = { ...PAGE, edition: "2026-11-10T07:00:00Z", next_edition: "2026-11-10T18:00:00Z" } as ViewPage
+    const { views, context, sources } = make_views([], [EDITION, EDITION, EDITION], [FOLLOWING, X_SOURCE])
+    await views.on_ready(context)
+    await vi.waitFor(() => expect(sources.fill).toHaveBeenCalledTimes(1))
+    expect(fills(sources)).toEqual([["page:x.com/me/following", 2000, false, true]])
+  })
+})

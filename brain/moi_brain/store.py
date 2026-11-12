@@ -33,6 +33,18 @@ CREATE TABLE IF NOT EXISTS events (
     event_kind TEXT NOT NULL CHECK (event_kind IN ('open', 'seen', 'less_like_this'))
 )
 """
+# Accounts you follow, one row per list that names them; an account no list named for a month is dropped.
+FOLLOWS_TABLE = """
+CREATE TABLE IF NOT EXISTS follows (
+    host TEXT NOT NULL,
+    handle TEXT NOT NULL,
+    list_url TEXT NOT NULL,
+    seen_at TEXT NOT NULL,
+    PRIMARY KEY (host, handle, list_url)
+)
+"""
+FOLLOW_LISTS_TABLE = "CREATE TABLE IF NOT EXISTS follow_lists (list_url TEXT PRIMARY KEY, read_at TEXT NOT NULL)"
+FOLLOW_TTL = timedelta(days=30)
 INDEXES = (
     "CREATE INDEX IF NOT EXISTS items_by_url ON items (url)",
     "CREATE INDEX IF NOT EXISTS items_by_source ON items (source_id, published_at)",
@@ -58,6 +70,8 @@ class Store:
             self.migrate()
             with self.connection:
                 self.connection.execute(EVENTS_TABLE)
+                self.connection.execute(FOLLOWS_TABLE)
+                self.connection.execute(FOLLOW_LISTS_TABLE)
                 for index in INDEXES:
                     self.connection.execute(index)
 
@@ -200,14 +214,41 @@ class Store:
             )
         return cursor.rowcount
 
+    def add_follows(self, list_url: str, accounts: list[tuple[str, str]], now: datetime) -> int:
+        """Accounts a following list named just now; the list counts as read and accounts gone a month are dropped."""
+        with self.lock, self.connection:
+            self.connection.executemany(
+                "INSERT INTO follows (host, handle, list_url, seen_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (host, handle, list_url) DO UPDATE SET seen_at = excluded.seen_at",
+                [(host, handle, list_url, iso(now)) for host, handle in set(accounts)],
+            )
+            self.connection.execute(
+                "INSERT INTO follow_lists (list_url, read_at) VALUES (?, ?) ON CONFLICT (list_url) DO UPDATE SET read_at = excluded.read_at",
+                (list_url, iso(now)),
+            )
+            self.connection.execute("DELETE FROM follows WHERE seen_at < ?", (iso(now - FOLLOW_TTL),))
+        return len(set(accounts))
+
+    def follows(self) -> frozenset[tuple[str, str]]:
+        with self.lock:
+            rows = self.connection.execute("SELECT DISTINCT host, handle FROM follows").fetchall()
+        return frozenset((host, handle) for host, handle in rows)
+
+    def list_read_at(self, list_url: str) -> datetime | None:
+        with self.lock:
+            row = self.connection.execute("SELECT read_at FROM follow_lists WHERE list_url = ?", (list_url,)).fetchone()
+        return datetime.fromisoformat(row[0]) if row else None
+
     def stats(self) -> dict[str, dict[str, int]]:
         with self.lock:
             sources = self.connection.execute(
                 "SELECT source_id, COUNT(*), SUM(seen_at IS NOT NULL) FROM items GROUP BY source_id"
             ).fetchall()
             events = self.connection.execute("SELECT event_kind, COUNT(*) FROM events GROUP BY event_kind").fetchall()
+            follows = self.connection.execute("SELECT host, COUNT(DISTINCT handle) FROM follows GROUP BY host").fetchall()
         return {
             "items": {source_id: total for source_id, total, _ in sources},
             "seen": {source_id: seen for source_id, _, seen in sources},
             "events": dict(events),
+            "follows": dict(follows),
         }

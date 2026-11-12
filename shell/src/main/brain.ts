@@ -112,6 +112,10 @@ export class BrainClient {
     return this.request("POST", "/edit/discard", { proposal_id })
   }
 
+  follows(list_url: string, records: RawRecord[]): Promise<{ stored: number }> {
+    return this.request("POST", "/follows", { list_url, records })
+  }
+
   schedule(): Promise<ViewSchedule[]> {
     return this.request("GET", "/schedule")
   }

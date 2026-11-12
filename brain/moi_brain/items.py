@@ -22,6 +22,7 @@ WEB_SCHEMES = {"http", "https"}
 SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov"}
 WHITESPACE = re.compile(r"\s+")
 MAX_TEXT = 4000
+HANDLE = re.compile(r"@[\w.]*\w")
 # Answers the tagging pass gives to the questions rules ask live in Item.extra under judged:<name>.
 JUDGED_PREFIX = "judged:"
 
@@ -128,6 +129,36 @@ def page_source_id(url: str) -> str:
     except ValueError:
         return "page:page"
     return f"page:{(parts.hostname or 'page').removeprefix('www.')}{parts.path.rstrip('/')}"
+
+
+HOST_ALIASES = {"twitter.com": "x.com"}
+HOST_PREFIXES = ("www.", "mobile.", "m.")
+# First path parts of a profile link that are not handles.
+NOT_HANDLES = {"i", "home", "explore", "settings", "search", "hashtag", "p", "reel", "reels", "stories", "watch", "pages"}
+
+
+def site_host(url: str) -> str:
+    """The site a link belongs to, the same for www., mobile. and twitter.com links: x.com, instagram.com."""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+    for prefix in HOST_PREFIXES:
+        host = host.removeprefix(prefix)
+    return HOST_ALIASES.get(host, host)
+
+
+def profile_handle(record: dict[str, Any], base_url: str | None) -> tuple[str, str] | None:
+    """(site, handle) of an account in a following list: its handle field, else the first part of its profile link."""
+    url = web_url(clean_text(record.get("url"), 2000) or "", base_url)
+    if url is None:
+        return None
+    handle = clean_text(record.get("author_handle"), 200)
+    if not handle:
+        parts = [part for part in urlparse(url).path.split("/") if part]
+        handle = parts[0] if parts and parts[0].lower() not in NOT_HANDLES else None
+    handle = handle.lstrip("@/").lower() if handle else ""
+    return (site_host(url), handle) if handle else None
 
 
 def youtube_source_id(channel: str) -> str:

@@ -158,3 +158,20 @@ test("a newest first page read again stops at what was read before and says noth
     await harness.close()
   }
 })
+
+test("only people I know: a following list read once turns strangers away", async () => {
+  const feed = `# Feed\n\n## Sources\n* Page: ${world.base_url}/pages/endless.html\n* Following: ${world.base_url}/pages/follows.html\n\n## Rules\n* Only people I know.\n`
+  const harness = await Harness.launch(world, { views: { feed } })
+  try {
+    await eventually(
+      () => harness.lens_text(),
+      (text) => posts_in(text) >= 5,
+      60_000,
+    )
+    const shown = await harness.brain<{ items: Array<{ item: { author_handle: string } }> }>("/view/feed", {})
+    expect(shown.items.length).toBeGreaterThanOrEqual(5)
+    expect(new Set(shown.items.map((entry) => entry.item.author_handle))).toEqual(new Set(["writer1", "writer3"]))
+  } finally {
+    await harness.close()
+  }
+})

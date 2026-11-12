@@ -20,13 +20,13 @@ from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
-from moi_brain.items import Event, Item, ViewItem, normalize, page_source_id, rss_source_id, youtube_source_id
+from moi_brain.items import HANDLE, Event, Item, ViewItem, normalize, page_source_id, profile_handle, rss_source_id, youtube_source_id
 from moi_brain.lens_gen import generate_lens
 from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway
 from moi_brain.md import parse_sections, section_text
 from moi_brain.memory import TOPIC_FILES, Memory
-from moi_brain.rank import PAGE_SIZE, Order, kept_share, rank
+from moi_brain.rank import PAGE_SIZE, Circles, Order, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
@@ -37,6 +37,9 @@ FEED_INTERVAL = timedelta(minutes=5)
 VIEW_WINDOW = timedelta(days=7)
 # What you saw stays in the view this long, so a new look or a reload shows the same feed instead of an empty one.
 SEEN_KEEP = timedelta(hours=12)
+# A following list is read again after this long; who you follow changes slowly.
+FOLLOWS_EVERY = timedelta(days=7)
+NOBODY_KNOWN = "Rules about people you know have no one to go on yet: add a Following source, or people to memory/people.md."
 X_DOMAIN = "x.com"
 HTTP_TIMEOUT = 15.0
 
@@ -55,6 +58,8 @@ class PageSource(BaseModel):
     budget: dict[str, int]
     # Posts come newest first, so reaching what was read before means nothing newer was missed.
     chronological: bool = False
+    # "follows": a page listing accounts you follow, read into who you know rather than into items.
+    purpose: Literal["items", "follows"] = "items"
 
 
 class ViewPage(BaseModel):
@@ -140,12 +145,13 @@ def edition_items(
     rules: list[Rule],
     now: datetime,
     long_seen: set[str],
+    circles: Circles,
 ) -> list[Item]:
     """An edition's own items: what it already showed you or you saw since it came out, then the best of the rest up to its
     size. Those stay members on a reload, so reading the whole edition never empties it and never lets more in."""
     present = {item.item_id for item in items}
     fixed = ({item.item_id for item, seen_at in entries if seen_at and seen_at >= edition.at} | set(shown)) & present
-    best, _ = rank(items, rules, now, long_seen | fixed, max(size - len(fixed), 0))
+    best, _ = rank(items, rules, now, long_seen | fixed, max(size - len(fixed), 0), circles=circles)
     members = fixed | {entry.item.item_id for entry in best}
     return [item for item in items if item.item_id in members]
 
@@ -256,11 +262,21 @@ class Brain:
                         chronological=page in source.ordered,
                     )
                 )
+            for page in source.following:
+                read_at = self.store.list_read_at(page)
+                if read_at is None or self.clock() - read_at >= FOLLOWS_EVERY:
+                    spec = self.extractors.for_url(page)
+                    found.append(PageSource(source_id=page_source_id(page), page_type="following", start_url=page, spec=spec, budget=PILOT_BUDGET, purpose="follows"))
         return found
 
     def passive_sources(self) -> list[PageSource]:
         """Page sources of every view, which the extension reads whenever you browse them yourself."""
-        found = {source.source_id: source for compiled in self.compiler.all_compiled(use_model=False) for source in self.page_sources(compiled)}
+        found = {
+            source.source_id: source
+            for compiled in self.compiler.all_compiled(use_model=False)
+            for source in self.page_sources(compiled)
+            if source.purpose == "items"
+        }
         return list(found.values())
 
     def relay_config(self) -> dict[str, Any]:
@@ -360,6 +376,15 @@ class Brain:
         known_urls = set(self.store.items_by_url(source_id, [item.url for item in items]))
         return [index for index, item in enumerate(normalized) if item and (item.item_id in known or item.url in known_urls)]
 
+    def add_follows(self, list_url: str, records: list[dict[str, Any]]) -> int:
+        """Accounts from a page listing who you follow; each becomes known on its own site."""
+        accounts = [account for record in records if (account := profile_handle(record, list_url))]
+        return self.store.add_follows(list_url, accounts, self.clock())
+
+    def circles(self) -> Circles:
+        people = frozenset(handle.lstrip("@").lower() for handle in HANDLE.findall(self.memory.topic_text("people.md")))
+        return Circles(people=people, following=self.store.follows())
+
     def ingest(self, source_id: str, records: list[dict[str, Any]], page_url: str | None = None) -> list[Item]:
         self.source_status[(source_id, source_id)] = "ok"
         return self.store_records(source_id, records, page_url)
@@ -371,7 +396,7 @@ class Brain:
         """
         compiled = self.compiler.compiled(check_view_id(view_id))
         items = self.store_records(source_id, records, page_url, tag_now=needs_tags(compiled))
-        ranked, _ = rank(items, compiled.rules, self.clock(), limit=len(items), order="page")
+        ranked, _ = rank(items, compiled.rules, self.clock(), limit=len(items), order="page", circles=self.circles())
         return items, ranked
 
     def lens_state(self, view_id: str, kind: str) -> tuple[bool, str]:
@@ -404,9 +429,10 @@ class Brain:
         long_seen = seen_long_ago(entries, max(now - SEEN_KEEP, edition.at) if edition else now - SEEN_KEEP)
         if needs_tags(compiled) and self.tagger.healthy:
             items = [item for item in items if item.tagged and is_judged(item, compiled.judgments)]
+        circles = self.circles()
         if edition and compiled.time.edition_size:
-            items = edition_items(compiled.time.edition_size, edition, entries, items, exclude_ids, compiled.rules, now, long_seen)
-        ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order)
+            items = edition_items(compiled.time.edition_size, edition, entries, items, exclude_ids, compiled.rules, now, long_seen, circles)
+        ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles)
         with self.lock:
             reading = view_id in self.refreshing
             refreshing = reading or self.tagger.busy
@@ -415,6 +441,8 @@ class Brain:
         problems = [f"{source_id}: {status}" for source_id, status in self.status_by_source(current).items() if status != "ok"]
         if not self.tagger.healthy:
             problems.append(self.tagger.status)
+        if circles.empty and any(condition and condition.field == "author_in" for rule in compiled.rules for condition in (rule.when, rule.unless)):
+            problems.append(NOBODY_KNOWN)
         return ViewPage(
             view_id=view_id,
             items=ranked,
@@ -426,7 +454,7 @@ class Brain:
             version=compiled.file_hash,
             layout_hash=compiled.layout_hash,
             lens_stale=self.lenses.is_stale(lens_key(view_id, "feed"), compiled.layout, compiled.layout_hash),
-            keep_rate=kept_share(items, compiled.rules, now),
+            keep_rate=kept_share(items, compiled.rules, now, circles),
             reading=reading,
             edition=edition.at if edition else None,
             next_edition=edition.next_at if edition else None,

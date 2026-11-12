@@ -67,6 +67,11 @@ class IngestResponse(BaseModel):
     layout_hash: str = ""
 
 
+class FollowsRequest(BaseModel):
+    list_url: str
+    records: list[dict[str, Any]] = Field(max_length=5000)
+
+
 class LensGenerateRequest(BaseModel):
     view_id: str
     kind: LensKind = "feed"
@@ -177,6 +182,11 @@ def ingest(body: IngestRequest, brain: BrainDep) -> IngestResponse:
     items, view_items = brain.ingest_page(body.view_id, body.source_id, body.records, body.page_url)
     stale, layout_hash = brain.lens_state(body.view_id, body.kind)
     return IngestResponse(items=items, view_items=view_items, lens_stale=stale, layout_hash=layout_hash)
+
+
+@router.post("/follows")
+def follows(body: FollowsRequest, brain: BrainDep) -> dict[str, int]:
+    return {"stored": brain.add_follows(body.list_url, body.records)}
 
 
 @router.post("/view/{view_id}")

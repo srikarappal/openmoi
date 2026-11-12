@@ -23,6 +23,8 @@ const MAX_FILL_RECORDS = 120
 const MIN_KEEP_RATE = 0.1
 // A read for an edition goes deeper than a look: it is the only read the edition gets.
 const EDITION_RECORDS = 120
+// A list of the accounts you follow is read to its end, within the daily budget.
+const FOLLOW_RECORDS = 2000
 const MAX_TITLE = 80
 
 export interface ViewHooks {
@@ -176,9 +178,14 @@ export class ViewController {
     return [...new Set((this.seen_log.get(view_id) ?? []).filter((entry) => entry.at >= since).map((entry) => entry.label))]
   }
 
+  // Feed sources that may still give more; a following list is read once and never read ahead.
   private open_sources(view_id: string): PageSource[] {
     const finished = this.finished.get(view_id) ?? new Set<string>()
-    return (this.page_sources.get(view_id) ?? []).filter((source) => !finished.has(source.source_id))
+    return (this.page_sources.get(view_id) ?? []).filter((source) => source.purpose !== "follows" && !finished.has(source.source_id))
+  }
+
+  private wanted_first(sources: PageSource[], records: number): Map<string, number> {
+    return new Map(sources.map((source) => [source.source_id, source.purpose === "follows" ? FOLLOW_RECORDS : records]))
   }
 
   // Each warning shows once per view and version, so a notice you dismissed stays dismissed; one that no longer holds goes away
@@ -207,8 +214,8 @@ export class ViewController {
       this.finished.delete(context.view_id)
       this.complete.delete(context.view_id)
       if (this.complete_told.delete(context.view_id)) this.hooks.retract(`complete:${context.view_id}`)
-      const reads = this.editioned.has(context.view_id) && !force ? [] : page_sources
-      const wanted = new Map(reads.map((source) => [source.source_id, FIRST_FILL_RECORDS]))
+      const reads = this.editioned.has(context.view_id) && !force ? page_sources.filter((source) => source.purpose === "follows") : page_sources
+      const wanted = this.wanted_first(reads, FIRST_FILL_RECORDS)
       await Promise.all([this.settle(context), this.read_and_settle(context, reads, force, wanted, true)])
     })
   }
@@ -218,7 +225,7 @@ export class ViewController {
   async read_for_edition(view_id: string): Promise<void> {
     await this.hooks.track(`Reading for the next ${view_id} edition`, async () => {
       const { page_sources } = await this.brain.refresh(view_id, true)
-      const wanted = new Map(page_sources.map((source) => [source.source_id, EDITION_RECORDS]))
+      const wanted = this.wanted_first(page_sources, EDITION_RECORDS)
       await this.queued(view_id, () => this.read_sources(view_id, page_sources, true, wanted, true))
       await this.feeds_fetched(view_id)
     })
@@ -291,7 +298,7 @@ export class ViewController {
           wanted.get(source.source_id) ?? FIRST_FILL_RECORDS,
           (records) => {
             this.hooks.retract(tag)
-            return this.ingest_batch(view_id, source, records)
+            return source.purpose === "follows" ? this.store_follows(view_id, source, records) : this.ingest_batch(view_id, source, records)
           },
           force,
           from_top,
@@ -342,6 +349,14 @@ export class ViewController {
       await sleep(SETTLE_POLL_MS)
     }
     return true
+  }
+
+  // Who you follow changes who counts as a stranger, so an open lens shows the view again by the new circles.
+  private async store_follows(view_id: string, source: PageSource, records: RawRecord[]): Promise<number[]> {
+    await this.brain.follows(source.start_url, records)
+    const context = this.lenses.get(view_lens_key(view_id))
+    if (context) await context.serial(() => this.render(context))
+    return []
   }
 
   // A lens open now (or opened during a scheduled read) gets what each batch adds. The reader learns which records the

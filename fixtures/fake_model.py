@@ -85,13 +85,15 @@ def judged_rule(text: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
         judgment = {"name": "price", "question": "What is the price or monthly rent in dollars?", "answer": "number"}
         return {"when": condition("judged:price", "gt", limit), "do": "hide"}, judgment
     for phrases, name, question, answer, op, value in JUDGED_PHRASES:
-        if any(phrase in text for phrase in phrases):
+        if any(re.search(rf"\b{re.escape(phrase)}\b", text) for phrase in phrases):
             return {"when": condition(f"judged:{name}", op, value), "do": "hide"}, {"name": name, "question": question, "answer": answer}
     return None
 
 
 def view_rule(line: str) -> dict[str, Any] | None:
     text = line.lower()
+    if any(phrase in text for phrase in ("people i know", "people i follow", "no strangers")):
+        return {"when": condition("author_in", "eq", "stranger"), "do": "hide"}
     if "short" in text:
         return {"when": condition("media_kind", "eq", "short_video"), "do": "hide"}
     if (match := LIMIT.search(text)) is not None:
@@ -201,8 +203,13 @@ ENDLESS_SPEC = {
     },
     "pagination": {"kind": "scroll", "step_px": 900},
 }
+FOLLOWS_SPEC = {
+    "item_root": "li.account",
+    "fields": {"title": {"select": ".name", "take": "text"}, "url": {"select": "a", "take": "attr:href", "transform": "absolute_url"}},
+    "pagination": {"kind": "scroll", "step_px": 900},
+}
 # Like a real model, the fake one only sees the page's skeleton (and its site), so it recognizes pages by their markup.
-SPECS_BY_MARKER = {'class="athing"': LISTING_SPEC, "s-search-result": SHOP_SPEC, 'class="stream-entry"': ENDLESS_SPEC}
+SPECS_BY_MARKER = {'class="athing"': LISTING_SPEC, "s-search-result": SHOP_SPEC, 'class="stream-entry"': ENDLESS_SPEC, 'class="account"': FOLLOWS_SPEC}
 
 
 def lens(payload: dict[str, Any], base_url: str) -> str:
