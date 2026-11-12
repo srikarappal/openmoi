@@ -1,6 +1,8 @@
 """Paths and settings for one openMoi home folder."""
 
+import json
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +57,7 @@ def local_slot() -> Slot:
     return Slot(base_url=PROVIDERS["ollama"].base_url, model="llama3")
 
 
+PACK_URL_PATTERN = r"^(https://|http://(127\.0\.0\.1|localhost)(:\d+)?/)"
 PrivacyMode = Literal["local", "hybrid", "cloud"]
 # Features that may send item text to a hosted model in hybrid mode, if you name them, by the model tasks they make.
 CLOUD_FEATURES: dict[str, tuple[str, ...]] = {
@@ -83,7 +86,7 @@ class Settings(BaseModel):
     vision: Slot | None = None
     # Where signed packs of specs and site policy come from; none means no pack updates. The signature is what makes a
     # pack trusted; http is allowed only to this machine, for testing a channel.
-    pack_url: str | None = Field(default=None, pattern=r"^(https://|http://(127\.0\.0\.1|localhost)(:\d+)?/)")
+    pack_url: str | None = Field(default=None, pattern=PACK_URL_PATTERN)
 
 
 class ModelChange(BaseModel):
@@ -265,6 +268,11 @@ class Paths:
         return self.assets / "policy" / "sites.json"
 
     @property
+    def pack_channel(self) -> Path:
+        """Where openMoi's signed packs are published, as shipped with it: {"url": "https://..."}."""
+        return self.assets / "policy" / "pack_channel.json"
+
+    @property
     def pack_key(self) -> Path:
         return self.assets / "policy" / "pack_key.pub"
 
@@ -298,10 +306,21 @@ def copy_missing(source_dir: Path, target_dir: Path) -> None:
             shutil.copyfile(source, target)
 
 
+def pack_channel(paths: Paths) -> str | None:
+    """The pack channel openMoi ships with, if its assets name one with a usable address."""
+    try:
+        url = json.loads(paths.pack_channel.read_text()).get("url")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return url if isinstance(url, str) and re.match(PACK_URL_PATTERN, url) else None
+
+
 def ensure_home(paths: Paths) -> None:
-    """Create the folder layout and seed starter files without touching anything you wrote."""
+    """Create the folder layout and seed starter files without touching anything you wrote. The folder is yours
+    alone (0700): what you read, your memory and your backups are not for the other accounts on this Mac."""
     for directory in (paths.journal, paths.views, paths.compiled, paths.lenses, paths.extractors, paths.logs):
         directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(paths.home, 0o700)
     if not any(paths.views.glob("*.md")):
         copy_missing(paths.templates / "views", paths.views)
     copy_missing(paths.templates / "memory", paths.memory)

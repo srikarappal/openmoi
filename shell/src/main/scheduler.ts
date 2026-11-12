@@ -1,12 +1,14 @@
 // Runs the reads editions need when they are due and says when an edition comes out. It looks every minute and
 // whenever the Mac wakes; a read the Mac slept through is due late and runs then. Reads go one view at a time each.
 import type { ContentWanted, PageSource, ViewSchedule } from "../shared/types"
+import { with_timeout } from "../shared/timing"
 import type { BrainClient } from "./brain"
 
 const TICK_MS = 60_000
 // The pack channel is asked for a newer pack every 30 ticks (half an hour), so a site the kill switch removes stops
 // being read within the hour.
 const PACK_CHECK_TICKS = 30
+const FIRST_PACKS_MS = 10_000
 // Keys of reads that are not a view's: a view id never holds a NUL or a colon.
 const SUMMARIES = "\0summaries"
 
@@ -85,10 +87,16 @@ export class Scheduler {
     this.check_packs()
   }
 
-  private check_packs(): void {
-    if (Date.now() - this.packs_checked_at < this.tick_ms * PACK_CHECK_TICKS) return
+  // The look at the pack channel that comes before any read when openMoi starts, so a site the kill switch turned
+  // off is not read even once; it gives up after a few seconds (no network) rather than hold openMoi back.
+  async packs_first(timeout_ms = FIRST_PACKS_MS): Promise<void> {
+    await with_timeout(this.check_packs(), timeout_ms, "the pack channel").catch(ignore)
+  }
+
+  private check_packs(): Promise<void> {
+    if (Date.now() - this.packs_checked_at < this.tick_ms * PACK_CHECK_TICKS) return Promise.resolve()
     this.packs_checked_at = Date.now()
-    this.brain
+    return this.brain
       .update_packs()
       .then(({ status }) => this.hooks.packs(status))
       .catch((error) => this.hooks.failed(`The pack channel could not be checked: ${error instanceof Error ? error.message : String(error)}`))

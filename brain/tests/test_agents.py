@@ -376,3 +376,12 @@ def test_an_unexpected_error_ends_the_run_as_failed_never_left_running():
     crashing.host.find_items = lambda *args: (_ for _ in ()).throw(RuntimeError("database is locked"))
     crashing.work()
     assert (crashing.run.status, crashing.run.reason) == ("failed", "database is locked")
+
+
+def test_a_hosted_read_you_allow_holds_for_one_run_only(agents, clock):
+    _, client = agents
+    plan = client.post("/agents", json={"kind": "watch", "request": "NOTIFY me about desk lamp deals"}).json()
+    assert client.post(f"/agents/{plan['plan_id']}/approve", json={"cloud": True}).json()["cloud"] is True
+    assert finished(client, plan["plan_id"])["status"] == "done"
+    clock.moment += timedelta(hours=25)
+    assert client.post(f"/agents/{plan['plan_id']}/approve").json()["cloud"] is False

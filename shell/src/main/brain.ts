@@ -265,7 +265,8 @@ export class BrainClient {
     return this.request("POST", "/data/export")
   }
 
-  delete_everything(): Promise<{ removed: string[] }> {
+  // The brain marks everything for deleting and ends; the next one deletes it before it starts.
+  delete_everything(): Promise<{ status: string }> {
     return this.request("POST", "/data/delete", { confirm: "delete everything" })
   }
 
@@ -434,7 +435,7 @@ export class BrainProcess {
       this.misses += 1
       if (this.misses >= HEALTH_MISSES) {
         this.misses = 0
-        this.child?.kill("SIGKILL")
+        this.signal("SIGKILL")
       }
     }
   }
@@ -443,10 +444,14 @@ export class BrainProcess {
     const project = path.join(this.repo_dir, "brain")
     this.started_at = Date.now()
     const brain_args = ["-m", "moi_brain", "--socket", this.socket]
+    // The app's own Python writes no bytecode into the signed bundle and puts nothing but the brain on its path.
     const [command, args, extra] = this.python
-      ? [this.python, brain_args, { PYTHONPATH: project, PYTHONNOUSERSITE: "1" }]
+      ? [this.python, ["-P", ...brain_args], { PYTHONPATH: project, PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1" }]
       : ["uv", ["run", "--project", project, "python", ...brain_args], {}]
+    // Its own process group, so stopping it stops the Python uv starts as well, not only uv.
     this.child = spawn(command, args, {
+      cwd: project,
+      detached: true,
       env: { ...process.env, ...extra, MOI_TOKEN: this.token },
       stdio: ["ignore", "inherit", "inherit"],
     })
@@ -468,10 +473,21 @@ export class BrainProcess {
     }, delay)
   }
 
+  // To the brain's whole process group (uv and the Python it runs); a child without a pid gets it alone.
+  private signal(name: NodeJS.Signals): void {
+    const pid = this.child?.pid
+    try {
+      if (pid) process.kill(-pid, name)
+      else this.child?.kill(name)
+    } catch {
+      this.child?.kill(name)
+    }
+  }
+
   stop(): void {
     this.stopping = true
     if (this.health_timer) clearInterval(this.health_timer)
-    this.child?.kill()
+    this.signal("SIGTERM")
     if (this.owns_folder) rmSync(path.dirname(this.socket), { recursive: true, force: true })
   }
 }

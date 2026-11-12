@@ -11,6 +11,15 @@ files:
   - "!node_modules/**"
 asarUnpack:
   - dist/extension/**
+# No way to run openMoi's binary as plain Node or with a debugger, its cookies encrypted at rest, and only the app
+# inside its checked app.asar loads: another process cannot borrow openMoi's macOS permissions or read its sign ins.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableCookieEncryption: true
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
 extraResources:
   - from: ../brain/moi_brain
     to: brain/moi_brain
@@ -34,7 +43,7 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
-  entitlementsInherit: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.inherit.plist
   # Signing and notarizing need your Apple Developer identity (CSC_LINK, APPLE_ID ...); without it the app is unsigned.
   notarize: false
   extendInfo:

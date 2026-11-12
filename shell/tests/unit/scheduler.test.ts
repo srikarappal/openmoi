@@ -217,6 +217,20 @@ describe("Scheduler after the review", () => {
 })
 
 describe("Scheduler packs", () => {
+  it("looks at the pack channel before anything is read, and gives up after its timeout", async () => {
+    const { scheduler, brain, hooks } = make_scheduler([[]])
+    brain.update_packs.mockResolvedValueOnce({ status: "installed pack v3" })
+    await scheduler.packs_first()
+    expect(hooks.packs).toHaveBeenCalledWith("installed pack v3")
+    await scheduler.tick()
+    expect(brain.update_packs).toHaveBeenCalledTimes(1)
+    const slow = make_scheduler([[]])
+    slow.brain.update_packs.mockReturnValueOnce(new Promise(() => {}))
+    const started = Date.now()
+    await slow.scheduler.packs_first(50)
+    expect(Date.now() - started).toBeLessThan(2_000)
+  })
+
   it("asks the pack channel every half hour, so a kill switch lands within the hour, and reports what it found", async () => {
     vi.useFakeTimers()
     const { scheduler, brain, hooks } = make_scheduler([[]])

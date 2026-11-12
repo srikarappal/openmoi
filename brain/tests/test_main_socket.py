@@ -31,7 +31,10 @@ def running():
     # A short folder, as the shell uses: macOS caps a socket's path near 104 characters.
     folder = Path(tempfile.mkdtemp(prefix="moi-"))
     path = folder / "b.sock"
-    path.write_text("left by a crashed run")
+    # A socket left by a run that crashed: bound, then closed without removing it.
+    stale = socket.socket(socket.AF_UNIX)
+    stale.bind(str(path))
+    stale.close()
     env = {**os.environ, "MOI_TOKEN": TOKEN, "MOI_HOME": str(folder / "home"), "MOI_RELAY_PORT": str(free_port())}
     process = subprocess.Popen([sys.executable, "-m", "moi_brain", "--socket", str(path)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     deadline = time.monotonic() + 30
@@ -51,3 +54,14 @@ def test_the_brain_answers_on_its_socket_only_with_the_token_and_its_host_name(r
     assert get(running, "/health").json()["status"] == "ok"
     assert get(running, "/health", token="wrong").status_code == 401
     assert get(running, "/health", host="evil.example").status_code == 421
+
+
+def test_the_brain_refuses_a_socket_folder_others_can_open():
+    folder = Path(tempfile.mkdtemp(prefix="moi-"))
+    try:
+        folder.chmod(0o755)
+        env = {**os.environ, "MOI_TOKEN": TOKEN, "MOI_HOME": str(folder / "home"), "MOI_RELAY_PORT": str(free_port())}
+        done = subprocess.run([sys.executable, "-m", "moi_brain", "--socket", str(folder / "b.sock")], env=env, capture_output=True, text=True, timeout=60, check=False)
+        assert done.returncode != 0 and "only you can open (0700)" in done.stderr
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)

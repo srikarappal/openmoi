@@ -264,6 +264,7 @@ export class Shell implements ViewHost {
     this.view_infos = await this.brain.views()
     this.background = app.getLoginItemSettings().openAtLogin
     this.relay.start()
+    await this.scheduler.packs_first()
     await this.scheduler.tick()
     this.scheduler.start()
     // Standing tasks you approved (watch) run again when due.
@@ -661,7 +662,11 @@ export class Shell implements ViewHost {
   private async start_over(old_boot: string): Promise<void> {
     for (const tab of this.tabs.infos()) this.tabs.close(tab.tab_id)
     for (const context of this.lenses.all()) this.lenses.close(context.key)
-    for (const name of [WEB_PARTITION, LENS_PARTITION, PLAYER_PARTITION]) await session.fromPartition(name).clearStorageData()
+    await this.readers.reset()
+    for (const name of [WEB_PARTITION, LENS_PARTITION, PLAYER_PARTITION]) {
+      await session.fromPartition(name).clearStorageData()
+      await session.fromPartition(name).clearCache()
+    }
     await wait_for(async () => {
       const { boot } = await this.brain.health()
       if (boot === old_boot) throw new Error("the brain that deleted everything is still ending")

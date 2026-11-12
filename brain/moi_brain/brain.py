@@ -23,11 +23,11 @@ from moi_brain.compile import VIEW_ID, AppRef, BadInput, CompiledView, Compiler,
 from moi_brain.agents import AgentKind, AgentRun, AgentRunner, Budget, ComposerReply, ItemSummary, PlanDraft, PlanStep, composer_messages, load_runs, plan_expiry, planner_messages, summary_messages
 from moi_brain.actions import KINDS, RATE_CAPS, RATE_WINDOW, UNDO_SECONDS, ActionAnchor, ActionDecision, ActionKind, ActionRequest, ActionResult, AuditLog, new_request_id, plain_url, policy_flag, state_key
 from moi_brain.answers import MAX_SOURCES, Answer, AnswerReply, answer_prompt, cited
-from moi_brain.backup import CONFIRM, delete_everything, export_everything
+from moi_brain.backup import CONFIRM, WipeRefused, export_everything, mark_wipe
 from moi_brain.apps import WHY, AppError, Capability, MacHelper, app_location, permission_text, read_app, start_of_day
 from moi_brain.collections import READ_LATER, collection_name, collection_title, export_json, export_markdown, is_collection_name
 from moi_brain.content import ContentSummary, caption_allowed, is_video, offline_blocks, summary_extra, summary_prompt, transcript_text
-from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, save_settings
+from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, pack_channel, save_settings
 from moi_brain.editions import LEAD, LOCAL_LEAD, Edition, EditionBook
 from moi_brain.enrich import enriched
 from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
@@ -1268,8 +1268,8 @@ class Brain:
                 raise BadInput("That plan has expired; ask again.")
             run.trace, run.result, run.refs, run.notices, run.proposal_ids, run.action_ids = [], None, [], [], [], []
             run.status, run.reason, run.question, run.answer, run.cost_usd, run.runs = "running", "", "", "", 0.0, run.runs + 1
-            # A standing task you let read with a hosted model keeps that for its later runs.
-            run.cloud = run.cloud or cloud
+            # Each approval says it again: a run you let read with a hosted model never lends that to a later run.
+            run.cloud = cloud
             self.save_run(run)
             runner = AgentRunner(self, run)
             self.runners[plan_id] = runner
@@ -1829,7 +1829,7 @@ class Brain:
 
     def update_packs(self) -> str:
         """Fetch the pack channel's newest pack and install it if it is signed with openMoi's key and newer."""
-        url = self.gateway.settings.pack_url
+        url = self.gateway.settings.pack_url or pack_channel(self.paths)
         if not url:
             return "no pack channel"
         key = public_key(self.paths.pack_key)
@@ -1852,16 +1852,18 @@ class Brain:
         """Everything you have in openMoi as one zip in exports/, secrets left out."""
         return str(export_everything(self.paths, self.store.copy_to, self.clock()))
 
-    def delete_everything(self, confirm: str) -> list[str]:
-        """Deletes everything openMoi keeps but exports/, then ends this brain; the shell starts a new one, which
-        begins again from the templates. Only with the exact words, typed by you."""
+    def delete_everything(self, confirm: str) -> str:
+        """Marks everything for deleting and ends this brain; the shell starts a new one, which deletes it all but
+        exports/ and the packs before anything runs, then begins again from the templates. Only with the exact words,
+        typed by you."""
         if confirm != CONFIRM:
             raise BadInput(f'Say exactly "{CONFIRM}" to delete everything.')
-        with self.lock:
-            self.store.close()
-            removed = delete_everything(self.paths)
-        threading.Timer(0.5, end_process).start()
-        return removed
+        try:
+            mark_wipe(self.paths)
+        except WipeRefused as error:
+            raise BadInput(str(error)) from error
+        threading.Timer(0.3, end_process).start()
+        return "deleting"
 
     def share_view(self, view_id: str) -> str:
         """A copy of a view to send to someone, in ~/openMoi/shared, without people, following lists or watched pages."""

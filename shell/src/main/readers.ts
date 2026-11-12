@@ -161,6 +161,16 @@ export class ReaderPool {
     await Promise.all([...this.tabs.keys()].map((source_id) => this.close(source_id)))
   }
 
+  // After everything was deleted: no tab open, nothing remembered as read, today's budgets and rests forgotten, so the
+  // fresh start reads its sources as if for the first time.
+  async reset(): Promise<void> {
+    await this.close_all()
+    this.known.clear()
+    this.steps.clear()
+    this.resting.clear()
+    this.feeds_told.clear()
+  }
+
   open_tabs(): string[] {
     return [...this.tabs.keys()]
   }

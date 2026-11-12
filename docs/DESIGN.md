@@ -37,10 +37,10 @@ Part 2: Later
 19. L3 Full lens engine `[built]`
 20. L4 Intent views `[built]`
 21. L5 Actions and the policy gate `[built]`
-22. L6 Agents `[not built]`
-23. L7 Recipes and mashups `[not built]`
-24. L8 Native apps and System OS `[not built]`
-25. L9 Launch hardening `[not built]`
+22. L6 Agents `[built]`
+23. L7 Recipes and mashups `[built]`
+24. L8 Native apps and System OS `[built]`
+25. L9 Launch hardening `[built]`
 26. Cross cutting: security, compliance, privacy, budgets, testing `[partly built]`
 27. Tech stack and decisions
 28. Repo layout
@@ -1270,18 +1270,20 @@ pydantic models -> JSON Schema -> shell/src/shared/brain_schema.ts -> tsc checks
 
 | Piece | Built | Not verified |
 |---|---|---|
-| Packaging | `scripts/package.sh` builds `openMoi.app` and its DMG: hardened runtime, five entitlements (Chromium's JIT, the bundled Python's native code, Calendar, Apple Events), the usage strings macOS shows. Its Resources mirror the repo (brain, lenses, templates, specs, policy, the helper) next to a Python of its own, so the brain runs as it does from the repo. The packaged app goes from a fresh home to a first merged Feed in seconds (`tests/e2e/packaged.spec.ts`) | Notarization: it needs your Apple ID. Here the app was signed with the Developer ID found in the keychain |
-| Process boundary | The brain answers only on a Unix socket in a folder only you can open, with the per launch token and its own host name; a stuck brain is stopped after three missed health checks and restarts like a crashed one; the TypeScript types of what the brain sends are generated from its models and checked against the shell's at build time, and a brain test fails when they are stale | |
-| Privacy modes | `/model privacy local` (no hosted call at all), `hybrid` (hosted models see outlines and layouts, never item text, unless you name features: summaries, agents, answers, tagging, edits) and `cloud`; an agent run can be let read with a hosted model on its own, from its plan card, on its own thread only | |
-| Kill switch | The pack channel is checked every 30 minutes, so a site removed by a signed pack stops being read within the hour; a pack signed with another key is refused. End to end in `tests/e2e/hardening.spec.ts` | A hosted pack channel |
-| Your data | `/backup` saves everything in one zip in exports/ (views, memory, journal, lenses, specs, settings, logs and a consistent copy of the database), leaving out your keys, Chrome's pairing and Google's tokens. `/delete everything confirm` deletes everything but exports/, openMoi's web sessions too, and starts over from the templates | |
+| Packaging | `scripts/package.sh` builds `openMoi.app` and its DMG after checking the shell's types and the generated ones: hardened runtime with library validation on, entitlements kept to Chromium's JIT, Calendar and Apple Events for the app (and memory for the Python's ctypes callbacks inside it), the usage strings macOS shows, and Electron's fuses set so nothing can run its binary as Node, pass it NODE_OPTIONS or a debugger, or load anything but its checked app.asar, with cookies encrypted at rest. Its Resources mirror the repo next to a Python of its own, compiled before signing and run without writing bytecode, so the signature stays valid. The packaged app goes from a fresh home to a first merged Feed in seconds (`tests/e2e/packaged.spec.ts`) | Notarization: it needs your Apple ID. Here the app was signed with the Developer ID found in the keychain |
+| Process boundary | The brain answers only on a Unix socket in a folder only you can open (it refuses any other), with the per launch token and its own host name; a stuck brain is stopped after three missed health checks, its whole process group (uv and the Python it runs), and restarts like a crashed one; the TypeScript types of what the brain sends are generated from its models and checked against the shell's at build time, and a brain test fails when they are stale | |
+| Privacy modes | `/model privacy local` (no hosted call at all), `hybrid` (hosted models see outlines and layouts, never item text, unless you name features: summaries, agents, answers, tagging, edits) and `cloud`; one agent run can be let read with a hosted model, from its plan card, on its own thread only and never for a later run of a standing task. Planning itself carries your words, so planning with a hosted model needs the agents feature | |
+| Kill switch | The channel and its key ship with openMoi (`policy/pack_channel.json`, `policy/pack_key.pub`); a release will not build without them unless told to. The channel is checked before anything is read at start, then every 30 minutes, so a site removed by a signed pack stops being read within the hour; a pack signed with another key is refused; installed packs survive deleting everything. End to end in `tests/e2e/hardening.spec.ts` | The real signing key and a hosted channel: they need you |
+| Your data | The openMoi folder is yours alone (0700). `/backup` saves everything in one zip in exports/ (views, memory, journal, lenses, specs, settings, logs and a consistent copy of the database), readable by you alone, leaving out your keys, Chrome's pairing and Google's tokens. `/delete everything confirm` deletes everything but exports/ and the signed packs: the brain you ask only leaves a mark and ends, and the next one deletes before anything of it runs, so nothing is written back; only a folder holding .moi that is not your whole home is ever wiped. openMoi's web sessions, cache and readers start over too | |
 | Onboarding | From launch on a fresh home to a first merged Feed in seconds, from the repo and packaged | With real accounts and real sites |
 | Signed updates | Packs (specs and policy) are signed and checked | App updates: they need a release channel; not built |
 | Reviews | Each stage had a code review whose findings were fixed with tests | The external security review and the legal review need people outside this work |
 
 ## 26. Cross cutting: security, compliance, privacy, budgets, testing `[partly built]`
 
-Items marked (MVP) below are built; the rest wait for their stage.
+Items marked (MVP) below are built, and so is everything marked L1 to L9 (each stage's As built says how). What is
+not built yet: the 8 hour soak sessions, measuring the later performance targets of 26.4 on real use, and the
+external security and legal reviews, which need people outside this work.
 
 ### 26.1 Security and prompt injection
 

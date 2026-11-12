@@ -13,7 +13,7 @@ class FakeChild extends EventEmitter {
   constructor(
     readonly command: string,
     readonly args: string[],
-    readonly options: { env: Record<string, string> },
+    readonly options: { env: Record<string, string>; cwd?: string; detached?: boolean },
   ) {
     super()
   }
@@ -27,7 +27,7 @@ class FakeChild extends EventEmitter {
   }
 }
 
-function fake_spawn(command: string, args: string[], options: { env: Record<string, string> }): FakeChild {
+function fake_spawn(command: string, args: string[], options: { env: Record<string, string>; cwd?: string; detached?: boolean }): FakeChild {
   const child = new FakeChild(command, args, options)
   spawned.push(child)
   return child
@@ -178,8 +178,10 @@ describe("BrainProcess", () => {
     const brain = await BrainProcess.start("/Applications/openMoi.app/Contents/Resources", "/Applications/openMoi.app/Contents/Resources/python/bin/python3")
     const [child] = spawned
     expect(child.command).toBe("/Applications/openMoi.app/Contents/Resources/python/bin/python3")
-    expect(child.args).toEqual(["-m", "moi_brain", "--socket", socket_path])
-    expect([child.options.env.PYTHONPATH, child.options.env.PYTHONNOUSERSITE, child.options.env.MOI_TOKEN]).toEqual(["/Applications/openMoi.app/Contents/Resources/brain", "1", "fixed"])
+    expect(child.args).toEqual(["-P", "-m", "moi_brain", "--socket", socket_path])
+    const env = child.options.env
+    expect([env.PYTHONPATH, env.PYTHONNOUSERSITE, env.PYTHONDONTWRITEBYTECODE, env.MOI_TOKEN]).toEqual(["/Applications/openMoi.app/Contents/Resources/brain", "1", "1", "fixed"])
+    expect([child.options.cwd, child.options.detached]).toEqual(["/Applications/openMoi.app/Contents/Resources/brain", true])
     brain.stop()
     child.emit("exit")
   })
@@ -201,6 +203,19 @@ describe("BrainProcess", () => {
     await vi.waitFor(() => expect(spawned).toHaveLength(1))
     spawned[0].emit("error", new Error("spawn uv ENOENT"))
     await expect(starting).rejects.toThrow("the brain could not be started with uv (spawn uv ENOENT); install uv, see the README")
+  })
+
+  it("stops the brain's whole process group, the Python uv starts as well as uv", async () => {
+    const brain = await BrainProcess.start("/repo")
+    const killed = vi.spyOn(process, "kill").mockImplementation(() => true)
+    try {
+      Object.assign(spawned[0], { pid: 4242 })
+      brain.stop()
+      expect(killed).toHaveBeenCalledWith(-4242, "SIGTERM")
+      expect(spawned[0].killed).toBe(false)
+    } finally {
+      killed.mockRestore()
+    }
   })
 
   it("stops a brain that stops answering its health checks, so it restarts", async () => {

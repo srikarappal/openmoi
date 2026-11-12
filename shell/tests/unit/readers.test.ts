@@ -148,6 +148,19 @@ describe("ReaderPool tabs", () => {
     await pool.close_all()
     expect([pool.open_tabs(), feed.closes]).toEqual([[], 2])
   })
+
+  it("after everything was deleted, reads a source again from its first post with today's steps back", async () => {
+    const feed = new FakeFeed()
+    const pool = make_pool(feed)
+    const first = new Delivered()
+    await pool.fill(source(), 12, first.take, true)
+    expect(pool.steps_used("page:feed.example.com")).toBeGreaterThan(0)
+    await pool.reset()
+    expect([pool.open_tabs(), pool.steps_used("page:feed.example.com")]).toEqual([[], 0])
+    const again = new Delivered()
+    await pool.fill(source(), 12, again.take, true)
+    expect(again.ids.slice(0, 3)).toEqual(first.ids.slice(0, 3))
+  })
 })
 
 describe("ReaderPool limits", () => {

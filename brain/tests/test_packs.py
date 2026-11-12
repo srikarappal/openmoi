@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from moi_brain.api import create_app
 from moi_brain.brain import Brain
-from moi_brain.config import REPO_DIR, Paths, Settings
+from moi_brain.config import REPO_DIR, Paths, Settings, pack_channel
 from moi_brain.packs import MAX_PACK_BYTES, PackError, installed_pack, keygen, main, public_key, sign, verified_pack
 
 SPEC = {"domain": "news.example", "path_pattern": "/", "item_root": "article", "fields": {"title": {"select": "h2"}, "url": {"select": "a", "take": "attr:href"}}}
@@ -130,6 +130,15 @@ def test_a_signed_newer_pack_installs_specs_and_policy_and_survives_a_restart(pa
     channel.signature = sign(tmp_path / "pack.json", private).read_bytes()
     assert brain.update_packs() == "installed pack v3"
     assert brain_on(paths, channel, settings, "https://packs.example/missing.json").update_packs().startswith("pack refused: ")
+
+
+def test_the_channel_shipped_with_openmoi_is_used_and_a_bad_one_is_none(pack_world, settings):
+    paths, channel, _ = pack_world
+    (paths.assets / "policy" / "pack_channel.json").write_text(json.dumps({"url": "https://packs.example/pack.json"}))
+    assert brain_on(paths, channel, settings, None).update_packs() == "installed pack v2"
+    for written in ('{"url": "http://packs.example/pack.json"}', '{"url": 5}', "not json", "[]"):
+        (paths.assets / "policy" / "pack_channel.json").write_text(written)
+        assert pack_channel(paths) is None
 
 
 def test_packs_are_off_without_a_shipped_key(paths, settings, services):

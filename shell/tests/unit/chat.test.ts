@@ -390,7 +390,7 @@ describe("ChatController sharing", () => {
 describe("ChatController your data", () => {
   it("saves everything as one file and deletes everything only once you say confirm", async () => {
     const export_everything = vi.fn(async () => ({ path: "/Users/me/openMoi/exports/openmoi_everything_20261112_120000.zip" }))
-    const delete_everything = vi.fn(async () => ({ removed: ["views", ".moi"] }))
+    const delete_everything = vi.fn(async () => ({ status: "deleting" }))
     const health = vi.fn(async () => ({ status: "ok", boot: "first" }))
     const { chat, hooks, labels } = make_chat({ export_everything, delete_everything, health } as unknown as Partial<BrainClient>)
     await chat.send("/backup")

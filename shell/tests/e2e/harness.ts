@@ -130,7 +130,7 @@ export class Harness {
   }
 
   // A fresh home and assets folder with the fixture views, the X extractor pointed at the fake world and the fake model.
-  private static prepare(world: FakeWorld, options: LaunchOptions, assets: string, home: string): void {
+  static prepare(world: FakeWorld, options: LaunchOptions, assets: string, home: string): void {
     for (const folder of ["templates", "lenses"]) cpSync(path.join(REPO_DIR, folder), path.join(assets, folder), { recursive: true })
     mkdirSync(path.join(assets, "extractors"), { recursive: true })
     const x_spec = JSON.parse(readFileSync(path.join(REPO_DIR, "extractors", "x_home_timeline.json"), "utf-8"))

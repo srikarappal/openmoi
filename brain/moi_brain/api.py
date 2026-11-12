@@ -433,8 +433,8 @@ def export_data(brain: BrainDep) -> dict[str, str]:
 
 
 @router.post("/data/delete")
-def delete_data(body: DeleteRequest, brain: BrainDep) -> dict[str, list[str]]:
-    return {"removed": brain.delete_everything(body.confirm)}
+def delete_data(body: DeleteRequest, brain: BrainDep) -> dict[str, str]:
+    return {"status": brain.delete_everything(body.confirm)}
 
 
 class LookupRequest(BaseModel):
