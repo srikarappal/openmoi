@@ -263,6 +263,8 @@ describe("default lens recipes", () => {
     expect(card.querySelector(".related_item b")).toBeNull()
     expect(Array.from(card.querySelectorAll(".mention"), (node) => node.textContent)).toEqual(["Hydro Flask bottle: found", "Instant Pot Duo: not looked up", "Mystery thing: not looked up"])
     expect(Array.from(card.querySelectorAll(".look_up"), (node) => node.textContent)).toEqual(["Look up Instant Pot Duo"])
+    const look_up = card.querySelector(".look_up") as HTMLElement
+    expect([look_up.dataset.action, look_up.dataset.entity, look_up.closest("[data-item-id]")?.getAttribute("data-item-id")]).toEqual(["look_up", "Instant Pot Duo", "p"])
     expect(document.querySelector("[data-item-id='q'] .related, [data-item-id='q'] .mentions")).toBeNull()
     ;(card.querySelector(".related_item") as HTMLElement).click()
     ;(card.querySelector(".look_up") as HTMLElement).click()

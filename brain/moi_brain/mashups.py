@@ -30,7 +30,15 @@ SITE_WORDS = {"x": "x", "twitter": "x", "youtube": "youtube", "yt": "youtube", "
 KNOWN_SITES = {"linkedin", "tiktok", "threads", "bluesky", "reddit", "mastodon", "github", "substack"}
 TOKEN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
 # Sizes and amounts that look like model numbers but name nothing: 16GB, 1080p, 10000mAh, 24x36.
-UNIT = re.compile(r"^\d+(?:GB|TB|MB|MAH|MM|CM|IN|INCH|HZ|KHZ|W|V|DB|P|K|OZ|LB|LBS|ML|KG|G|L|QT|FT|PCS|PACK|CT|X)$|^\d+X\d+$")
+UNIT = re.compile(r"^\d+(?:GB|TB|MB|MAH|MM|CM|IN|INCH|HZ|KHZ|W|V|DB|P|K|OZ|LB|LBS|ML|KG|G|L|QT|FT|PCS|PACK|CT|X|FPS)$|^\d+X\d+$|^(?:IP|KN|CR|USB|WIFI)\d+$|^H26\d$")
+# Words after which a title names what a product fits, not what it is: "Ear pads for Sony WH-1000XM5".
+FITS = re.compile(r"\b(?:for|compatible with|fits|works with)\b", re.IGNORECASE)
+# Words that make a listing an accessory of the thing a post names, at best a possible match for it.
+ACCESSORY = frozenset({"case", "cover", "liner", "liners", "pad", "pads", "replacement", "refill", "refills", "filter", "filters", "charger", "cable", "adapter", "stand", "mount", "protector", "strap", "skin", "sleeve", "pouch", "parts", "kit"})
+# A line in people.md links accounts as "Name: site @handle, site @handle"; each account is one whole entry.
+ACCOUNT_ENTRY = re.compile(r"^\s*(?:([A-Za-z][\w.]*)\s+)?@([\w.-]*\w)\s*$")
+# A name a suggestion may write into people.md: two to four plain words.
+PLAIN_NAME = re.compile(r"^[^\W\d_][\w'.-]{0,30}(?: [^\W\d_][\w'.-]{0,30}){1,3}$")
 IDENTIFIER_FIELDS = ("gtin", "upc", "ean", "gtin13", "isbn")
 # Title likeness that makes two listings in different stores a possible match, and makes a mention found.
 POSSIBLE = 0.6
@@ -102,14 +110,22 @@ def person_name(line: str) -> str:
 
 
 def people_links(people_text: str) -> dict[tuple[str, str], str]:
-    """(site, handle) to the person's name for every account people.md names; a handle without a site is ("", handle)."""
+    """(site, handle) to the person's name for every account a line lists after its first colon, each entry a whole
+    "site @handle" or "@handle" (any site); "married to @raj" or a word that is no site links nothing."""
     links: dict[tuple[str, str], str] = {}
     for line in bullets(people_text):
         name = person_name(line)
-        if not name:
+        _, colon, accounts = line.partition(":")
+        if not name or not colon:
             continue
-        for site, handle in ACCOUNT.findall(line):
-            links[(site_word(site) if site else "", handle.lower())] = name
+        for entry in re.split(r"[,;]", accounts):
+            match = ACCOUNT_ENTRY.match(entry)
+            if not match:
+                continue
+            site = site_word(match.group(1)) if match.group(1) else ""
+            if match.group(1) and not site:
+                continue
+            links[(site, match.group(2).lower())] = name
     return links
 
 
@@ -143,7 +159,7 @@ def people_suggestions(items: list[Item], links: dict[tuple[str, str], str]) -> 
     for item in items:
         account = account_of(item)
         name = " ".join((item.author_name or "").split())
-        if account is None or len(name.split()) < 2:
+        if account is None or not PLAIN_NAME.match(name):
             continue
         key = name.casefold()
         shown.setdefault(key, name)
@@ -167,10 +183,16 @@ def link_line(suggestion: PeopleSuggestion) -> str:
     return f"* {suggestion.name}: " + ", ".join(f"{site} @{handle}" for site, handle in suggestion.accounts)
 
 
+def own_part(title: str) -> str:
+    """What a title says a product is, before what it fits: "Ear pads" of "Ear pads for Sony WH-1000XM5"."""
+    return FITS.split(title or "", maxsplit=1)[0]
+
+
 def model_numbers(text: str) -> set[str]:
-    """Model numbers in a product title, without hyphens and in capitals: WH-1000XM5 and wh1000xm5 are one."""
+    """Model numbers in what a product title says it is, without hyphens and in capitals: WH-1000XM5 and wh1000xm5
+    are one; sizes and specs (16GB, IP68, KN95) are none, and a model it only fits ("for WH-1000XM5") does not count."""
     found = set()
-    for token in TOKEN.findall(text or ""):
+    for token in TOKEN.findall(own_part(text)):
         plain = token.replace("-", "").upper()
         digits = sum(character.isdigit() for character in plain)
         if len(plain) >= 4 and digits >= 2 and digits < len(plain) and not UNIT.match(plain):
@@ -208,25 +230,46 @@ def root_of(parent: dict[str, str], item_id: str) -> str:
     return item_id
 
 
+def joined(parent: dict[str, str], models: dict[str, set[str]], first: str, second: str, sure: bool) -> bool:
+    """Joins two listings' groups unless both carry model numbers and share none (an XM4 is not an XM5); the same
+    listing or barcode joins for sure."""
+    first_root, second_root = root_of(parent, first), root_of(parent, second)
+    if first_root == second_root:
+        return False
+    if not sure and models[first_root] and models[second_root] and not models[first_root] & models[second_root]:
+        return False
+    parent[first_root] = second_root
+    models[second_root] = models[second_root] | models[first_root]
+    return True
+
+
 def product_groups(items: list[Item]) -> tuple[list[list[Item]], set[str]]:
     """Listings grouped by product, in the order their first listing came, and the ids that joined a group only on
-    title likeness (a possible match): identifiers first, then titles alike across different stores."""
+    title likeness (a possible match): identifiers first, then titles alike across different stores. Titles are
+    compared only with titles sharing two words or more, so a long list stays quick."""
     parent = {item.item_id: item.item_id for item in items}
+    models = {item.item_id: model_numbers(item.title or "") for item in items}
     owner: dict[str, str] = {}
     for item in items:
         for key in identities(item):
             if key in owner:
-                parent[root_of(parent, item.item_id)] = root_of(parent, owner[key])
+                joined(parent, models, item.item_id, owner[key], not key.startswith("model:"))
             else:
                 owner[key] = item.item_id
     possible = set()
-    words = {item.item_id: story_words(item) for item in items}
+    words = {item.item_id: text_words(own_part(item.title or item.text or "")) for item in items}
+    postings: dict[str, list[int]] = {}
     for index, item in enumerate(items):
-        for other in items[:index]:
-            if root_of(parent, item.item_id) == root_of(parent, other.item_id) or site_host(item.url) == site_host(other.url):
+        shared: dict[int, int] = {}
+        for word in words[item.item_id]:
+            for earlier in postings.get(word, []):
+                shared[earlier] = shared.get(earlier, 0) + 1
+            postings.setdefault(word, []).append(index)
+        for earlier in sorted(position for position, count in shared.items() if count >= 2):
+            other = items[earlier]
+            if site_host(item.url) == site_host(other.url) or overlap(words[item.item_id], words[other.item_id]) < POSSIBLE:
                 continue
-            if overlap(words[item.item_id], words[other.item_id]) >= POSSIBLE:
-                parent[root_of(parent, item.item_id)] = root_of(parent, other.item_id)
+            if joined(parent, models, item.item_id, other.item_id, False):
                 possible.add(item.item_id)
     groups: dict[str, list[Item]] = {}
     for item in items:
@@ -234,14 +277,16 @@ def product_groups(items: list[Item]) -> tuple[list[list[Item]], set[str]]:
     return list(groups.values()), possible
 
 
-def collapse_products(items: list[Item]) -> tuple[list[Item], dict[str, list[Related]]]:
+def collapse_products(items: list[Item], shown: set[str] | frozenset[str] = frozenset()) -> tuple[list[Item], dict[str, list[Related]]]:
     """One card per product, its cheapest listing, with the product's other listings (each store once) as related,
-    cheapest first, each saying its store and whether it is only a possible match."""
+    cheapest first, each saying its store and whether it is only a possible match. A product already shown keeps the
+    listing it was shown as, so a cheaper one read later never brings it back on a later page."""
     groups, possible = product_groups(items)
     cards, related = [], {}
     for members in groups:
         priced = sorted(members, key=lambda member: (price_of(member) is None, price_of(member) or 0.0))
-        card = priced[0]
+        card = next((member for member in members if member.item_id in shown), priced[0])
+        priced = [card, *(member for member in priced if member is not card)]
         cards.append(card)
         listed = {product_key(card)}
         extra = []
@@ -261,12 +306,13 @@ def as_related(item: Item, label: str) -> Related:
 
 
 def likeness_to(name: str, item: Item) -> float:
-    """How much of a mentioned name an item's title holds: a shared model number is a match; else the share of the
-    name's words in the title."""
-    if model_numbers(name) & model_numbers(item.title or ""):
-        return 1.0
+    """How much of a mentioned name what an item's title says it is holds: a shared model number is a match; else the
+    share of the name's words in it. An accessory the name does not ask for (liners for an air fryer) is at most a
+    possible match."""
+    own = own_part(item.title or item.text or "")
     wanted = text_words(name)
-    return len(wanted & story_words(item)) / len(wanted) if wanted else 0.0
+    score = 1.0 if model_numbers(name) & model_numbers(own) else len(wanted & text_words(own)) / len(wanted) if wanted else 0.0
+    return min(score, (FOUND + MAYBE) / 2) if (text_words(own) & ACCESSORY) - wanted else score
 
 
 def best_match(name: str, candidates: list[Item]) -> tuple[Item, float] | None:

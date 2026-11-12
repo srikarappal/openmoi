@@ -322,6 +322,16 @@ class Store:
                 (target_item_id, confidence, iso(now), item_id, entity, target),
             )
 
+    def family_state(self, ref: str) -> tuple[str, int] | None:
+        """When the newest item of a source or its family was read and how many it holds, or None when it has none:
+        what changes whenever it gains items."""
+        with self.lock:
+            row = self.connection.execute(
+                "SELECT MAX(fetched_at), COUNT(*) FROM items WHERE source_id = ? OR source_id LIKE ? ESCAPE '\\' OR source_id LIKE ? ESCAPE '\\' OR source_id LIKE ? ESCAPE '\\'",
+                (ref, *(f"{like_prefix(ref)}{separator}%" for separator in (":", "/", "?"))),
+            ).fetchone()
+        return (row[0], row[1]) if row and row[0] else None
+
     def items_from_family(self, ref: str, limit: int) -> list[Item]:
         """The newest items of a source or of its family (every search on shop:amazon.com), whatever their age."""
         with self.lock:
@@ -395,17 +405,22 @@ class Store:
             rows = self.connection.execute("SELECT item_id, vector FROM vectors WHERE kind = ? ORDER BY rowid DESC LIMIT ?", (kind, limit)).fetchall()
         return dict(rows)
 
-    def search(self, words: str, limit: int) -> list[tuple[Item, float]]:
+    def search(self, words: str, limit: int, family: str | None = None) -> list[tuple[Item, float]]:
         """Items matching any of the words, best first by bm25 (which puts items with more of them first), with their
-        scores. Each word is quoted, so FTS5 operators in the words are plain words."""
+        scores; with a family, only that source's items (or its family's: every search on shop:amazon.com), chosen
+        before the limit. Each word is quoted, so FTS5 operators in the words are plain words."""
         terms = list(dict.fromkeys(f'"{word}"' for word in SEARCH_WORD.findall(words.lower())))
         if not terms:
             return []
+        within, values = "", []
+        if family is not None:
+            within = " AND (items.source_id = ? OR items.source_id LIKE ? ESCAPE '\\' OR items.source_id LIKE ? ESCAPE '\\' OR items.source_id LIKE ? ESCAPE '\\')"
+            values = [family, *(f"{like_prefix(family)}{separator}%" for separator in (":", "/", "?"))]
         with self.lock:
             found = self.connection.execute(
                 "SELECT items.item_json, bm25(items_search) FROM items_search JOIN items ON items.item_id = items_search.item_id "
-                "WHERE items_search MATCH ? ORDER BY bm25(items_search) LIMIT ?",
-                (" OR ".join(terms), limit),
+                f"WHERE items_search MATCH ?{within} ORDER BY bm25(items_search) LIMIT ?",
+                (" OR ".join(terms), *values, limit),
             ).fetchall()
         return [(Item.model_validate_json(item_json), -score) for item_json, score in found]
 

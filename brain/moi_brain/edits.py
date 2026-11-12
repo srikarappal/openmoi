@@ -157,9 +157,10 @@ class Editor:
                 self.proposals.popitem(last=False)
         return proposal
 
-    def propose_text(self, file: str, new_text: str, reply: str, view_id: str) -> Proposal:
-        """A change to one file to confirm, made without the model (a link between accounts in people.md)."""
-        old = read_text(self.paths.home / file)
+    def propose_text(self, file: str, new_text: str, reply: str, view_id: str, old: str | None = None) -> Proposal:
+        """A change to one file to confirm, made without the model (a link between accounts in people.md). old is the
+        text the change was made from, so a file changed since is refused on apply instead of silently reverted."""
+        old = read_text(self.paths.home / file) if old is None else old
         change = Change(file=file, old_text=old, new_text=new_text, diff=unified_diff(file, old, new_text))
         proposal = Proposal(proposal_id=uuid.uuid4().hex, view_id=view_id, changes=[change], reply=reply)
         with self.lock:

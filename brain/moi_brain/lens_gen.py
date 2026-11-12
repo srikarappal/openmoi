@@ -30,7 +30,8 @@ moi.less_like_this(item_id)            the person wants fewer items like this on
 moi.play(item_id)                      play a YouTube video in the host's player above the lens (on a click only)
 moi.save(item_id) / moi.unsave(item_id) keep the item in Read later, or take it out (on a click only)
 moi.lookup(item_id, entity)            look up a name the item mentions (from mentions, when can_look_up) in the view's
-                                       store: one search page, on a click only
+                                       store: one search page; call it from the click on a button with data-action
+                                       "look_up" and data-entity set to the name, inside the item's data-item-id element
 moi.open(related.item_id)              open an item shown with a card (entry of related), at its own address
 moi.act(item_id, action, text)         ask openMoi to do one of item.available_actions on the item's site (like, follow,
                                        reply with text); call it from the click on a button whose data-action is that

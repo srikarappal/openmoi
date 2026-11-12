@@ -27,8 +27,11 @@ const HOST_WORLD = 4242
 // The control a click landed on and the item card it belongs to, as the host reads the page.
 interface Control {
   action: string | null
+  entity: string | null
   item_id: string | null
 }
+
+type Bound = Extract<LensToHost, { type: "act" | "lookup" }>
 
 // Your last click or key press on a lens: where it landed, so an action can be checked against its own control.
 interface Gesture {
@@ -53,7 +56,14 @@ function continues(input_type: string, key: string, previous: Gesture | undefine
 // The control under the click (or focused, for a key press) and the item card it belongs to.
 function control_script(gesture: Gesture): string {
   const target = gesture.pointer ? `document.elementFromPoint(${gesture.x}, ${gesture.y})` : "document.activeElement"
-  return `(() => { const node = ${target}; const control = node && node.closest("[data-action]"); const card = node && node.closest("[data-item-id]"); return { action: control ? control.getAttribute("data-action") : null, item_id: card ? card.getAttribute("data-item-id") : null } })()`
+  return `(() => { const node = ${target}; const control = node && node.closest("[data-action]"); const card = node && node.closest("[data-item-id]"); return { action: control ? control.getAttribute("data-action") : null, entity: control ? control.getAttribute("data-entity") : null, item_id: card ? card.getAttribute("data-item-id") : null } })()`
+}
+
+// Whether the control under your click is the one a message asks for: the action's button, or the Look up button
+// of that very name, on that item's card.
+function is_its_control(found: Control | null, message: Bound): boolean {
+  if (!found || found.item_id !== message.item_id) return false
+  return message.type === "act" ? found.action === message.action : found.action === "look_up" && found.entity === message.entity
 }
 const NEEDS_GESTURE = new Set<LensToHost["type"]>(["open", "play", "less_like_this", "save", "unsave", "highlight", "act", "lookup"])
 
@@ -126,7 +136,7 @@ export class LensManager {
       if (context.ready) return
       context.ready = true
       this.events.on_ready(context)
-    } else if (message.type === "act") {
+    } else if (message.type === "act" || message.type === "lookup") {
       this.on_control(context, message).catch(ignore)
     } else if (this.by_gesture(contents_id, message) && this.in_time(context, message)) {
       this.events.on_event(context, message)
@@ -136,14 +146,14 @@ export class LensManager {
   // An action on a site counts only when your own click (or Enter or Space) was on that item's control for that
   // action, as the host reads the page in its own script world; each click counts for one action at most. Calls for
   // anything else are ignored without using up your click, so a lens firing its own calls cannot spoil yours.
-  private async on_control(context: LensContext, message: Extract<LensToHost, { type: "act" }>): Promise<void> {
+  private async on_control(context: LensContext, message: Bound): Promise<void> {
     const contents = context.view.webContents
     const gesture = this.gestures.get(contents.id)
     if (!gesture || gesture.used || Date.now() - gesture.at > GESTURE_WINDOW_MS) return
     if (!gesture.pointer && !ACTIVATION_KEYS.has(gesture.key)) return
     gesture.control ??= (contents.executeJavaScriptInIsolatedWorld(HOST_WORLD, [{ code: control_script(gesture) }]) as Promise<Control | null>).catch(() => null)
     const found = await gesture.control
-    if (gesture.used || found?.action !== message.action || found.item_id !== message.item_id) return
+    if (gesture.used || !is_its_control(found, message)) return
     gesture.used = true
     if (this.in_time(context, message)) this.events.on_event(context, message)
   }

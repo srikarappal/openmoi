@@ -133,7 +133,7 @@ class RelayPoll(BaseModel):
 
 class ViewRequest(BaseModel):
     exclude_ids: list[str] = Field(default_factory=list)
-    limit: int = PAGE_SIZE
+    limit: int = Field(default=PAGE_SIZE, ge=1, le=500)
 
 
 class EventsRequest(BaseModel):

@@ -279,21 +279,29 @@ describe("LensManager pacing for actions", () => {
 })
 
 describe("LensManager look up", () => {
-  it("looks up only on a click, each name at the pace of clicks", async () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it("looks up only the name on the Look up button your click landed on, one per click", async () => {
     const events = { on_ready: vi.fn(), on_event: vi.fn() }
     const lenses = new LensManager(new FakeHost(), events)
     const context = await lenses.open("view:buying", "buying", "<p>lens</p>")
-    const contents = context.view.webContents
+    const contents = context.view.webContents as unknown as FakeWebContents
+    contents.isolated_answer = { action: "look_up", entity: "Instant Pot Duo", item_id: "p" }
     const now = vi.spyOn(Date, "now").mockReturnValue(40_000)
     lens_event(contents, { type: "lookup", item_id: "p", entity: "Instant Pot Duo" })
-    press(contents)
+    await flush()
+    contents.press(10, 10)
+    for (const entity of ["A one", "B two", "C three", "D four", "E five", "F six"]) lens_event(contents, { type: "lookup", item_id: "p", entity })
+    lens_event(contents, { type: "lookup", item_id: "q", entity: "Instant Pot Duo" })
     lens_event(contents, { type: "lookup", item_id: "p", entity: "Instant Pot Duo" })
     lens_event(contents, { type: "lookup", item_id: "p", entity: "Instant Pot Duo" })
-    now.mockReturnValue(40_200)
-    press(contents)
-    lens_event(contents, { type: "lookup", item_id: "p", entity: "Hydro Flask bottle" })
-    expect(events.on_event.mock.calls.map((call) => call[1].entity)).toEqual(["Instant Pot Duo", "Hydro Flask bottle"])
-    now.mockRestore()
+    await flush()
+    now.mockReturnValue(41_000)
+    contents.isolated_answer = { action: "like", entity: null, item_id: "p" }
+    contents.press(10, 10)
+    lens_event(contents, { type: "lookup", item_id: "p", entity: "Instant Pot Duo" })
+    await flush()
+    expect(events.on_event.mock.calls.map((call) => `${call[1].item_id} ${call[1].entity}`)).toEqual(["p Instant Pot Duo"])
   })
 })
 

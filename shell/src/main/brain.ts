@@ -94,8 +94,8 @@ export class BrainClient {
     return this.request("POST", "/ingest", { source_id, records, page_url, view_id, kind })
   }
 
-  view_page(view_id: string, exclude_ids: string[]): Promise<ViewPage> {
-    return this.request("POST", `/view/${encodeURIComponent(view_id)}`, { exclude_ids })
+  view_page(view_id: string, exclude_ids: string[], limit?: number): Promise<ViewPage> {
+    return this.request("POST", `/view/${encodeURIComponent(view_id)}`, limit === undefined ? { exclude_ids } : { exclude_ids, limit })
   }
 
   // notes: items just opened that a note rule covers.

@@ -9,6 +9,8 @@ import type { DriverKind } from "./drivers"
 import type { LensContext, LensManager } from "./lenses"
 import type { ReaderPool } from "./readers"
 
+// The most cards a lookup's in place update covers: every card shown, up to the brain's own limit.
+const MAX_UPDATE = 500
 const SETTLE_POLL_MS = 1_000
 const SETTLE_ATTEMPTS = 30
 const MORE_CURSOR = "more"
@@ -257,7 +259,7 @@ export class ViewController {
     await this.refresh(context, false)
     // Cards already shown learn in place what was found, without the view starting over.
     await context.serial(async () => {
-      const page = await this.brain.view_page(context.view_id, [])
+      const page = await this.brain.view_page(context.view_id, [], Math.min(Math.max(context.rendered.size, 1), MAX_UPDATE))
       const shown = page.items.filter((view_item) => context.rendered.has(view_item.item.item_id))
       if (shown.length) context.send({ type: "update", items: shown, cursor: null })
     })

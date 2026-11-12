@@ -212,6 +212,8 @@
       row.append(element("span", "mention", `${mention.entity}: ${MENTION_STATUS[mention.status] || mention.status}`))
       if (!mention.can_look_up) continue
       const button = element("button", "look_up", `Look up ${mention.entity}`)
+      button.dataset.action = "look_up"
+      button.dataset.entity = mention.entity
       button.addEventListener("click", (event) => {
         event.stopPropagation()
         moi.lookup(item.item_id, mention.entity)
