@@ -526,3 +526,45 @@ describe("ReaderPool items read in full", () => {
     expect(await busy.read_content("https://a.example/1", false)).toEqual({ status: "failed", error: "today's budget for reading items in full is used" })
   })
 })
+
+describe("ReaderPool resting after a check", () => {
+  it("rests a source a day after a sign in wall unless you ask for it yourself", async () => {
+    vi.useFakeTimers()
+    const feed = new FakeFeed()
+    feed.wall = true
+    const pool = make_pool(feed)
+    const first = pool.fill(source(), 10, new Delivered().take, true)
+    await pass_time(11_000)
+    expect((await first).status).toBe("challenge")
+    feed.wall = false
+    vi.setSystemTime(Date.now() + 11 * 60 * 1000)
+    expect(await pool.fill(source(), 10, new Delivered().take, false)).toEqual({ status: "skipped" })
+    expect(feed.opens).toBe(1)
+    vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000)
+    expect((await pool.fill(source(), 5, new Delivered().take, false)).status).toBe("read")
+  })
+
+  it("ends the rest when you read the source yourself", async () => {
+    vi.useFakeTimers()
+    const feed = new FakeFeed()
+    feed.wall = true
+    const pool = make_pool(feed, {}, () => 0)
+    const walled = pool.fill(source(), 10, new Delivered().take, true)
+    await pass_time(11_000)
+    await walled
+    feed.wall = false
+    expect((await pool.fill(source(), 5, new Delivered().take, true)).status).toBe("read")
+  })
+
+  it("rests a watched page that hit a check too", async () => {
+    vi.useFakeTimers()
+    const page = new WatchedPage()
+    page.wall = true
+    const WATCHED = source("watch:visa.example.gov/slots", { start_url: "https://visa.example.gov/slots", purpose: "watch", spec: null })
+    const pool = make_pool(page, {}, () => 0)
+    const walled = pool.read_text(WATCHED, true)
+    await pass_time(2_100)
+    expect((await walled).status).toBe("challenge")
+    expect(await pool.read_text(WATCHED, false)).toEqual({ status: "skipped" })
+  })
+})

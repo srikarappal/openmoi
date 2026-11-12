@@ -18,6 +18,8 @@ const SPEC_SETTLE_MS = 2_000
 const POLL_MS = 400
 const EMPTY_STEPS_TO_END = 3
 const RETRY_PAUSE_MS = 2_000
+// After a sign in wall or a check, a source rests this long unless you ask for it yourself.
+const CHALLENGE_BACKOFF_MS = 24 * 60 * 60 * 1000
 const DEFAULT_DAILY_STEPS = 200
 // Items read in full (to summarize them or note them) each day, over all sites.
 const DAILY_CONTENT_READS = 50
@@ -73,6 +75,7 @@ export class ReaderPool {
   // Records each source already handed over, kept when its tab closes so a reopened tab skips them quickly.
   private readonly known = new Map<string, Set<string>>()
   private readonly steps = new Map<string, { day: string; used: number }>()
+  private readonly resting = new Map<string, number>()
 
   constructor(
     private readonly driver_for: () => PageDriver | Promise<PageDriver>,
@@ -86,9 +89,9 @@ export class ReaderPool {
   // Automatic fills of a source happen at most every 10 minutes; forced ones (you refreshing or scrolling) always.
   // from_top starts the source over (a refresh wants what is new); otherwise its tab continues where it stopped.
   async fill(source: PageSource, wanted: number, on_batch: BatchHandler, force: boolean, from_top = false): Promise<FillOutcome> {
-    if (!this.throttle.allow(source.source_id, force)) return { status: "skipped" }
+    if (this.rests(source, force) || !this.throttle.allow(source.source_id, force)) return { status: "skipped" }
     if (from_top) await this.close(source.source_id)
-    const outcome = await this.attempt(source, wanted, on_batch, from_top)
+    const outcome = this.note_challenge(source, await this.attempt(source, wanted, on_batch, from_top))
     if (outcome.status !== "failed" || outcome.driver !== "chrome" || outcome.final) return outcome
     // Chrome may have restarted the extension mid read: try once more through the connection it has now.
     await this.close(source.source_id)
@@ -99,14 +102,14 @@ export class ReaderPool {
   // One look at a watched page: opened in its own quiet tab, given a moment to load, its text read, the tab closed.
   // It spends one step of the source's daily budget; automatic looks keep to the 10 minute pace.
   async read_text(source: PageSource, force: boolean): Promise<TextOutcome> {
-    if (!this.throttle.allow(source.source_id, force)) return { status: "skipped" }
+    if (this.rests(source, force) || !this.throttle.allow(source.source_id, force)) return { status: "skipped" }
     const driver = await this.driver_for()
     if (!this.spend_step(source)) return { status: "failed", error: "today's budget for this page is used", driver: driver.kind }
     let handle: string | null = null
     try {
       handle = await driver.open(source.start_url, true)
       await sleep(SPEC_SETTLE_MS)
-      if (await driver.run<boolean>(handle, "challenge")) return { status: "challenge", url: await driver.url(handle), driver: driver.kind }
+      if (await driver.run<boolean>(handle, "challenge")) return this.note_challenge<TextOutcome>(source, { status: "challenge", url: await driver.url(handle), driver: driver.kind })
       return { status: "read", page: await driver.run<PageText>(handle, "text"), driver: driver.kind }
     } catch (error) {
       return { status: "failed", error: error instanceof Error ? error.message : String(error), driver: driver.kind }
@@ -259,6 +262,17 @@ export class ReaderPool {
       previous = old ? record : null
     }
     return undefined
+  }
+
+  // A source that hit a sign in wall or check rests a day from automatic reads; reading it yourself ends the rest.
+  private rests(source: PageSource, force: boolean): boolean {
+    if (force) this.resting.delete(source.source_id)
+    return (this.resting.get(source.source_id) ?? 0) > this.clock()
+  }
+
+  private note_challenge<T extends { status: string }>(source: PageSource, outcome: T): T {
+    if (outcome.status === "challenge") this.resting.set(source.source_id, this.clock() + CHALLENGE_BACKOFF_MS)
+    return outcome
   }
 
   private spend_step(source: PageSource): boolean {

@@ -25,13 +25,14 @@ from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.files import read_json, write_atomic
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
-from moi_brain.items import HANDLE, Event, Item, ViewItem, normalize, page_source_id, profile_handle, rss_source_id, watch_source_id, youtube_source_id
+from moi_brain.items import HANDLE, Event, Item, ViewItem, normalize, page_source_id, profile_handle, rss_source_id, site_host, watch_source_id, youtube_source_id
 from moi_brain.lens_gen import generate_lens
 from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import parse_sections, section_text
 from moi_brain.memory import TOPIC_FILES, Memory
 from moi_brain.mirror import MAX_DAYS, Mirror, build_mirror
+from moi_brain.policy import Mode, load_policy, policy_for
 from moi_brain.rank import PAGE_SIZE, Circles, Order, applies, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
@@ -76,6 +77,8 @@ class PageSource(BaseModel):
     # "follows": a page listing accounts you follow, read into who you know rather than into items.
     # "watch": a page whose text is compared with its last look.
     purpose: Literal["items", "follows", "watch"] = "items"
+    # "assist": read only while you browse the page yourself in Chrome, never by a reader tab.
+    mode: Mode = "pilot"
 
 
 class ContentWanted(BaseModel):
@@ -227,6 +230,7 @@ class Brain:
         self.updater = Updater(self.store, self.gateway)
         self.editor = Editor(paths, self.gateway)
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors)
+        self.policies = load_policy(paths.site_policy)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
         self.relay = RelayHub(paths.relay_trust, self.queue_relay_event, self.relay_config)
         self.relay_events: deque[MineRequest] = deque(maxlen=MAX_RELAY_EVENTS)
@@ -279,29 +283,50 @@ class Brain:
             readers += [(rss_source_id(feed), feed, partial(self.fetcher.fetch_rss, feed)) for feed in source.feeds]
         return readers
 
+    def policy_warnings(self, compiled: CompiledView) -> list[str]:
+        """Pages of this view that the site policy turned off, said once per site."""
+        urls = [page for source in compiled.sources for page in [*source.pages, *source.following, *(watch.url for watch in source.watches)]]
+        if any(source.source_id == "x" for source in compiled.sources):
+            urls.append(f"https://{X_DOMAIN}/home")
+        stopped = {site_host(url): policy_for(self.policies, url).status for url in urls if policy_for(self.policies, url).status != "active"}
+        return [f"{site} is {status} by the site policy, so openMoi does not read it." for site, status in stopped.items()]
+
+    def budget_for(self, url: str) -> dict[str, int]:
+        return {**PILOT_BUDGET, "daily_steps": policy_for(self.policies, url).daily_steps}
+
     def page_sources(self, compiled: CompiledView) -> list[PageSource]:
+        """Pages to read in your session, each by its site's policy: a removed site is never read; a page's own
+        line may choose assist or pilot."""
         found = []
         for source in compiled.sources:
             if source.source_id != "x":
                 continue
             spec = self.extractors.for_page_type(X_DOMAIN, source.page_type or "home_timeline")
-            if spec and spec.start_url:
-                found.append(PageSource(source_id="x", page_type=spec.page_type, start_url=spec.start_url, spec=spec, budget=PILOT_BUDGET))
+            if spec and spec.start_url and policy_for(self.policies, spec.start_url).status == "active":
+                policy = policy_for(self.policies, spec.start_url)
+                found.append(PageSource(source_id="x", page_type=spec.page_type, start_url=spec.start_url, spec=spec, budget=self.budget_for(spec.start_url), mode=policy.mode))
         for source in compiled.sources:
             for page in source.pages:
+                policy = policy_for(self.policies, page)
+                if policy.status != "active":
+                    continue
                 found.append(
                     PageSource(
                         source_id=page_source_id(page),
                         page_type="listing",
                         start_url=page,
                         spec=self.extractors.for_url(page),
-                        budget=PILOT_BUDGET,
+                        budget=self.budget_for(page),
                         chronological=page in source.ordered,
+                        mode=source.modes.get(page, policy.mode),
                     )
                 )
             for watch in source.watches:
-                found.append(PageSource(source_id=watch_source_id(watch.url), page_type="watch", start_url=watch.url, spec=None, budget=PILOT_BUDGET, purpose="watch"))
+                if policy_for(self.policies, watch.url).status == "active":
+                    found.append(PageSource(source_id=watch_source_id(watch.url), page_type="watch", start_url=watch.url, spec=None, budget=self.budget_for(watch.url), purpose="watch"))
             for page in source.following:
+                if policy_for(self.policies, page).status != "active":
+                    continue
                 read_at = self.store.list_read_at(page)
                 if read_at is None or self.clock() - read_at >= FOLLOWS_EVERY:
                     spec = self.extractors.for_url(page)
@@ -508,6 +533,8 @@ class Brain:
             for source in compiled.sources:
                 for watch in source.watches:
                     last = self.store.watch_text(watch.url)
+                    if policy_for(self.policies, watch.url).status != "active":
+                        continue
                     if last is None or now - last[1] >= timedelta(minutes=watch.every_minutes):
                         due[watch.url] = PageSource(source_id=watch_source_id(watch.url), page_type="watch", start_url=watch.url, spec=None, budget=PILOT_BUDGET, purpose="watch")
         return list(due.values())
@@ -608,6 +635,7 @@ class Brain:
             problems.append(self.tagger.status)
         if circles.empty and any(condition and condition.field == "author_in" for rule in compiled.rules for condition in (rule.when, rule.unless)):
             problems.append(NOBODY_KNOWN)
+        problems += self.policy_warnings(compiled)
         return ViewPage(
             view_id=view_id,
             items=ranked,

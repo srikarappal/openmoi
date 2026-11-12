@@ -553,3 +553,28 @@ describe("ViewController summaries in place", () => {
     expect(made.context.send).toHaveBeenCalledWith({ type: "update", items: [{ item: summarized, reasons: [] }], cursor: null })
   })
 })
+
+describe("ViewController assist pages", () => {
+  const ASSIST = { source_id: "page:facebook.com/events", start_url: "https://www.facebook.com/events", mode: "assist", spec: null } as PageSource
+
+  it("never reads an assist page in a tab and asks for Mine once when it has no spec", async () => {
+    const { views, context, sources, hooks } = make_views([read(5)], [], [ASSIST, X_SOURCE])
+    await views.refresh(context, true)
+    expect(fills(sources).map((fill) => fill[0])).toEqual(["x"])
+    expect(hooks.notify).toHaveBeenCalledWith(
+      "https://www.facebook.com/events is read only while you browse it yourself: open it in Chrome and press Mine once, so openMoi learns the page.",
+      "https://www.facebook.com/events",
+      "source:page:facebook.com/events",
+    )
+    await views.on_event(context, { type: "more", cursor: "deeper" })
+    expect(fills(sources).every((fill) => fill[0] === "x")).toBe(true)
+  })
+
+  it("stays quiet about an assist page that already has its spec", async () => {
+    const learned = { ...ASSIST, spec: { item_root: "div" } } as unknown as PageSource
+    const { views, context, hooks } = make_views([], [], [learned])
+    await views.refresh(context, true)
+    expect(hooks.notify).not.toHaveBeenCalled()
+    expect(hooks.retract).toHaveBeenCalledWith("source:page:facebook.com/events")
+  })
+})

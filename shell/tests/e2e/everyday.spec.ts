@@ -219,3 +219,16 @@ test("a view file a friend shared is dropped on the chat, confirmed and opens as
     await harness.close()
   }
 })
+
+test("a page marked assist is never read by a reader tab and asks for Mine once", async () => {
+  const feed = `# Feed\n\n## Sources\n* Page: ${world.base_url}/pages/endless.html (assist)\n* RSS: ${world.base_url}/rss/tech.xml\n`
+  const harness = await Harness.launch(world, { views: { feed } })
+  try {
+    await loaded(harness, "New laptop chip")
+    await expect(harness.chrome.locator(".notice", { hasText: "is read only while you browse it yourself" })).toBeVisible({ timeout: 15_000 })
+    const readers = await harness.app.evaluate(({ webContents }) => webContents.getAllWebContents().filter((contents) => contents.getURL().includes("endless.html")).length)
+    expect(readers).toBe(0)
+  } finally {
+    await harness.close()
+  }
+})

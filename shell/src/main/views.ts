@@ -340,11 +340,30 @@ export class ViewController {
     })
   }
 
+  // A page read only while you browse it yourself: nothing to scroll; it needs a spec, which Mine in Chrome makes once.
+  private assist(view_id: string, source: PageSource): void {
+    this.finished.set(view_id, (this.finished.get(view_id) ?? new Set<string>()).add(source.source_id))
+    const tag = source_tag(source.source_id)
+    if (source.spec) {
+      this.hooks.retract(tag)
+      return
+    }
+    this.hooks.notify(
+      `${source.start_url} is read only while you browse it yourself: open it in Chrome and press Mine once, so openMoi learns the page.`,
+      source.start_url,
+      tag,
+    )
+  }
+
   // A notice about a source is replaced by its latest read, so one that worked leaves nothing behind.
   private async read_sources(view_id: string, sources: PageSource[], force: boolean, wanted: Map<string, number>, from_top: boolean): Promise<void> {
     for (const source of sources) {
       if (source.purpose === "watch") {
         await this.check_watch(source, force)
+        continue
+      }
+      if (source.mode === "assist") {
+        this.assist(view_id, source)
         continue
       }
       const tag = source_tag(source.source_id)

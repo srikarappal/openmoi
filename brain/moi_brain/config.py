@@ -205,6 +205,10 @@ class Paths:
     def builtin_extractors(self) -> Path:
         return self.assets / "extractors"
 
+    @property
+    def site_policy(self) -> Path:
+        return self.assets / "policy" / "sites.json"
+
 
 def load_paths() -> Paths:
     home = Path(os.environ.get("MOI_HOME", Path.home() / "openMoi")).expanduser()

@@ -25,11 +25,13 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "10"
+COMPILER_VERSION = "11"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
 NEWEST_FIRST = re.compile(r"newest first|chronological|in order", re.IGNORECASE)
+# "(assist)" reads a page only while you browse it yourself; "(pilot)" lets a reader tab read it.
+READ_MODE = re.compile(r"\b(assist|pilot)\b", re.IGNORECASE)
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
 DEFAULT_BOOST = 3.0
 FIXED_FIELDS = ("source_id", "author_handle", "author_in", "topic", "media_kind", "text", "age_hours")
@@ -168,6 +170,8 @@ class SourceRef(BaseModel):
     ordered: list[str] = Field(default_factory=list)
     # Pages listing the accounts you follow, read about once a week to know who is a stranger.
     following: list[str] = Field(default_factory=list)
+    # How a page asks to be read, when its line says: "assist" or "pilot".
+    modes: dict[str, Literal["pilot", "assist"]] = Field(default_factory=dict)
     # Pages watched for changes: a change becomes an item your rules judge, and an alert if they keep it.
     watches: list[WatchRef] = Field(default_factory=list)
 
@@ -212,6 +216,7 @@ def check_view_id(view_id: str) -> str:
 def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRef], list[str]]:
     """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://... (newest first)' or a bare feed URL."""
     has_x, channels, feeds, pages, ordered, following, watches, warnings = False, [], [], [], [], [], [], []
+    modes: dict[str, Literal["pilot", "assist"]] = {}
     for line in bullets(body):
         label, _, rest = line.partition(":")
         key = label.strip().lower()
@@ -227,6 +232,8 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
             pages += found_pages
             if NEWEST_FIRST.search(URL.sub("", rest)):
                 ordered += found_pages
+            if mode := READ_MODE.search(URL.sub("", rest)):
+                modes |= {page: "assist" if mode.group(1).lower() == "assist" else "pilot" for page in found_pages}
             if not found_pages:
                 warnings.append(f"No page address found in: {line}")
         elif key == "watch":
@@ -251,7 +258,14 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
     if pages or following or watches:
         unique_watches = list({watch.url: watch for watch in watches}.values())
         sources.append(
-            SourceRef(source_id="page", pages=list(dict.fromkeys(pages)), ordered=list(dict.fromkeys(ordered)), following=list(dict.fromkeys(following)), watches=unique_watches)
+            SourceRef(
+                source_id="page",
+                pages=list(dict.fromkeys(pages)),
+                ordered=list(dict.fromkeys(ordered)),
+                following=list(dict.fromkeys(following)),
+                watches=unique_watches,
+                modes=modes,
+            )
         )
     return sources, warnings
 

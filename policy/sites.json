@@ -1,0 +1,9 @@
+{
+  "policy_version": 1,
+  "sites": {
+    "facebook.com": {"status": "active", "mode": "assist", "daily_steps": 60},
+    "instagram.com": {"status": "active", "mode": "pilot", "daily_steps": 60},
+    "linkedin.com": {"status": "active", "mode": "pilot", "daily_steps": 60},
+    "x.com": {"status": "active", "mode": "pilot", "daily_steps": 200}
+  }
+}

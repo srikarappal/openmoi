@@ -48,7 +48,7 @@ Part 2: Later
 30. Open questions
 31. Beyond
 
-Part 3: Your reality, your terms `[proposed]`
+Part 3: Your reality, your terms `[built]`
 
 32. Vision
 33. Scenarios
@@ -817,7 +817,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 566 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 428 shell and extension unit (97% of lines), 34 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 576 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 433 shell and extension unit (97% of lines), 35 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -882,7 +882,7 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 
 ## 17. L1 Robust reading `[partly built]`
 
-**Built early:** any site's feed page as a source, its spec written from the page skeleton the first time (9.2); a daily scroll cap per source (200 steps); reader tabs that continue where they stopped (7). Facebook and Instagram through reader tabs are untested on the real sites.
+**Built early:** any site's feed page as a source, its spec written from the page skeleton the first time (9.2); a daily scroll cap per source (200 steps); reader tabs that continue where they stopped (7); pilot and assist modes, the site policy file with daily caps and a 24 h challenge rest (34.7). Facebook and Instagram are untested on the real sites.
 
 **Adds**
 
@@ -1327,9 +1327,9 @@ openMoi/
 * A gallery of shared views and lenses, with review.
 * Voice and ambient surfaces on top of the same views.
 
-# Part 3: Your reality, your terms `[proposed]`
+# Part 3: Your reality, your terms `[built]`
 
-Proposal, Nov 11, 2026. Nothing here is agreed or built; it changes Parts 1 and 2 only where 35 says so.
+Proposed Nov 11, 2026 and built the same week, section by section in the order of 36; each section says what was built and where it differs from the proposal. Real sites behind your logins (Facebook, Instagram, YouTube captions) are untested.
 
 ## 32. Vision
 
@@ -1439,9 +1439,11 @@ item kept by the rules -> its page opened by the reader driver within the page l
 | History `[built]` | Keep rate is computed per render and never stored | As built, no new table for items: items live 30 days with their first read time, so the mirror is computed from them by today's rules (listed, kept by some view, seen, opened, from strangers, judged yes). A small `moments` table counts visits, five more minutes and early openings. `/mirror [days]` shows it in chat and it comes by itself once a week (the first launch starts the week; a week with nothing to show stays quiet) | 6 |
 | Import `[built]` | A shared view file has no way in | Drop a view file in chat -> untrusted text -> a proposal you confirm like any edit -> its lens regenerated from Layout, never copied; people and personal rules stripped (L7 guardrails). As built: drop a .md file on the chat or `/import <https link>`; only Sources, Rules, Layout and Time are kept (comments and other sections are dropped); the proposal names the sources it would read in your own sessions; a name already taken gets a number. `/share` writes the copy you send, leaving out rule lines naming people, following lists and watched pages | 12 |
 
-### 34.7 Reading risk
+### 34.7 Reading risk `[built]`
 
 Facebook and Instagram through reader tabs are untested on the real sites (4, 5). L1 plans Facebook in assist mode, reading only pages you scroll yourself, which rules out a reader tab scrolling it for you. Decide per source in the site policy (26.2): pilot with a low daily cap, or assist only, in which case scenarios 4 and 5 cover Facebook only from what you scroll.
+
+As built: `policy/sites.json` ships with Facebook in assist and Instagram and LinkedIn in pilot at 60 scroll steps a day (X at 200); a site's subdomains follow it. A page's own line can say `(assist)` or `(pilot)`; a site marked `paused` or `removed` is never read and its views say so. An assist page is never opened by a reader tab: without a spec its view asks you once to press Mine on it in Chrome, after which the extension reads it as you browse. After a sign in wall or a check a source rests a day from automatic reads; reading it yourself ends the rest.
 
 ## 35. Changes to this design
 
@@ -1450,7 +1452,7 @@ Facebook and Instagram through reader tabs are untested on the real sites (4, 5)
 | Principle 5 (2), guardrail 3 (12) | Reads only on your action | Done: reads on your action or on a schedule you wrote, within the same daily budget per source |
 | Guardrail 5 (12) | Web content never writes memory or rules | Done: web content may add to `memory/journal/` as quoted data with a link; never to topic files, views or rules |
 | L6 scheduling (22) | Rung 2 and 3 sources read only while you use the app | Done: also read on a view's schedule (34.1); still read only |
-| L1 Facebook (17) | Assist mode by default | Chosen per source in the site policy (34.7) |
+| L1 Facebook (17) | Assist mode by default | Done: chosen per source in the site policy (34.7) |
 | View file (9.4) | Sources, Rules, Layout | Done: adds an optional Time section |
 | Sources (9.2) | RSS, YouTube, X, `Page:` | Done: adds `Watch:`, `Following:` and a `(newest first)` mark on `Page:` |
 | Condition (11.4) | 6 fields | Done: adds `judged:<name>` and `author_in` |

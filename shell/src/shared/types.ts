@@ -69,6 +69,8 @@ export interface PageSource {
   // "follows": a page listing the accounts you follow, read into who you know rather than into items.
   // "watch": a page whose text is compared with its last look.
   purpose?: "items" | "follows" | "watch"
+  // "assist": read only while you browse the page yourself in Chrome, never by a reader tab (the site's policy or its line).
+  mode?: "pilot" | "assist"
 }
 
 export interface ViewPage {
