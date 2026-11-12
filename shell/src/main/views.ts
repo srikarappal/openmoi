@@ -186,6 +186,12 @@ export class ViewController {
     return [...new Set((this.seen_log.get(view_id) ?? []).filter((entry) => entry.at >= since).map((entry) => entry.label))]
   }
 
+  // A page source that offers a feed: say once that the feed reads without a tab.
+  offer_feeds(source: PageSource, feeds: Array<{ title: string; url: string }>): void {
+    const [feed] = feeds
+    this.hooks.notify(`${source.start_url} also offers a feed${feed.title ? `, ${feed.title}` : ""}: add "RSS: ${feed.url}" to Sources to read it without a tab.`, feed.url, `feed:${source.source_id}`)
+  }
+
   // Feed sources that may still give more; following lists and watched pages are looked at, never read ahead.
   private open_sources(view_id: string): PageSource[] {
     const finished = this.finished.get(view_id) ?? new Set<string>()

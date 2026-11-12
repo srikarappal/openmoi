@@ -622,3 +622,55 @@ describe("ReaderPool drift", () => {
     expect(brain.generate_extractor).toHaveBeenCalledWith("https://feed.example.com/", '<main><article class="post">{t:9}</article></main>', "the saved spec v4 found 2 items where it usually finds 20")
   })
 })
+
+// A feed page that also offers an RSS feed and whose own JSON was captured.
+class OfferingFeed extends FakeFeed {
+  structured_calls = 0
+  feeds: Array<{ title: string; url: string }> = [{ title: "News", url: "https://feed.example.com/rss" }]
+  broken = false
+
+  override async run<T>(handle: string, op: string): Promise<T> {
+    if (op === "structured") {
+      this.structured_calls += 1
+      if (this.broken) throw new Error("page gone")
+      return { page_type: "feed", records: [], feeds: this.feeds } as T
+    }
+    return super.run<T>(handle, op)
+  }
+
+  captured(): RawRecord[] {
+    return [{ native_id: "json1", url: "https://feed.example.com/json1", title: "From the page's own JSON" }]
+  }
+}
+
+describe("ReaderPool feeds and captured JSON", () => {
+  it("says once that a page offers a feed, and adds what the page's own JSON held", async () => {
+    vi.useFakeTimers()
+    const page = new OfferingFeed()
+    const offered = vi.fn()
+    const pool = new ReaderPool(() => page, healthy_brain({}), undefined, Date.now, () => 0, offered)
+    const delivered = new Delivered()
+    const filling = pool.fill(source(), 6, delivered.take, true, true)
+    await pass_time(4_000)
+    await filling
+    expect(offered).toHaveBeenCalledWith(expect.objectContaining({ source_id: "page:feed.example.com" }), page.feeds)
+    expect(delivered.ids).toContain("json1")
+    const again = pool.fill(source(), 6, new Delivered().take, true, true)
+    await pass_time(4_000)
+    await again
+    expect(offered).toHaveBeenCalledTimes(1)
+    expect(page.structured_calls).toBe(1)
+  })
+
+  it("stays quiet when a page offers no feed or cannot say", async () => {
+    vi.useFakeTimers()
+    for (const page of [Object.assign(new OfferingFeed(), { feeds: [] }), Object.assign(new OfferingFeed(), { broken: true })]) {
+      const offered = vi.fn()
+      const pool = new ReaderPool(() => page, healthy_brain({}), undefined, Date.now, () => 0, offered)
+      const filling = pool.fill(source(), 5, new Delivered().take, true, true)
+      await pass_time(4_000)
+      expect((await filling).status).toBe("read")
+      expect(offered).not.toHaveBeenCalled()
+    }
+  })
+})

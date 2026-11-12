@@ -1,6 +1,7 @@
 // Where page operations run: in your own Chrome through the relay, or in openMoi's own hidden views as a fallback.
 import { WebContentsView, type WebContents } from "electron"
-import type { PageOp } from "../shared/types"
+import type { PageOp, RawRecord } from "../shared/types"
+import { JsonCapture } from "./capture"
 import type { BrainClient } from "./brain"
 import type { ViewHost } from "./host"
 import { sleep } from "../shared/timing"
@@ -12,10 +13,13 @@ export type DriverKind = "chrome" | "openmoi"
 export interface PageDriver {
   readonly kind: DriverKind
   // Opens a page and resolves once it has loaded; background pages are for reading, not for you to look at.
-  open(url: string, background: boolean): Promise<string>
+  // capture asks to read the JSON the page fetches too, where the driver can.
+  open(url: string, background: boolean, capture?: boolean): Promise<string>
   run<T>(handle: string, op: PageOp, args?: Record<string, unknown>): Promise<T>
   url(handle: string): Promise<string>
   close(handle: string): Promise<void>
+  // Records from JSON the page fetched since the last call; none where the driver cannot capture.
+  captured?(handle: string): RawRecord[]
 }
 
 // A page that keeps loading (a stream, a long poll) is read anyway after this long, so it cannot hold up every later read.
@@ -51,6 +55,7 @@ export class RelayDriver implements PageDriver {
 interface ElectronPage {
   contents: WebContents
   view?: WebContentsView
+  capture?: JsonCapture
 }
 
 // openMoi's own Chromium session: hidden views for reading, or one of openMoi's web tabs for Mine.
@@ -61,13 +66,15 @@ export class ElectronDriver implements PageDriver {
 
   constructor(private readonly host: ViewHost) {}
 
-  async open(url: string, background: boolean): Promise<string> {
+  async open(url: string, background: boolean, capture = false): Promise<string> {
     const view = new WebContentsView({ webPreferences: web_preferences(this.host.page_preload, background) })
     view.webContents.setAudioMuted(true)
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     this.host.attach_behind(view)
     const handle = `view:${this.next_id++}`
-    this.pages.set(handle, { contents: view.webContents, view })
+    const listener = capture ? new JsonCapture(view.webContents) : undefined
+    listener?.start()
+    this.pages.set(handle, { contents: view.webContents, view, capture: listener })
     try {
       await Promise.race([view.webContents.loadURL(url), sleep(LOAD_TIMEOUT_MS)])
     } catch (error) {
@@ -95,9 +102,14 @@ export class ElectronDriver implements PageDriver {
     return this.page(handle).contents.getURL()
   }
 
+  captured(handle: string): RawRecord[] {
+    return this.pages.get(handle)?.capture?.take() ?? []
+  }
+
   async close(handle: string): Promise<void> {
     const page = this.pages.get(handle)
     this.pages.delete(handle)
+    page?.capture?.stop()
     if (!page?.view) return
     this.host.detach(page.view)
     page.view.webContents.close()

@@ -115,7 +115,7 @@ export class Shell implements ViewHost {
       approval_needed: (extension_id) => this.ask_approval(extension_id),
       mine: (request) => this.open_chrome_page(request).catch((error) => this.notify(explain(error))),
     })
-    this.readers = new ReaderPool(() => this.relay.reading_driver(), brain)
+    this.readers = new ReaderPool(() => this.relay.reading_driver(), brain, undefined, undefined, undefined, (source, feeds) => this.views.offer_feeds(source, feeds))
     this.lenses = new LensManager(this, { on_ready: (context) => this.on_lens_ready(context), on_event: (context, message) => this.on_lens_event(context, message) })
     this.chat = new ChatController(brain, {
       chat_view: () => this.chat_view_id,

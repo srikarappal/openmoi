@@ -71,6 +71,8 @@ export interface PageSource {
   purpose?: "items" | "follows" | "watch"
   // "assist": read only while you browse the page yourself in Chrome, never by a reader tab (the site's policy or its line).
   mode?: "pilot" | "assist"
+  // Also read the JSON the page fetches by itself, in openMoi's own session (the site's policy).
+  capture?: boolean
 }
 
 export interface ViewPage {

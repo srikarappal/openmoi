@@ -6,7 +6,7 @@
 import { record_key } from "../shared/extract"
 import { Throttle, sleep } from "../shared/timing"
 import { MAX_FULL_TEXT } from "../shared/article"
-import type { ExtractorSpec, ItemContent, PageSource, PageText, RawRecord, TranscriptSource } from "../shared/types"
+import type { ExtractorSpec, ItemContent, PageSource, PageText, RawRecord, StructuredPage, TranscriptSource } from "../shared/types"
 import type { BrainClient } from "./brain"
 import type { DriverKind, PageDriver } from "./drivers"
 import { find_listing_spec, run_report, type SpecResult } from "./listing_spec"
@@ -47,6 +47,9 @@ export type ContentOutcome = { status: "read"; content: ItemContent } | { status
 
 export type TextOutcome = { status: "read"; page: PageText; driver: DriverKind } | { status: "skipped" } | { status: "challenge"; url: string; driver: DriverKind } | { status: "failed"; error: string; driver: DriverKind }
 
+// A page source whose page offers a feed, which reads without any tab.
+export type FeedsHandler = (source: PageSource, feeds: Array<{ title: string; url: string }>) => void
+
 // Receives each batch of new records as soon as it is extracted, so the first items show before scrolling ends.
 // It may answer with the positions of records the brain had stored before.
 export type BatchHandler = (records: RawRecord[]) => Promise<number[] | void>
@@ -85,6 +88,7 @@ export class ReaderPool {
   private readonly known = new Map<string, Set<string>>()
   private readonly steps = new Map<string, { day: string; used: number }>()
   private readonly resting = new Map<string, number>()
+  private readonly feeds_told = new Set<string>()
 
   constructor(
     private readonly driver_for: () => PageDriver | Promise<PageDriver>,
@@ -92,6 +96,7 @@ export class ReaderPool {
     private readonly throttle = new Throttle(AUTO_INTERVAL_MS),
     private readonly clock: () => number = Date.now,
     private readonly random: () => number = Math.random,
+    private readonly on_feeds: FeedsHandler = ignore,
   ) {}
 
   // Reads until `wanted` new records arrived, the feed ends or today's budget for the source is used.
@@ -181,7 +186,7 @@ export class ReaderPool {
         if (!this.spend_step(source)) return { status: "exhausted", delivered, driver: driver.kind }
         await driver.run(tab.handle, "scroll", { step_px: tab.spec.pagination.step_px || DEFAULT_STEP_PX })
         await sleep(source.budget.min_step_interval_ms * (1 + this.random() * JITTER))
-        const records = await driver.run<RawRecord[]>(tab.handle, "extract", { spec: tab.spec })
+        const records = [...(await driver.run<RawRecord[]>(tab.handle, "extract", { spec: tab.spec })), ...(driver.captured?.(tab.handle) ?? [])]
         const fresh = await this.deliver(tab, records, on_batch)
         delivered += fresh
         reached = this.reached(source, tab, records)
@@ -203,21 +208,35 @@ export class ReaderPool {
   private async tab_for(source: PageSource, driver: PageDriver): Promise<Opened> {
     const existing = this.tabs.get(source.source_id)
     if (existing && existing.driver === driver && (await this.still_there(existing, source))) {
-      return { tab: existing, first: await driver.run<RawRecord[]>(existing.handle, "extract", { spec: existing.spec }) }
+      const records = await driver.run<RawRecord[]>(existing.handle, "extract", { spec: existing.spec })
+      return { tab: existing, first: [...records, ...(driver.captured?.(existing.handle) ?? [])] }
     }
     if (existing) await this.close(source.source_id)
     await this.make_room()
-    const handle = await driver.open(source.start_url, true)
+    const handle = await driver.open(source.start_url, true, source.capture)
     const first = await this.first_records(driver, handle, source)
     if (first === null) {
       const challenge = await driver.url(handle)
       await driver.close(handle).catch(ignore)
       return { challenge }
     }
+    await this.offer_feeds(driver, handle, source)
     const read_before = new Set(this.known.get(source.source_id) ?? [])
     const tab: ReaderTab = { source_id: source.source_id, driver, handle, spec: first.spec, last_used: this.clock(), idle_timer: null, read_before }
     this.tabs.set(source.source_id, tab)
-    return { tab, first: first.records }
+    return { tab, first: [...first.records, ...(driver.captured?.(handle) ?? [])] }
+  }
+
+  // A page that advertises a feed is said once: the feed reads without a tab.
+  private async offer_feeds(driver: PageDriver, handle: string, source: PageSource): Promise<void> {
+    if (this.feeds_told.has(source.source_id)) return
+    this.feeds_told.add(source.source_id)
+    try {
+      const page = await driver.run<StructuredPage | null>(handle, "structured")
+      if (page?.feeds.length) this.on_feeds(source, page.feeds)
+    } catch {
+      return
+    }
   }
 
   private async still_there(tab: ReaderTab, source: PageSource): Promise<boolean> {

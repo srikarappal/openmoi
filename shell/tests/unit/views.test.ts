@@ -604,3 +604,13 @@ describe("ViewController after the review", () => {
     expect(add_content).not.toHaveBeenCalled()
   })
 })
+
+describe("ViewController feed offers", () => {
+  it("suggests reading a page's own feed without a tab", () => {
+    const { views, hooks } = make_views([])
+    views.offer_feeds(FEED_SOURCE, [{ title: "Daily", url: "https://feed.example.com/rss" }])
+    expect(hooks.notify).toHaveBeenCalledWith('https://feed.example.com/ also offers a feed, Daily: add "RSS: https://feed.example.com/rss" to Sources to read it without a tab.', "https://feed.example.com/rss", "feed:page:feed.example.com")
+    views.offer_feeds(FEED_SOURCE, [{ title: "", url: "https://feed.example.com/atom" }])
+    expect(hooks.notify).toHaveBeenLastCalledWith('https://feed.example.com/ also offers a feed: add "RSS: https://feed.example.com/atom" to Sources to read it without a tab.', "https://feed.example.com/atom", "feed:page:feed.example.com")
+  })
+})

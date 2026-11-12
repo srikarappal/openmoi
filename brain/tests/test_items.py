@@ -166,3 +166,8 @@ def test_an_epoch_beyond_the_calendar_is_no_time():
 def test_page_source_id(url, source_id):
     assert page_source_id(url) == source_id
 
+
+
+def test_facebook_tracking_trails_are_dropped_from_links():
+    url = "https://www.facebook.com/maya/posts/pfbid0abc?__cft__[0]=AZW&__tn__=%2CO%2CP-R&ref=share&id=7"
+    assert canonical_url(url) == "https://www.facebook.com/maya/posts/pfbid0abc?id=7"

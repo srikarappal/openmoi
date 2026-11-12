@@ -17,6 +17,8 @@ class SitePolicy(BaseModel):
     status: Literal["active", "paused", "removed"] = "active"
     mode: Mode = "pilot"
     daily_steps: int = Field(default=200, ge=0, le=1000)
+    # Read the JSON the site's pages fetch by themselves (openMoi's own session only), on for sites where it helps.
+    capture: bool = False
 
 
 class PolicyFile(BaseModel):

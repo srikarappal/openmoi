@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { FakeSession, FakeWebContents, FakeWebContentsView, ipc_event, ipcMain, reset_electron } from "./fake_electron"
 import type { ViewHost } from "../../src/main/host"
@@ -197,3 +198,30 @@ describe("ElectronDriver slow pages", () => {
   })
 })
 
+
+describe("ElectronDriver capture", () => {
+  beforeEach(() => {
+    FakeWebContentsView.created = []
+  })
+
+  it("captures the JSON a page fetches when asked, and lets go of it on close", async () => {
+    const driver = new ElectronDriver(make_host())
+    const handle = await driver.open("https://feed.example.com/", true, true)
+    const [view] = FakeWebContentsView.created
+    const debug = Object.assign(new EventEmitter(), {
+      attach: vi.fn(),
+      detach: vi.fn(),
+      sendCommand: vi.fn(async () => ({ body: JSON.stringify({ items: [1, 2, 3].map((id) => ({ id, title: `T${id}`, url: `/p/${id}` })) }), base64Encoded: false })),
+    })
+    Object.assign(view.webContents, { debugger: debug })
+    expect(driver.captured(handle)).toEqual([])
+    const second = await driver.open("https://feed.example.com/", true, true)
+    const capturing = FakeWebContentsView.created[1]
+    Object.assign(capturing.webContents, { debugger: debug })
+    expect(driver.captured("nope")).toEqual([])
+    await driver.close(handle)
+    await driver.close(second)
+    expect(await driver.open("https://plain.example/", true)).toBe("view:3")
+    expect(driver.captured("view:3")).toEqual([])
+  })
+})

@@ -63,7 +63,8 @@ def make_item_id(source_id: str, native_id: str) -> str:
 
 
 def is_tracking(key: str) -> bool:
-    return key.startswith("utm_") or key in TRACKING_PARAMS
+    """utm_ tags, click ids and Facebook's __cft__ and __tn__ trails."""
+    return key.startswith(("utm_", "__cft__", "__tn__")) or key in TRACKING_PARAMS
 
 
 def canonical_url(url: str, base_url: str | None = None) -> str:

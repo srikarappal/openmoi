@@ -95,6 +95,8 @@ class PageSource(BaseModel):
     purpose: Literal["items", "follows", "watch"] = "items"
     # "assist": read only while you browse the page yourself in Chrome, never by a reader tab.
     mode: Mode = "pilot"
+    # Also read the JSON the page fetches by itself (rung 2, openMoi's own session only).
+    capture: bool = False
 
 
 class ContentWanted(BaseModel):
@@ -385,6 +387,7 @@ class Brain:
                         budget=self.budget_for(page),
                         chronological=page in source.ordered,
                         mode=source.modes.get(page, policy.mode),
+                        capture=policy.capture,
                     )
                 )
             for watch in source.watches:

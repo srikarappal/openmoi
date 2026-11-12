@@ -92,3 +92,10 @@ def test_summaries_notes_watches_and_following_lists_keep_to_the_site_policy(cli
     sources = {source["purpose"]: source for source in client.post("/refresh", json={"view_id": "fb"}).json()["page_sources"]}
     assert (sources["watch"]["mode"], sources["watch"]["budget"]["daily_steps"]) == ("assist", 60)
     assert (sources["follows"]["mode"], sources["follows"]["budget"]["daily_steps"]) == ("assist", 60)
+
+
+def test_a_site_policy_can_turn_capture_of_its_own_json_on(client, paths):
+    client.app.state.brain.policies = PolicyFile(sites={"news.example": SitePolicy(capture=True)})
+    (paths.views / "news.md").write_text("# News\n\n## Sources\n* Page: https://news.example/\n* Page: https://other.example/\n")
+    sources = {source["start_url"]: source for source in client.post("/refresh", json={"view_id": "news"}).json()["page_sources"]}
+    assert sources["https://news.example/"]["capture"] is True and sources["https://other.example/"]["capture"] is False
