@@ -79,7 +79,7 @@ def test_items_to_summarize_are_fresh_unseen_and_never_asked_for_twice(client, p
     first, second, old = ingest(client, [article(1, hours=2), article(2, hours=1), article(3, hours=50)])
     wanted = client.get("/content/wanted").json()
     assert [entry["item_id"] for entry in wanted] == [second, first]
-    assert wanted[0] == {"item_id": second, "url": "https://blog.example/posts/2", "video": False}
+    assert wanted[0] == {"item_id": second, "url": "https://blog.example/posts/2", "video": False, "purpose": "summary"}
     assert len(client.get("/content/wanted", params={"limit": 1}).json()) == 1
     client.post("/events", json={"events": [{"view_id": "reading", "item_id": second, "event_kind": "seen"}]})
     assert client.post("/content", json={"item_id": first, "purpose": "summary", "title": "Post number 1", "text": "Long text"}).json()["status"] == "summarized"

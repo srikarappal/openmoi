@@ -22,6 +22,7 @@ const BASE: ShellState = {
   gate: null,
   stop: null,
   player: null,
+  omnibox: null,
 }
 
 // The preload bridge as the UI sees it: commands are recorded, states are pushed by the test.
@@ -322,5 +323,37 @@ describe("the player bar", () => {
     expect(last_sent()).toEqual({ type: "close_player" })
     await show({ player: null })
     expect(query(".player_bar")).toBeNull()
+  })
+})
+
+describe("the omnibox", () => {
+  it("searches your own reality as you type, after a pause, and opens what you pick", async () => {
+    vi.useFakeTimers()
+    try {
+      await show({})
+      await type_into(query(".address input"), "lith")
+      await type_into(query(".address input"), "lithium")
+      expect(bridge.sent.filter((command) => command.type === "omnibox")).toEqual([])
+      await act(async () => vi.advanceTimersByTime(250))
+      expect(bridge.sent.filter((command) => command.type === "omnibox")).toEqual([{ type: "omnibox", text: "lithium" }])
+    } finally {
+      vi.useRealTimers()
+    }
+    await show({
+      omnibox: {
+        query: "lithium",
+        hits: [
+          { label: "Lithium", detail: "your view", target: { kind: "view", view_id: "lithium" } },
+          { label: "Lithium recycling", detail: "rss:blog · 2026-11-10", target: { kind: "link", url: "https://blog.example/1" } },
+        ],
+      },
+    })
+    expect(texts(".omni_label")).toEqual(["Lithium", "Lithium recycling"])
+    await click(document.querySelectorAll(".omni_hit")[1])
+    expect(bridge.sent.slice(-2)).toEqual([{ type: "open_link", url: "https://blog.example/1" }, { type: "omnibox", text: "" }])
+    await click(document.querySelectorAll(".omni_hit")[0])
+    expect(bridge.sent.slice(-2)).toEqual([{ type: "open_view", view_id: "lithium" }, { type: "omnibox", text: "" }])
+    await show({ omnibox: null })
+    expect(query(".omnibox")).toBeNull()
   })
 })

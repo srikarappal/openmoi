@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS watches (
     changed_at TEXT
 )
 """
+# Items you keep in named lists, Read later and the like; an item in a list never expires.
+COLLECTIONS_TABLE = """
+CREATE TABLE IF NOT EXISTS collections (
+    name TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    PRIMARY KEY (name, item_id)
+)
+"""
 # How you used a view: a visit started, five more minutes taken, an edition opened before it came out.
 MOMENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS moments (
@@ -104,6 +113,7 @@ class Store:
                 self.connection.execute(MOMENTS_TABLE)
                 self.connection.execute(WATCHES_TABLE)
                 self.connection.execute(VECTORS_TABLE)
+                self.connection.execute(COLLECTIONS_TABLE)
                 self.index_for_search()
                 for index in INDEXES:
                     self.connection.execute(index)
@@ -267,11 +277,12 @@ class Store:
             )
 
     def expire(self, now: datetime) -> int:
-        """Drop items no source has listed for a month, unless you opened them; your own history stays."""
+        """Drop items no source has listed for a month, unless you opened them or keep them in a collection; your own
+        history stays."""
         with self.lock, self.connection:
             cursor = self.connection.execute(
                 f"DELETE FROM items WHERE COALESCE(listed_at, fetched_at) < ? AND source_id NOT LIKE '{HISTORY_PREFIX}%' AND item_id NOT IN "
-                "(SELECT item_id FROM events WHERE event_kind = 'open' AND item_id IS NOT NULL)",
+                "(SELECT item_id FROM events WHERE event_kind = 'open' AND item_id IS NOT NULL) AND item_id NOT IN (SELECT item_id FROM collections)",
                 (iso(now - ITEM_TTL),),
             )
             self.connection.execute("DELETE FROM items_search WHERE item_id NOT IN (SELECT item_id FROM items)")
@@ -360,6 +371,50 @@ class Store:
                 f"INSERT INTO items ({ITEM_COLUMNS}, listed_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
                 (item.item_id, item.source_id, item.url, iso(item.published_at), iso(item.fetched_at), item.model_dump_json(), iso(item.fetched_at)),
             )
+
+    def add_to_collection(self, name: str, item_id: str, now: datetime) -> bool:
+        """True when the item was not in the collection yet."""
+        with self.lock, self.connection:
+            cursor = self.connection.execute("INSERT OR IGNORE INTO collections (name, item_id, added_at) VALUES (?, ?, ?)", (name, item_id, iso(now)))
+        return cursor.rowcount > 0
+
+    def remove_from_collection(self, name: str, item_id: str) -> bool:
+        with self.lock, self.connection:
+            cursor = self.connection.execute("DELETE FROM collections WHERE name = ? AND item_id = ?", (name, item_id))
+        return cursor.rowcount > 0
+
+    def collection_counts(self) -> dict[str, int]:
+        """Each collection with how many of its items still exist."""
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT name, COUNT(*) FROM collections JOIN items ON items.item_id = collections.item_id GROUP BY name ORDER BY name"
+            ).fetchall()
+        return dict(rows)
+
+    def collection_items(self, names: list[str]) -> list[tuple[Item, datetime | None, datetime]]:
+        """Items in these collections, newest saved first, each with when you saw it and when it was saved."""
+        if not names:
+            return []
+        marks = ", ".join("?" for _ in names)
+        with self.lock:
+            rows = self.connection.execute(
+                f"SELECT items.item_json, items.seen_at, MAX(collections.added_at) FROM collections JOIN items ON items.item_id = collections.item_id "
+                f"WHERE collections.name IN ({marks}) GROUP BY items.item_id ORDER BY MAX(collections.added_at) DESC",
+                names,
+            ).fetchall()
+        return [(Item.model_validate_json(item_json), datetime.fromisoformat(seen_at) if seen_at else None, datetime.fromisoformat(added_at)) for item_json, seen_at, added_at in rows]
+
+    def collections_of(self, item_ids: list[str]) -> dict[str, list[str]]:
+        """The collections each of these items is in."""
+        if not item_ids:
+            return {}
+        marks = ", ".join("?" for _ in item_ids)
+        with self.lock:
+            rows = self.connection.execute(f"SELECT item_id, name FROM collections WHERE item_id IN ({marks}) ORDER BY name", item_ids).fetchall()
+        found: dict[str, list[str]] = {}
+        for item_id, name in rows:
+            found.setdefault(item_id, []).append(name)
+        return found
 
     def add_moment(self, view_id: str, kind: str, now: datetime) -> None:
         with self.lock, self.connection:

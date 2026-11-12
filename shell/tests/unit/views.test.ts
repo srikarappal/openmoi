@@ -20,7 +20,7 @@ function make_views(outcomes: FillOutcome[], pages: ViewPage[] = [], page_source
   const sources = { fill: vi.fn(async (..._args: unknown[]) => outcomes.shift() ?? ({ status: "skipped" } as FillOutcome)) }
   const lenses = { get: (key: string) => (key === context.key ? context : undefined), all: () => [context] }
   const { labels, track } = new Tracked()
-  const hooks = { open_original: vi.fn(), play: vi.fn((_item: { url: string }) => false), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), alert: vi.fn(), track, labels }
+  const hooks = { open_original: vi.fn(), play: vi.fn((_item: { url: string }) => false), saved: vi.fn(), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), alert: vi.fn(), track, labels }
   const views = new ViewController(brain as unknown as BrainClient, lenses as unknown as LensManager, sources as unknown as ReaderPool, hooks)
   return { views, context, sources, hooks, brain }
 }
@@ -256,6 +256,28 @@ describe("ViewController rendering", () => {
     await views.on_event(context, { type: "open", item_id: "ghost" })
     await views.on_event(context, { type: "play", item_id: "ghost" })
     expect(brain.events.mock.calls).toEqual([[[{ view_id: "feed", item_id: "a", event_kind: "seen" }]]])
+  })
+
+  it("saves and unsaves items, telling every lens that shows them, and keeps highlights", async () => {
+    const made = render_setup([])
+    const { views, context, hooks } = made
+    const info = { name: "read_later", title: "Read later", count: 1, views: [] }
+    const brain = Object.assign(made.brain, { save_item: vi.fn(async () => info), highlight: vi.fn(async () => 'highlight: "a line" from A (https://a.com/a)') })
+    const lens_context = context as unknown as { rendered: Map<string, unknown>; collections: Map<string, string[]> }
+    lens_context.collections = new Map()
+    context.rendered.set("a", { item_id: "a", url: "https://a.com/a" } as never)
+    Object.assign(views, { lenses: { all: () => [context] } })
+    await views.on_event(context, { type: "save", item_id: "a", collection: "read_later" })
+    expect(brain.save_item).toHaveBeenCalledWith("read_later", "a", true)
+    expect(hooks.saved).toHaveBeenCalledWith(info, true)
+    expect((context.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).toMatchObject({ type: "update", items: [{ collections: ["read_later"] }] })
+    await views.on_event(context, { type: "unsave", item_id: "a", collection: "read_later" })
+    expect((context.send as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).toMatchObject({ type: "update", items: [{ collections: [] }] })
+    await views.on_event(context, { type: "highlight", item_id: "a", quote: "a line", note: "" })
+    expect(brain.highlight).toHaveBeenCalledWith("a", "a line", "")
+    expect(hooks.echo).toHaveBeenLastCalledWith('Kept in memory/highlights.md: highlight: "a line" from A (https://a.com/a)')
+    await views.on_event(context, { type: "save", item_id: "ghost", collection: "read_later" })
+    expect(brain.save_item).toHaveBeenCalledTimes(2)
   })
 
   it("plays a video in the host's player, counting it as opened, and opens anything it cannot play", async () => {

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from "react"
 import { createRoot } from "react-dom/client"
 import { linked_parts, matching_commands } from "../shared/commands"
-import type { Activity, ChatEntry, GateChoice, ShellCommand, ShellState, StopScreen } from "../shared/types"
+import type { Activity, ChatEntry, GateChoice, OmniHit, ShellCommand, ShellState, StopScreen } from "../shared/types"
 
 interface ShellBridge {
   command(command: ShellCommand): void
@@ -16,6 +16,9 @@ declare global {
   }
 }
 
+// What you type in the address bar searches your own items once you pause this long.
+const OMNIBOX_DELAY_MS = 200
+
 function send(command: ShellCommand): void {
   window.shell.command(command)
 }
@@ -23,9 +26,17 @@ function send(command: ShellCommand): void {
 function TopBar({ state }: { state: ShellState }) {
   const active_tab = state.active.kind === "tab" ? state.tabs.find((tab) => state.active.kind === "tab" && tab.tab_id === state.active.tab_id) : undefined
   const [address, set_address] = useState(state.address)
+  const [typed, set_typed] = useState(false)
   useEffect(() => set_address(state.address), [state.address])
+  // What you type searches your own items and views first, once you pause.
+  useEffect(() => {
+    if (!typed) return
+    const timer = setTimeout(() => send({ type: "omnibox", text: address }), OMNIBOX_DELAY_MS)
+    return () => clearTimeout(timer)
+  }, [address, typed])
   const submit = (event: FormEvent) => {
     event.preventDefault()
+    set_typed(false)
     if (address.trim()) send({ type: "navigate", url: address.trim() })
   }
   return (
@@ -66,7 +77,14 @@ function TopBar({ state }: { state: ShellState }) {
         {state.relay.connected ? "Chrome connected" : state.relay.waiting_for_approval ? "Chrome waiting" : state.relay.unrecognized ? "Chrome: pair again" : "Chrome not connected"}
       </span>
       <form className="address" onSubmit={submit}>
-        <input value={address} placeholder="Type a URL or search" onChange={(event) => set_address(event.target.value)} />
+        <input
+          value={address}
+          placeholder="Type a URL or search"
+          onChange={(event) => {
+            set_typed(true)
+            set_address(event.target.value)
+          }}
+        />
       </form>
       {active_tab && (
         <button className={active_tab.mine ? "action mine on" : "action mine"} title="Your version of this page" onClick={() => send({ type: "toggle_mine" })}>
@@ -299,6 +317,27 @@ function Stop({ stop }: { stop: StopScreen }) {
   )
 }
 
+function OmniboxResults({ state }: { state: ShellState }) {
+  const omnibox = state.omnibox
+  if (!omnibox?.hits.length) return null
+  const choose = (hit: OmniHit) => {
+    send(hit.target.kind === "view" ? { type: "open_view", view_id: hit.target.view_id } : { type: "open_link", url: hit.target.url })
+    send({ type: "omnibox", text: "" })
+  }
+  return (
+    <section className="omnibox" aria-label={`Yours for ${omnibox.query}`}>
+      <div className="omnibox_title">Yours for "{omnibox.query}"</div>
+      {omnibox.hits.map((hit, index) => (
+        <button key={index} className="omni_hit" onClick={() => choose(hit)}>
+          <span className="omni_label">{hit.label}</span>
+          <span className="omni_detail">{hit.detail}</span>
+        </button>
+      ))}
+      <div className="omnibox_hint">Press Enter to search the web instead.</div>
+    </section>
+  )
+}
+
 function PlayerBar({ state }: { state: ShellState }) {
   if (!state.player) return null
   return (
@@ -316,6 +355,7 @@ function SidePanel({ state }: { state: ShellState }) {
   return (
     <aside className="side">
       <StatusLine activities={state.activities} />
+      <OmniboxResults state={state} />
       <PlayerBar state={state} />
       <section className="notices">
         {state.notices.map((notice) => (

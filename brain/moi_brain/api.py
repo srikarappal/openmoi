@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import SEARCH_LIMIT, Brain, ContentWanted, MineRequest, MomentKind, Overview, PageSource, SearchHit, ViewPage, ViewSchedule, WatchReport
+from moi_brain.brain import SEARCH_LIMIT, Brain, CollectionInfo, ContentWanted, MineRequest, MomentKind, Overview, PageSource, SearchHit, ViewPage, ViewSchedule, WatchReport
 from moi_brain.content import MAX_CONTENT
 from moi_brain.watch import MAX_WATCH_TEXT
 from moi_brain.mirror import Mirror
@@ -17,6 +17,7 @@ from moi_brain.compile import BadInput, ViewInfo
 from moi_brain.config import ModelChange, ModelInfo
 from moi_brain.edits import EditScope, Proposal, StaleProposal
 from moi_brain.extractors import ExtractorSpec
+from moi_brain.answers import Answer
 from moi_brain.health import RunReport, Verdict
 from moi_brain.lens_gen import LensVerdict
 from moi_brain.items import Event, Item, ViewItem
@@ -166,7 +167,7 @@ class ShareRequest(BaseModel):
 
 class ContentRequest(BaseModel):
     item_id: str
-    purpose: Literal["summary", "note"]
+    purpose: Literal["summary", "note", "offline"]
     title: str = Field(default="", max_length=500)
     text: str = Field(default="", max_length=MAX_CONTENT * 2)
     caption_url: str | None = Field(default=None, max_length=2000)
@@ -294,7 +295,63 @@ class ContentResponse(BaseModel):
 @router.post("/content")
 def add_content(body: ContentRequest, brain: BrainDep) -> ContentResponse:
     status = brain.add_content(body.item_id, body.purpose, body.title, body.text, body.caption_url)
-    return ContentResponse(status=status, item=brain.store.get_item(body.item_id) if status == "summarized" else None)
+    return ContentResponse(status=status, item=brain.store.get_item(body.item_id) if status in ("summarized", "saved") else None)
+
+
+class SaveRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    item_id: str = Field(min_length=1, max_length=200)
+    saved: bool = True
+
+
+class CollectionViewRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+
+
+class ExportRequest(BaseModel):
+    format: Literal["md", "json"] = "md"
+    collection: str | None = Field(default=None, max_length=60)
+    view_id: str | None = None
+
+
+class HighlightRequest(BaseModel):
+    item_id: str = Field(min_length=1, max_length=200)
+    quote: str = Field(default="", max_length=5000)
+    note: str = Field(default="", max_length=5000)
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/ask")
+def ask(body: AskRequest, brain: BrainDep) -> Answer:
+    return brain.ask(body.question)
+
+
+@router.post("/collections")
+def save_item(body: SaveRequest, brain: BrainDep) -> CollectionInfo:
+    return brain.save_item(body.name, body.item_id, body.saved)
+
+
+@router.post("/collections/view")
+def collection_view(body: CollectionViewRequest, brain: BrainDep) -> ViewInfo:
+    return brain.collection_view(body.name)
+
+
+@router.get("/collections")
+def collections(brain: BrainDep) -> list[CollectionInfo]:
+    return brain.collections()
+
+
+@router.post("/export")
+def export(body: ExportRequest, brain: BrainDep) -> dict[str, str]:
+    return {"path": str(brain.export(body.format, body.collection, body.view_id))}
+
+
+@router.post("/highlight")
+def highlight(body: HighlightRequest, brain: BrainDep) -> dict[str, str]:
+    return {"line": brain.highlight(body.item_id, body.quote, body.note)}
 
 
 @router.get("/watches/due")

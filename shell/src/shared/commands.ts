@@ -1,6 +1,6 @@
 // Chat commands: "/memory", "/feed", "/sources", "/layout", "/settings", "/newview", "/model", "/help".
 // Anything without a slash stays free form and openMoi works out from context what to change.
-import type { EditScope, Mirror, ModelChange, ModelInfo, Overview, SearchHit, SlotInfo, SourceMirror, ViewMirror } from "./types"
+import type { Answer, CollectionInfo, EditScope, Mirror, ModelChange, ModelInfo, Overview, SearchHit, SlotInfo, SourceMirror, ViewMirror } from "./types"
 
 export interface CommandHelp {
   name: string
@@ -20,6 +20,9 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/background", usage: "/background on|off", summary: "keep reading on schedule with the window closed, and start at login" },
   { name: "/mirror", usage: "/mirror [days]", summary: "what each source showed you and how much passed your rules" },
   { name: "/search", usage: "/search <words>", summary: "find items you were shown, by their words and by meaning" },
+  { name: "/ask", usage: "/ask <question>", summary: "answer a question from what you read, with links to where it came from" },
+  { name: "/collections", usage: "/collections", summary: "your Read later, Watch later and other lists, with how many items each" },
+  { name: "/export", usage: "/export [md|json] [collection]", summary: "save this view, or a collection, as a Markdown or JSON file" },
   { name: "/import", usage: "/import <https link to a view file>", summary: "add a view someone shared; or drop its .md file here" },
   { name: "/share", usage: "/share", summary: "save a copy of this view to send, without your people" },
   { name: "/google", usage: "/google [connect]", summary: "sign in to Google in your browser so YouTube subscriptions come from your account" },
@@ -39,6 +42,9 @@ export type ChatCommand =
   | { kind: "background"; on: boolean }
   | { kind: "mirror"; days: number }
   | { kind: "search"; query: string }
+  | { kind: "ask"; question: string }
+  | { kind: "collections" }
+  | { kind: "export"; format: "md" | "json"; collection: string | null }
   | { kind: "import"; url: string }
   | { kind: "share" }
   | { kind: "google"; connect: boolean }
@@ -66,9 +72,12 @@ export function parse_model(words: string[]): ChatCommand {
   return { kind: "model", change: { slot, provider, model } }
 }
 
+// "What did I read about lithium?" or "which video did I watch on traffic?" asks your history, not for an edit.
+const HISTORY_QUESTION = /^(what|which|who|when|where|did)\b.*\b(i|me|my)\b.*\b(read|see|saw|seen|watch|watched|open|opened|save|saved|highlight|highlighted|mark|marked|note|noted)\b/i
+
 export function parse_chat(input: string): ChatCommand {
   const text = input.trim()
-  if (!text.startsWith("/")) return { kind: "edit", scope: "any", text }
+  if (!text.startsWith("/")) return HISTORY_QUESTION.test(text) ? { kind: "ask", question: text } : { kind: "edit", scope: "any", text }
   const [name, ...words] = text.split(/\s+/)
   const command = name.toLowerCase()
   const rest = text.slice(name.length).trim()
@@ -85,6 +94,13 @@ export function parse_chat(input: string): ChatCommand {
     return Number.isInteger(days) && days >= 1 && days <= 30 && words.length <= 1 ? { kind: "mirror", days } : usage_error(command)
   }
   if (command === "/search") return rest ? { kind: "search", query: rest } : usage_error(command)
+  if (command === "/ask") return rest ? { kind: "ask", question: rest } : usage_error(command)
+  if (command === "/collections") return words.length ? usage_error(command) : { kind: "collections" }
+  if (command === "/export") {
+    const format = words[0] === "json" || words[0] === "md" ? words[0] : "md"
+    const named = (format === words[0] ? words.slice(1) : words).join(" ").trim()
+    return { kind: "export", format, collection: named || null }
+  }
   if (command === "/import") return words.length === 1 && words[0].startsWith("https://") ? { kind: "import", url: words[0] } : usage_error(command)
   if (command === "/share") return words.length ? usage_error(command) : { kind: "share" }
   if (command === "/google") return words.length === 0 || (words.length === 1 && words[0] === "connect") ? { kind: "google", connect: words[0] === "connect" } : usage_error(command)
@@ -217,4 +233,18 @@ export function linked_parts(text: string): TextPart[] {
   }
   if (last < text.length) parts.push({ text: text.slice(last) })
   return parts
+}
+
+export function format_collections(collections: CollectionInfo[]): string {
+  if (!collections.length) return "Nothing saved yet. Read later and Watch later on a card keep it here."
+  const lines = collections.map((info) => {
+    const where = info.views.length ? `in the ${info.views.join(", ")} tab${info.views.length > 1 ? "s" : ""}` : "no tab reads it yet"
+    return `* ${info.title}: ${times(info.count, "item")}, ${where}`
+  })
+  return ["Your collections:", ...lines, "Export one with /export md <collection>."].join("\n")
+}
+
+// The answer, then each source it cites with its link, so a click opens the original.
+export function format_answer(answer: Answer): string {
+  return [answer.answer, ...answer.citations.map((citation) => `[${citation.number}] ${citation.title} ${citation.url}`)].join("\n")
 }

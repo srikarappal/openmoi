@@ -15,6 +15,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, field_validator
 
+from moi_brain.collections import COLLECTION_PREFIX, collection_name, is_collection_name
 from moi_brain.config import Paths
 from moi_brain.feeds import CHANNEL_ID, read_takeout
 from moi_brain.files import read_text, write_atomic
@@ -26,7 +27,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "15"
+COMPILER_VERSION = "16"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
@@ -266,7 +267,7 @@ HISTORIES = ("facebook", "amazon")
 
 
 class SourceRef(BaseModel):
-    source_id: Literal["x", "youtube", "rss", "page", "history"]
+    source_id: Literal["x", "youtube", "rss", "page", "history", "collection"]
     page_type: str | None = None
     channels: list[str] = Field(default_factory=list)
     feeds: list[str] = Field(default_factory=list)
@@ -278,6 +279,8 @@ class SourceRef(BaseModel):
     following: list[str] = Field(default_factory=list)
     # Your own history from data exports you dropped on the chat: "facebook", "amazon".
     histories: list[str] = Field(default_factory=list)
+    # Lists of items you keep: "read_later", "watch_later" or any name you saved items under.
+    collections: list[str] = Field(default_factory=list)
     # How a page asks to be read, when its line says: "assist" or "pilot".
     modes: dict[str, Literal["pilot", "assist"]] = Field(default_factory=dict)
     # Pages watched for changes: a change becomes an item your rules judge, and an alert if they keep it.
@@ -325,7 +328,7 @@ def check_view_id(view_id: str) -> str:
 
 def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRef], list[str]]:
     """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://... (newest first)' or a bare feed URL."""
-    has_x, channels, feeds, pages, ordered, following, watches, histories, warnings = False, [], [], [], [], [], [], [], []
+    has_x, channels, feeds, pages, ordered, following, watches, histories, collections, warnings = False, [], [], [], [], [], [], [], [], []
     modes: dict[str, Literal["pilot", "assist"]] = {}
     for line in bullets(body):
         label, _, rest = line.partition(":")
@@ -351,6 +354,11 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
             histories += found_histories
             if not found_histories:
                 warnings.append(f"No history openMoi knows in: {line} (facebook or amazon)")
+        elif key == "collection":
+            found_collections = [name for part in rest.split(",") if is_collection_name(name := collection_name(part))]
+            collections += found_collections
+            if not found_collections:
+                warnings.append(f"No collection named in: {line}")
         elif key == "watch":
             found_watches = URL.findall(rest)
             watches += [WatchRef(url=url, every_minutes=watch_minutes(URL.sub("", rest))) for url in found_watches]
@@ -372,6 +380,8 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
         sources.append(SourceRef(source_id="rss", feeds=list(dict.fromkeys(feeds))))
     if histories:
         sources.append(SourceRef(source_id="history", histories=list(dict.fromkeys(histories))))
+    if collections:
+        sources.append(SourceRef(source_id="collection", collections=list(dict.fromkeys(collections))))
     if pages or following or watches:
         unique_watches = list({watch.url: watch for watch in watches}.values())
         sources.append(
@@ -436,6 +446,7 @@ def source_ids(sources: list[SourceRef]) -> list[str]:
         ids += [youtube_source_id(channel) for channel in source.channels]
         ids += [rss_source_id(feed) for feed in source.feeds]
         ids += [f"history:{name}" for name in source.histories]
+        ids += [f"{COLLECTION_PREFIX}{name}" for name in source.collections]
         ids += [page_source_id(page) for page in source.pages]
         ids += [watch_source_id(watch.url) for watch in source.watches]
     return list(dict.fromkeys(ids))

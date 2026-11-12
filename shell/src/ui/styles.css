@@ -89,3 +89,10 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 .player_bar { display: flex; gap: 6px; align-items: center; padding: 8px 10px; margin: 6px 8px; border-radius: 8px; background: var(--chip, #eef0fb); font-size: 12.5px; }
 .player_title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+
+.omnibox { margin: 6px 8px; border: 1px solid var(--line, #e4e2dd); border-radius: 8px; overflow: hidden; }
+.omnibox_title, .omnibox_hint { padding: 6px 10px; font-size: 12px; color: var(--muted, #6b6b70); }
+.omni_hit { display: flex; flex-direction: column; align-items: flex-start; width: 100%; gap: 2px; padding: 6px 10px; border: none; border-top: 1px solid var(--line, #e4e2dd); background: none; text-align: left; cursor: pointer; }
+.omni_hit:hover { background: var(--chip, #eef0fb); }
+.omni_label { font-size: 13px; font-weight: 600; }
+.omni_detail { font-size: 11.5px; color: var(--muted, #6b6b70); }

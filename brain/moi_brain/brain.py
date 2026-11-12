@@ -9,6 +9,7 @@ from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from pathlib import Path
 from operator import itemgetter
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -17,7 +18,9 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from moi_brain.compile import BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
-from moi_brain.content import ContentSummary, caption_allowed, is_video, summary_extra, summary_prompt, transcript_text
+from moi_brain.answers import MAX_SOURCES, Answer, AnswerReply, answer_prompt, cited
+from moi_brain.collections import READ_LATER, collection_name, collection_title, export_json, export_markdown, is_collection_name
+from moi_brain.content import ContentSummary, caption_allowed, is_video, offline_blocks, summary_extra, summary_prompt, transcript_text
 from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, save_settings
 from moi_brain.editions import LEAD, LOCAL_LEAD, Edition, EditionBook
 from moi_brain.enrich import enriched
@@ -78,6 +81,10 @@ CONTENT_WINDOW = timedelta(hours=48)
 # When an item last could not be read or summarized; it is tried again a day later.
 CONTENT_FAILED = "summary_failed_at"
 CONTENT_RETRY = timedelta(hours=24)
+OFFLINE_KEY = "offline_at"
+OFFLINE_FAILED = "offline_failed_at"
+MAX_EXPORT = 1000
+MAX_HIGHLIGHT = 1000
 WHITESPACE = re.compile(r"\s+")
 MomentKind = Literal["visit", "extended", "early"]
 X_DOMAIN = "x.com"
@@ -115,11 +122,21 @@ class PageSource(BaseModel):
 
 
 class ContentWanted(BaseModel):
-    """An item a summarize rule wants read in full: an article, or a video whose transcript is read."""
+    """An item to read in full: for a summarize rule (an article, or a video whose transcript is read), or for an
+    offline copy of an article you saved to Read later."""
 
     item_id: str
     url: str
     video: bool
+    purpose: Literal["summary", "offline"] = "summary"
+
+
+class CollectionInfo(BaseModel):
+    name: str
+    title: str
+    count: int
+    # Views that read this collection.
+    views: list[str] = Field(default_factory=list)
 
 
 class WatchAlert(BaseModel):
@@ -214,10 +231,10 @@ def url_prefix(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
 
 
-def recently_failed(item: Item, now: datetime) -> bool:
-    """An item whose full read or summary failed less than a day ago."""
+def recently_failed(item: Item, now: datetime, key: str = CONTENT_FAILED) -> bool:
+    """An item whose full read or summary (or offline copy, by its key) failed less than a day ago."""
     try:
-        return now - datetime.fromisoformat(item.extra.get(CONTENT_FAILED, "")) < CONTENT_RETRY
+        return now - datetime.fromisoformat(item.extra.get(key, "")) < CONTENT_RETRY
     except ValueError:
         return False
 
@@ -600,7 +617,8 @@ class Brain:
 
     def content_wanted(self, limit: int = 5) -> list[ContentWanted]:
         """Fresh unseen items a view's summarize rules want, newest first; one that failed once is not asked for again.
-        A summarize_only item is wanted even once seen: its card waits for the summary."""
+        A summarize_only item is wanted even once seen: its card waits for the summary. Articles saved to Read later
+        without an offline copy come after them."""
         now = self.clock()
         circles = self.circles()
         found: dict[str, tuple[datetime, ContentWanted]] = {}
@@ -615,15 +633,27 @@ class Brain:
                 matching = [rule for rule in rules if applies(rule, item, now, circles)]
                 if matching and (not seen_at or any(rule.do == "summarize_only" for rule in matching)):
                     found[item.item_id] = (item.published_at or item.fetched_at, ContentWanted(item_id=item.item_id, url=item.url, video=is_video(item.url)))
-        newest = sorted(found.values(), key=itemgetter(0), reverse=True)
-        return [wanted for _, wanted in newest[:limit]]
+        newest = [wanted for _, wanted in sorted(found.values(), key=itemgetter(0), reverse=True)]
+        for item, _, _ in self.store.collection_items([READ_LATER]):
+            if item.item_id in found or OFFLINE_KEY in item.extra or recently_failed(item, now, OFFLINE_FAILED) or is_video(item.url) or not self.readable_in_a_tab(item.url):
+                continue
+            newest.append(ContentWanted(item_id=item.item_id, url=item.url, video=False, purpose="offline"))
+        return newest[:limit]
 
-    def add_content(self, item_id: str, purpose: Literal["summary", "note"], title: str, text: str, caption_url: str | None) -> str:
-        """The full text of an item, or its video's captions: a summary on its card, or a note in today's journal.
-        Returns what happened: summarized, noted, empty or the model's problem."""
+    def add_content(self, item_id: str, purpose: Literal["summary", "note", "offline"], title: str, text: str, caption_url: str | None) -> str:
+        """The full text of an item, or its video's captions: a summary on its card, a note in today's journal, or an
+        offline copy kept with the item (no model needed). Returns what happened: summarized, noted, saved, empty or
+        the model's problem."""
         item = self.store.get_item(item_id)
         if item is None:
             raise BadInput("That item is gone.")
+        if purpose == "offline":
+            blocks = offline_blocks(text)
+            if not blocks:
+                self.store.update_extra(item_id, {OFFLINE_FAILED: self.clock().isoformat()})
+                return "empty"
+            self.store.update_extra(item_id, {"blocks": json.dumps(blocks), OFFLINE_KEY: self.clock().isoformat()})
+            return "saved"
         if caption_url and caption_allowed(caption_url, self.youtube_base):
             text = self.captions(caption_url) or text
         if not text.strip():
@@ -642,6 +672,75 @@ class Brain:
         line = WHITESPACE.sub(" ", f"note: {title or item.title or item.url}: {summary.summary}").strip()
         self.memory.append_journal(self.clock(), f"{line} ({item.url})")
         return "noted"
+
+    def ask(self, question: str) -> Answer:
+        """Your question answered from the items you were shown and your journal, with citations. Nothing found means
+        no model call at all."""
+        items = [hit.item for hit in self.search(question, MAX_SOURCES)]
+        journal = matching_lines(self.paths.journal, question, MAX_SOURCES)
+        if not items and not journal:
+            return Answer(answer="Nothing you read or noted matches that.")
+        reply = self.gateway.complete_json("fast", "ask", answer_prompt(question, items, journal), True, AnswerReply)
+        return cited(reply, items)
+
+    def save_item(self, name: str, item_id: str, saved: bool = True) -> CollectionInfo:
+        """Puts an item in a collection, or takes it out."""
+        name = collection_name(name)
+        if not is_collection_name(name):
+            raise BadInput("A collection needs a name of letters and digits, such as read later.")
+        if self.store.get_item(item_id) is None:
+            raise BadInput("That item is gone.")
+        if saved:
+            self.store.add_to_collection(name, item_id, self.clock())
+        else:
+            self.store.remove_from_collection(name, item_id)
+        return next(info for info in self.collections(include=name) if info.name == name)
+
+    def collections(self, include: str | None = None) -> list[CollectionInfo]:
+        """Every collection with items, and the views that read each."""
+        counts = self.store.collection_counts()
+        if include:
+            counts.setdefault(include, 0)
+        readers: dict[str, list[str]] = {}
+        for compiled in self.compiler.all_compiled(use_model=False):
+            for name in (name for source in compiled.sources for name in source.collections):
+                readers.setdefault(name, []).append(compiled.view_id)
+        return [CollectionInfo(name=name, title=collection_title(name), count=count, views=readers.get(name, [])) for name, count in sorted(counts.items())]
+
+    def export(self, fmt: Literal["md", "json"], collection: str | None = None, view_id: str | None = None) -> Path:
+        """A collection, or what a view shows now, as a Markdown or JSON file in exports/ of your openMoi folder."""
+        now = self.clock()
+        if collection:
+            name = collection_name(collection)
+            entries = [(item, added_at) for item, _, added_at in self.store.collection_items([name])]
+            title, stem = collection_title(name), name
+        elif view_id:
+            page = self.view_page(check_view_id(view_id), [], MAX_EXPORT)
+            entries = [(view_item.item, view_item.item.fetched_at) for view_item in page.items]
+            title, stem = self.compiler.compiled(view_id).title, view_id
+        else:
+            raise BadInput("Say which collection or view to export.")
+        text = export_markdown(title, entries, now) if fmt == "md" else export_json(title, entries, now)
+        path = self.paths.home / "exports" / f"{stem}_{now.astimezone():%Y%m%d_%H%M%S}.{fmt}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(path, text)
+        return path
+
+    def highlight(self, item_id: str, quote: str, note: str = "") -> str:
+        """A passage you marked in something you read, with your note: a line in memory/highlights.md and today's
+        journal, so chat can find it later."""
+        item = self.store.get_item(item_id)
+        if item is None:
+            raise BadInput("That item is gone.")
+        quote, note = WHITESPACE.sub(" ", quote).strip()[:MAX_HIGHLIGHT], WHITESPACE.sub(" ", note).strip()[:MAX_HIGHLIGHT]
+        if not quote and not note:
+            raise BadInput("Mark some text or write a note first.")
+        title = WHITESPACE.sub(" ", item.title or item.text or item.url).strip()[:120]
+        parts = [f'"{quote}"' if quote else "", f"note: {note}" if note else ""]
+        line = f"highlight: {' '.join(part for part in parts if part)} from {title} ({item.url})"
+        self.memory.add_highlight(self.clock(), line)
+        self.memory.append_journal(self.clock(), line)
+        return line
 
     def captions(self, caption_url: str) -> str:
         """A video's transcript from YouTube's caption address, or empty when it cannot be had."""
@@ -765,11 +864,21 @@ class Brain:
         self.retag_if_needed()
         now = self.clock()
         entries = self.store.items_with_seen(compiled.source_ids(), now - VIEW_WINDOW)
+        kept_names = [name for source in compiled.sources for name in source.collections]
+        kept_entries = self.store.collection_items(kept_names)
+        kept = {item.item_id for item, _, _ in kept_entries}
+        if kept_names:
+            listed = {item.item_id for item, _ in entries}
+            entries += [(item, seen_at) for item, seen_at, _ in kept_entries if item.item_id not in listed]
+            # A view of nothing but collections lists them newest saved first.
+            if all(source.source_id == "collection" for source in compiled.sources):
+                order = "page"
         edition = self.editions.current(view_id, compiled.time, now) if compiled.time.editions else None
         if edition:
             entries = [(item, seen_at) for item, seen_at in entries if item.fetched_at <= edition.cutoff]
         items = [item for item, _ in entries]
-        long_seen = seen_long_ago(entries, max(now - SEEN_KEEP, edition.at) if edition else now - SEEN_KEEP)
+        # What you keep in a collection stays until you take it out, seen or not.
+        long_seen = seen_long_ago(entries, max(now - SEEN_KEEP, edition.at) if edition else now - SEEN_KEEP) - kept
         if needs_tags(compiled) and self.tagger.healthy:
             items = [item for item in items if item.tagged and is_judged(item, compiled.judgments)]
         circles = self.circles()
@@ -777,6 +886,8 @@ class Brain:
             items = edition_items(compiled.time.edition_size, edition, entries, items, exclude_ids, compiled.rules, now, long_seen, circles)
         seen = {item.item_id for item, seen_at in entries if seen_at}
         ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles, seen, self.ranker, compiled.explore)
+        saved_in = self.store.collections_of([view_item.item.item_id for view_item in ranked])
+        ranked = [view_item.model_copy(update={"collections": saved_in.get(view_item.item.item_id, [])}) for view_item in ranked]
         with self.lock:
             reading = view_id in self.refreshing
             refreshing = reading or self.tagger.busy or self.updater.busy
@@ -1006,6 +1117,18 @@ class Brain:
         target.parent.mkdir(parents=True, exist_ok=True)
         write_atomic(target, share_text(text, people_names(self.memory.topic_text("people.md"))))
         return str(target)
+
+    def collection_view(self, name: str) -> ViewInfo:
+        """A view that reads one collection, as a new tab: what you asked for by making a tab for it."""
+        name = collection_name(name)
+        if not is_collection_name(name):
+            raise BadInput("A collection needs a name of letters and digits, such as read later.")
+        path = self.paths.views / f"{name}.md"
+        if path.exists():
+            raise BadInput(f"views/{name}.md already exists")
+        title = collection_title(name)
+        write_atomic(path, f"# {title}\n\n## Sources\n* Collection: {title.lower()}\n\n## Rules\n\n## Layout\n")
+        return ViewInfo(view_id=name, title=title)
 
     def create_view(self, view_id: str, title: str | None) -> ViewInfo:
         """A new empty view file, which becomes a new tab."""

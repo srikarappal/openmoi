@@ -731,3 +731,52 @@ describe("Shell player", () => {
     expect(state_of(shell).player).toBeNull()
   })
 })
+
+describe("Shell collections", () => {
+  it("keeps one saved notice per collection, offers a tab while none reads it and makes that tab", async () => {
+    const { shell, window, brain } = await started({ collection_view: vi.fn(async () => ({ view_id: "read_later", title: "Read later" })) })
+    const inside = shell as unknown as { on_saved(info: unknown, saved: boolean): void }
+    inside.on_saved({ name: "read_later", title: "Read later", count: 1, views: [] }, true)
+    inside.on_saved({ name: "read_later", title: "Read later", count: 2, views: [] }, true)
+    inside.on_saved({ name: "read_later", title: "Read later", count: 1, views: [] }, false)
+    const notices = state_of(shell).notices.filter((notice) => notice.tag === "collection:read_later")
+    expect(notices.map((notice) => notice.text)).toEqual(["Saved to Read later (2)."])
+    expect(notices[0].action).toEqual({ label: "Make a Read later tab", command: { type: "collection_view", name: "read_later" } })
+    await command(window, { type: "collection_view", name: "read_later" })
+    expect((brain as unknown as { collection_view: ReturnType<typeof vi.fn> }).collection_view).toHaveBeenCalledWith("read_later")
+    expect(state_of(shell).notices.filter((notice) => notice.tag === "collection:read_later")).toEqual([])
+    inside.on_saved({ name: "read_later", title: "Read later", count: 3, views: ["read_later"] }, true)
+    expect(state_of(shell).notices.at(-1)?.action).toBeUndefined()
+  })
+})
+
+describe("Shell omnibox", () => {
+  it("finds your views and items for words, nothing for addresses or a single letter, and only the latest words", async () => {
+    const hit = { item: { item_id: "i1", title: "Lithium recycling", text: null, url: "https://blog.example/1", source_id: "rss:blog", published_at: "2026-11-10T09:00:00Z", fetched_at: "2026-11-10T09:00:00Z" }, score: 1 }
+    const { shell, window, brain } = await started({ search: vi.fn(async () => [hit]) })
+    const inside = shell as unknown as { view_infos: Array<{ view_id: string; title: string }> }
+    inside.view_infos = [{ view_id: "feed", title: "Feed" }, { view_id: "lithium", title: "Lithium watch" }]
+    await command(window, { type: "omnibox", text: "lithium" })
+    expect(state_of(shell).omnibox).toEqual({
+      query: "lithium",
+      hits: [
+        { label: "Lithium watch", detail: "your view", target: { kind: "view", view_id: "lithium" } },
+        { label: "Lithium recycling", detail: "rss:blog · 2026-11-10", target: { kind: "link", url: "https://blog.example/1" } },
+      ],
+    })
+    for (const text of ["l", "example.com", "https://a.example/x", ""]) {
+      await command(window, { type: "omnibox", text })
+      expect(state_of(shell).omnibox).toBeNull()
+    }
+    const searches = (brain as unknown as { search: ReturnType<typeof vi.fn> }).search
+    let finish: (value: unknown) => void = () => {}
+    searches.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)))
+    const slow = command(window, { type: "omnibox", text: "slow words" })
+    await command(window, { type: "omnibox", text: "lithium" })
+    finish([])
+    await slow
+    expect(state_of(shell).omnibox?.query).toBe("lithium")
+    await command(window, { type: "navigate", url: "lithium" })
+    expect(state_of(shell).omnibox).toBeNull()
+  })
+})

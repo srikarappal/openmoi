@@ -28,6 +28,8 @@ import type {
   HealthVerdict,
   RunReport,
   SearchHit,
+  CollectionInfo,
+  Answer,
   LensVerdict,
 } from "../shared/types"
 
@@ -154,7 +156,7 @@ export class BrainClient {
     return this.request("GET", "/content/wanted")
   }
 
-  add_content(item_id: string, purpose: "summary" | "note", title: string, text: string, caption_url: string | null): Promise<{ status: string; item?: Item | null }> {
+  add_content(item_id: string, purpose: "summary" | "note" | "offline", title: string, text: string, caption_url: string | null): Promise<{ status: string; item?: Item | null }> {
     return this.request("POST", "/content", { item_id, purpose, title, text, caption_url })
   }
 
@@ -172,6 +174,30 @@ export class BrainClient {
 
   moment(view_id: string, kind: MomentKind): Promise<{ status: string }> {
     return this.request("POST", "/moments", { view_id, kind })
+  }
+
+  ask(question: string): Promise<Answer> {
+    return this.request("POST", "/ask", { question })
+  }
+
+  save_item(name: string, item_id: string, saved: boolean): Promise<CollectionInfo> {
+    return this.request("POST", "/collections", { name, item_id, saved })
+  }
+
+  collections(): Promise<CollectionInfo[]> {
+    return this.request("GET", "/collections")
+  }
+
+  collection_view(name: string): Promise<ViewInfo> {
+    return this.request("POST", "/collections/view", { name })
+  }
+
+  async export(format: "md" | "json", target: { collection?: string; view_id?: string }): Promise<string> {
+    return (await this.request<{ path: string }>("POST", "/export", { format, ...target })).path
+  }
+
+  async highlight(item_id: string, quote: string, note: string): Promise<string> {
+    return (await this.request<{ line: string }>("POST", "/highlight", { item_id, quote, note })).line
   }
 
   search(query: string, limit = 20): Promise<SearchHit[]> {

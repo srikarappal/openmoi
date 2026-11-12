@@ -164,3 +164,54 @@ describe("default lens groups and summary only cards", () => {
     expect(document.querySelector("[data-item-id='v2'] .text")?.textContent).toBe("Plain words.")
   })
 })
+
+describe("default lens collections and reading", () => {
+  it("saves to Read later or Watch later, shows Saved and takes it out on a second click", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    moi.render([view_item("a"), { ...view_item("v", { kind: "video", url: "https://www.youtube.com/watch?v=VIDEO00001A" }), collections: ["watch_later"] }], null)
+    const document = dom.window.document
+    const save = document.querySelector("[data-item-id='a'] .save") as HTMLElement
+    const watch = document.querySelector("[data-item-id='v'] .save") as HTMLElement
+    expect([save.textContent, watch.textContent]).toEqual(["Read later", "Saved"])
+    save.click()
+    watch.click()
+    expect(moi.sent.slice(1)).toEqual([
+      { type: "save", item_id: "a", collection: "read_later" },
+      { type: "unsave", item_id: "v", collection: "watch_later" },
+    ])
+    moi.update([{ item: view_item("a").item, reasons: [], collections: ["read_later"] }])
+    expect(save.textContent).toBe("Saved")
+    expect(save.getAttribute("aria-pressed")).toBe("true")
+    moi.update([{ item: view_item("a", { extra: { summary: "Short." } }).item, reasons: [] }])
+    expect(save.textContent).toBe("Saved")
+  })
+
+  it("reads an offline copy right in its card, keeps a selected passage and a note, and closes again", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    moi.render([view_item("a", { title: "Long read" }), view_item("b")], null)
+    const document = dom.window.document
+    expect(document.querySelector("[data-item-id='a'] .read_here")).toBeNull()
+    const blocks = JSON.stringify([{ type: "p", text: "First paragraph of the copy." }, { type: "h", text: "A heading" }])
+    moi.update([{ item: view_item("a", { title: "Long read", extra: { blocks } }).item, reasons: [] }])
+    const card = document.querySelector("[data-item-id='a']") as HTMLElement
+    ;(card.querySelector(".read_here") as HTMLElement).click()
+    const inline = card.querySelector(".inline_reader") as HTMLElement
+    expect(Array.from(inline.querySelectorAll("p, h2"), (node) => node.textContent)).toEqual(["First paragraph of the copy.", "A heading"])
+    ;(inline.querySelector(".highlight") as HTMLElement).click()
+    expect(inline.querySelector(".tool_status")?.textContent).toBe("Select some text first.")
+    const range = document.createRange()
+    range.selectNodeContents(inline.querySelector("p") as Node)
+    dom.window.getSelection()?.removeAllRanges()
+    dom.window.getSelection()?.addRange(range)
+    ;(inline.querySelector(".highlight") as HTMLElement).click()
+    ;(inline.querySelector(".note") as HTMLTextAreaElement).value = "  worth a second read "
+    ;(inline.querySelector(".keep_note") as HTMLElement).click()
+    expect(moi.sent.slice(1)).toEqual([
+      { type: "highlight", item_id: "a", quote: "First paragraph of the copy.", note: "" },
+      { type: "highlight", item_id: "a", quote: "", note: "worth a second read" },
+    ])
+    expect((inline.querySelector(".note") as HTMLTextAreaElement).value).toBe("")
+    ;(card.querySelector(".read_here") as HTMLElement).click()
+    expect(card.querySelector(".inline_reader")).toBeNull()
+  })
+})

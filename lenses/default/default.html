@@ -26,7 +26,14 @@
   .chip { background: var(--chip); color: var(--muted); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; }
   .less { border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
   .less:hover, .play:hover { color: var(--accent); }
-  .play { border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
+  .play, .save, .read_here { border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
+  .save[aria-pressed="true"] { color: var(--accent); font-weight: 600; }
+  .inline_reader { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 8px; font-size: 16px; line-height: 1.6; cursor: auto; }
+  .inline_reader img { max-width: 100%; border-radius: 8px; }
+  .reading_tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; }
+  .reading_tools button { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 6px; padding: 3px 8px; font-size: 12.5px; cursor: pointer; }
+  .reading_tools .note { flex: 1 1 200px; min-height: 2.2em; font: inherit; font-size: 13px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+  .tool_status { color: var(--muted); font-size: 12px; }
   footer { text-align: center; color: var(--muted); padding: 24px 16px 40px; font-size: 13px; }
   article.reader { max-width: 700px; margin: 0 auto; padding: 32px 20px 60px; font-size: 18px; line-height: 1.65; }
   article.reader h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; }
@@ -140,7 +147,10 @@
     for (const reason of view_item.reasons.filter((reason) => !reason.startsWith("from "))) chips.append(element("span", "chip", reason))
     // A YouTube video plays here, in the host's player above the lens.
     const actions = []
-    if (/^https:\/\/(www\.|m\.)?(youtube\.com\/(watch|shorts\/)|youtu\.be\/)/.test(item.url)) {
+    const video = is_youtube(item)
+    actions.push(save_button(item, video ? "watch_later" : "read_later", view_item.collections || []))
+    if (item.extra.blocks) actions.push(read_here_button(node, item))
+    if (video) {
       const play = element("button", "play", "Play here")
       play.addEventListener("click", (event) => {
         event.stopPropagation()
@@ -161,26 +171,113 @@
     return node
   }
 
-  function reader(view_item) {
-    const item = view_item.item
-    const node = element("article", "reader")
-    node.dataset.itemId = item.item_id
-    node.append(element("h1", "", item.title || ""))
-    node.append(element("div", "meta", [item.author_name, source_label(item.source_id)].filter(Boolean).join(" · ")))
-    const blocks = JSON.parse(item.extra.blocks || "[]")
+  function is_youtube(item) {
+    return /^https:\/\/(www\.|m\.)?(youtube\.com\/(watch|shorts\/)|youtu\.be\/)/.test(item.url)
+  }
+
+  const SAVE_LABELS = { read_later: "Read later", watch_later: "Watch later" }
+
+  // Read later or Watch later, and Saved once it is; a second click takes it out again.
+  function save_button(item, collection, collections) {
+    const button = element("button", "save")
+    button.dataset.collection = collection
+    show_saved(button, collections.includes(collection))
+    button.addEventListener("click", (event) => {
+      event.stopPropagation()
+      if (button.dataset.saved === "1") moi.unsave(item.item_id, collection)
+      else moi.save(item.item_id, collection)
+    })
+    return button
+  }
+
+  function show_saved(button, saved) {
+    button.dataset.saved = saved ? "1" : ""
+    button.textContent = saved ? "Saved" : SAVE_LABELS[button.dataset.collection] || "Save"
+    button.setAttribute("aria-pressed", saved ? "true" : "false")
+  }
+
+  // An article kept for offline reading opens right in its card.
+  function read_here_button(node, item) {
+    const button = element("button", "read_here", "Read here")
+    button.addEventListener("click", (event) => {
+      event.stopPropagation()
+      const open = node.querySelector(".inline_reader")
+      if (open) {
+        open.remove()
+        button.textContent = "Read here"
+        return
+      }
+      const inline = element("div", "inline_reader")
+      inline.append(...article_nodes(item), reading_tools(item, inline))
+      inline.addEventListener("click", (inner) => inner.stopPropagation())
+      node.querySelector(".body").append(inline)
+      button.textContent = "Close"
+    })
+    return button
+  }
+
+  function article_nodes(item) {
+    const nodes = []
+    let blocks = []
+    try {
+      blocks = JSON.parse(item.extra.blocks || "[]")
+    } catch (error) {
+      blocks = []
+    }
     for (const block of blocks) {
       if (block.type === "img" && block.src) {
         const image = element("img")
         image.alt = block.alt || ""
         image.src = block.src
         image.referrerPolicy = "no-referrer"
-        node.append(image)
+        nodes.push(image)
       } else if (block.text) {
         const tags = { h: "h2", quote: "blockquote", li: "li" }
-        node.append(element(tags[block.type] || "p", "", block.text))
+        nodes.push(element(tags[block.type] || "p", "", block.text))
       }
     }
-    if (!blocks.length && item.text) node.append(element("p", "", item.text))
+    if (!nodes.length && item.text) nodes.push(element("p", "", item.text))
+    return nodes
+  }
+
+  // Keep a passage you selected, or a note of your own, in memory/highlights.md.
+  function reading_tools(item, area) {
+    const tools = element("div", "reading_tools")
+    const status = element("span", "tool_status")
+    const highlight = element("button", "highlight", "Highlight selection")
+    highlight.addEventListener("click", (event) => {
+      event.stopPropagation()
+      const selection = window.getSelection()
+      const quote = selection && area.contains(selection.anchorNode) ? selection.toString().trim() : ""
+      if (!quote) {
+        status.textContent = "Select some text first."
+        return
+      }
+      moi.highlight(item.item_id, quote, "")
+      status.textContent = "Highlighted."
+    })
+    const note = element("textarea", "note")
+    note.setAttribute("aria-label", "Your note on this")
+    note.placeholder = "A note of your own"
+    const keep = element("button", "keep_note", "Keep note")
+    keep.addEventListener("click", (event) => {
+      event.stopPropagation()
+      if (!note.value.trim()) return
+      moi.highlight(item.item_id, "", note.value.trim())
+      note.value = ""
+      status.textContent = "Note kept."
+    })
+    tools.append(highlight, note, keep, status)
+    return tools
+  }
+
+  function reader(view_item) {
+    const item = view_item.item
+    const node = element("article", "reader")
+    node.dataset.itemId = item.item_id
+    node.append(element("h1", "", item.title || ""))
+    node.append(element("div", "meta", [item.author_name, source_label(item.source_id)].filter(Boolean).join(" · ")))
+    node.append(...article_nodes(item), reading_tools(item, node))
     return node
   }
 
@@ -236,6 +333,8 @@
         const node = Array.from(items_root.querySelectorAll("[data-item-id]")).find((candidate) => candidate.dataset.itemId === view_item.item.item_id)
         const body = node && node.querySelector(".body")
         if (!body) continue
+        if (Array.isArray(view_item.collections)) for (const button of body.querySelectorAll(".save")) show_saved(button, view_item.collections.includes(button.dataset.collection))
+        if (view_item.item.extra.blocks && !body.querySelector(".read_here")) body.querySelector(".less").before(read_here_button(node, view_item.item))
         for (const old of body.querySelectorAll(".summary, .watching")) old.remove()
         if (node.dataset.summaryOnly === "1" && view_item.item.extra.summary) for (const text of body.querySelectorAll(".text")) text.remove()
         body.querySelector(".row").before(...summary_parts(view_item.item, node.dataset.summaryOnly === "1"))

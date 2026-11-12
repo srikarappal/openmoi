@@ -95,7 +95,7 @@ describe("LensGenerator", () => {
     release()
     await first
     expect(brain.generate_lens).toHaveBeenCalledTimes(2)
-    expect(brain.accept_lens.mock.calls.map((call) => call[2])).toEqual(["<html>first</html>", "<html>second</html>"])
+    expect(brain.accept_lens.mock.calls.map((call) => (call as unknown[])[2])).toEqual(["<html>first</html>", "<html>second</html>"])
     const again = make_generator([null])
     const held = again.generator.ensure("feed", "feed", "same")
     await again.generator.ensure("feed", "feed", "same")

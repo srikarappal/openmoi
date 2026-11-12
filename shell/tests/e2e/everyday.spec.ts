@@ -337,3 +337,40 @@ test("a site that changes its markup is read again with a new spec well within t
     await harness.close()
   }
 })
+
+test("Read later: save with a click, make its tab, read the offline copy there, keep a highlight and export it", async () => {
+  const feed = `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/tech.xml\n`
+  const harness = await Harness.launch(world, { views: { feed }, env: { MOI_MINUTE_MS: "1500" } })
+  try {
+    await loaded(harness, "New laptop chip")
+    const card = `[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("New laptop chip"))`
+    await harness.click_lens(`${card}.querySelector(".save")`)
+    await expect(harness.chrome.locator(".notice", { hasText: "Saved to Read later (1)." })).toBeVisible()
+    await harness.chrome.locator(".notice button", { hasText: "Make a Read later tab" }).click()
+    await expect(harness.chrome.locator("button.tab.view.active")).toHaveText("Read later")
+    expect(harness.file("views/read_later.md")).toContain("* Collection: read later")
+    await eventually(
+      () => harness.last_lens_text(),
+      (text) => text.includes("New laptop chip") && text.includes("Saved") && text.includes("Read here"),
+      60_000,
+    )
+    await harness.click_lens(`${card}.querySelector(".read_here")`, true)
+    await eventually(
+      () => harness.last_lens_text(),
+      (text) => text.includes("The new chip doubles battery life by moving work to efficient cores"),
+    )
+    await harness.in_lenses(
+      `(() => { const paragraph = document.querySelector(".inline_reader p"); if (!paragraph) return 0; const range = document.createRange(); range.selectNodeContents(paragraph); getSelection().removeAllRanges(); getSelection().addRange(range); return 1 })()`,
+    )
+    await harness.click_lens(`document.querySelector(".inline_reader .highlight")`, true)
+    await expect(harness.chrome.locator(".message.moi").last()).toContainText("Kept in memory/highlights.md: highlight:")
+    expect(harness.file("memory/highlights.md")).toContain("The new chip doubles battery life")
+    await harness.chat("/export read later")
+    await expect(harness.chrome.locator(".message.moi").last()).toContainText("Saved read later as ")
+    const exported = harness.files_in("exports")
+    expect(exported).toHaveLength(1)
+    expect(harness.file(`exports/${exported[0]}`)).toContain("## [New laptop chip doubles battery life]")
+  } finally {
+    await harness.close()
+  }
+})

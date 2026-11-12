@@ -292,6 +292,34 @@ describe("ChatController mirror", () => {
   })
 })
 
+describe("ChatController questions", () => {
+  it("answers a question about what you read with its sources as links", async () => {
+    const ask = vi.fn(async () => ({ answer: "You read it in Lithium news [1].", citations: [{ number: 1, item_id: "i1", title: "Lithium news", url: "https://blog.example/1" }] }))
+    const { chat } = make_chat({ ask } as unknown as Partial<BrainClient>)
+    await chat.send("What did I read about lithium?")
+    expect(ask).toHaveBeenCalledWith("What did I read about lithium?")
+    expect(last_reply(chat)).toBe("You read it in Lithium news [1].\n[1] Lithium news https://blog.example/1")
+  })
+})
+
+describe("ChatController collections and exports", () => {
+  it("lists collections and exports this view or a collection, showing the file", async () => {
+    const collections = vi.fn(async () => [{ name: "read_later", title: "Read later", count: 2, views: ["later"] }, { name: "watch_later", title: "Watch later", count: 1, views: [] }])
+    const exporting = vi.fn(async () => "/home/exports/feed_1.md")
+    const { chat, hooks } = make_chat({ collections, export: exporting } as unknown as Partial<BrainClient>)
+    await chat.send("/collections")
+    expect(last_reply(chat)).toBe("Your collections:\n* Read later: 2 items, in the later tab\n* Watch later: 1 item, no tab reads it yet\nExport one with /export md <collection>.")
+    await chat.send("/export")
+    expect(exporting).toHaveBeenLastCalledWith("md", { view_id: "feed" })
+    expect(hooks.show_file).toHaveBeenCalledWith("/home/exports/feed_1.md")
+    await chat.send("/export json read later")
+    expect(exporting).toHaveBeenLastCalledWith("json", { collection: "read later" })
+    collections.mockResolvedValueOnce([])
+    await chat.send("/collections")
+    expect(last_reply(chat)).toBe("Nothing saved yet. Read later and Watch later on a card keep it here.")
+  })
+})
+
 describe("ChatController search", () => {
   it("searches what you were shown and lists the hits", async () => {
     const hit = { item: { source_id: "rss:news", url: "https://news.example/1", title: "Lithium recycling", text: null, published_at: "2026-11-01T10:00:00Z", fetched_at: "2026-11-01T10:00:00Z" }, score: 1 }

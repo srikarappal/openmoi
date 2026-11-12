@@ -2,6 +2,11 @@
 
 const SEARCH_URL = "https://duckduckgo.com/?q="
 
+// Words to search for rather than an address to open.
+export function is_search(text: string): boolean {
+  return normalize_address(text).startsWith(SEARCH_URL)
+}
+
 export function normalize_address(text: string): string {
   const trimmed = text.trim()
   if (/^(https?|file|about|data):/i.test(trimmed)) return trimmed

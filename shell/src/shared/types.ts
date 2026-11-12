@@ -22,6 +22,17 @@ export interface Item {
   extra: Record<string, string>
 }
 
+export interface OmniHit {
+  label: string
+  detail: string
+  target: { kind: "view"; view_id: string } | { kind: "link"; url: string }
+}
+
+export interface Omnibox {
+  query: string
+  hits: OmniHit[]
+}
+
 export interface PlayerInfo {
   item_id: string
   title: string
@@ -45,6 +56,8 @@ export interface ViewItem {
   group?: string | null
   // A summarize_only rule matched: the card shows the summary in place of the item's own text.
   summary_only?: boolean
+  // The collections you keep this item in, such as read_later.
+  collections?: string[]
 }
 
 export type RawRecord = Record<string, string>
@@ -207,6 +220,9 @@ export type LensToHost =
   | { type: "seen"; item_ids: string[] }
   | { type: "less_like_this"; item_id: string }
   | { type: "play"; item_id: string }
+  | { type: "save"; item_id: string; collection: string }
+  | { type: "unsave"; item_id: string; collection: string }
+  | { type: "highlight"; item_id: string; quote: string; note: string }
 
 export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability" | "text" | "transcript" | "structured"
 
@@ -247,6 +263,27 @@ export interface ContentWanted {
   item_id: string
   url: string
   video: boolean
+  // A summary for a summarize rule, or an offline copy of an article saved to Read later.
+  purpose?: "summary" | "offline"
+}
+
+export interface Citation {
+  number: number
+  item_id: string
+  title: string
+  url: string
+}
+
+export interface Answer {
+  answer: string
+  citations: Citation[]
+}
+
+export interface CollectionInfo {
+  name: string
+  title: string
+  count: number
+  views: string[]
 }
 
 // What reading an item in full found: its title and text, and for a video where its captions are.
@@ -407,6 +444,7 @@ export interface ShellState {
   gate: GateChoice[] | null
   stop: StopScreen | null
   player: PlayerInfo | null
+  omnibox: Omnibox | null
 }
 
 export type ShellCommand =
@@ -414,6 +452,8 @@ export type ShellCommand =
   | { type: "open_tab"; url: string }
   | { type: "open_link"; url: string }
   | { type: "close_player" }
+  | { type: "omnibox"; text: string }
+  | { type: "collection_view"; name: string }
   | { type: "select_tab"; tab_id: number }
   | { type: "close_tab"; tab_id: number }
   | { type: "navigate"; url: string }

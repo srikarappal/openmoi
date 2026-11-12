@@ -54,6 +54,8 @@ class ViewItem(BaseModel):
     group: str | None = None
     # A summarize_only rule matched: the card shows the summary in place of the item's own text.
     summary_only: bool = False
+    # The collections you keep this item in, such as read_later.
+    collections: list[str] = Field(default_factory=list)
 
 
 class Event(BaseModel):

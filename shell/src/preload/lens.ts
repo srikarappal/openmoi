@@ -42,4 +42,13 @@ contextBridge.exposeInMainWorld("moi", {
   play: (item_id: string) => {
     if (by_you()) send({ type: "play", item_id: String(item_id) })
   },
+  save: (item_id: string, collection = "read_later") => {
+    if (by_you()) send({ type: "save", item_id: String(item_id), collection: String(collection) })
+  },
+  unsave: (item_id: string, collection = "read_later") => {
+    if (by_you()) send({ type: "unsave", item_id: String(item_id), collection: String(collection) })
+  },
+  highlight: (item_id: string, quote = "", note = "") => {
+    if (by_you()) send({ type: "highlight", item_id: String(item_id), quote: String(quote), note: String(note) })
+  },
 })

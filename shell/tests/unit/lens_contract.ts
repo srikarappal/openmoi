@@ -35,6 +35,18 @@ export class FakeMoi {
     this.sent.push({ type: "play", item_id })
   }
 
+  save(item_id: string, collection = "read_later"): void {
+    this.sent.push({ type: "save", item_id, collection })
+  }
+
+  unsave(item_id: string, collection = "read_later"): void {
+    this.sent.push({ type: "unsave", item_id, collection })
+  }
+
+  highlight(item_id: string, quote = "", note = ""): void {
+    this.sent.push({ type: "highlight", item_id, quote, note })
+  }
+
   less_like_this(item_id: string): void {
     this.sent.push({ type: "less_like_this", item_id })
   }

@@ -3,10 +3,13 @@ import { readFileSync } from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, shell as desktop, Tray, type WebContentsView } from "electron"
-import { is_web_url, site_domain } from "../shared/address"
+import { is_search, is_web_url, site_domain } from "../shared/address"
 import type {
   ActiveTarget,
   ChromePageInfo,
+  CollectionInfo,
+  OmniHit,
+  Omnibox,
   GateChoice,
   Item,
   LensKind,
@@ -45,6 +48,9 @@ function ignore(): void {}
 const TOP_BAR_HEIGHT = 48
 const SIDE_PANEL_WIDTH = 340
 const MAX_NOTICES = 6
+const MIN_OMNIBOX = 2
+const OMNIBOX_HITS = 6
+const OMNIBOX_LABEL = 90
 const UNRECOGNIZED_TAG = "relay:unrecognized"
 // Tests run time faster; a minute is a minute otherwise.
 const MINUTE_MS = Number(process.env.MOI_MINUTE_MS) || 60_000
@@ -81,6 +87,8 @@ export class Shell implements ViewHost {
   readonly chat: ChatController
   readonly lens_gen: LensGenerator
   readonly player: Player
+  private omnibox: Omnibox | null = null
+  private omnibox_ticket = 0
   readonly electron: ElectronDriver
   readonly relay: RelayLink
   readonly scheduler: Scheduler
@@ -158,6 +166,7 @@ export class Shell implements ViewHost {
     this.views = new ViewController(brain, this.lenses, this.readers, {
       open_original: (url) => this.open_original(url),
       play: (item) => this.player.play(item),
+      saved: (info, saved) => this.on_saved(info, saved),
       notify: (text, url, tag, action) => this.notify(text, url, action, tag),
       retract: (tag) => this.retract(tag),
       echo: (text) => this.chat.say(text),
@@ -553,6 +562,39 @@ export class Shell implements ViewHost {
     else await this.mine.reload_lens(view_id)
   }
 
+  // The address bar searches your own reality first: views by name, then what you were shown, before the web. Only
+  // the latest words typed are shown; an address or a word too short shows nothing.
+  private async search_reality(text: string): Promise<void> {
+    const ticket = ++this.omnibox_ticket
+    const query = text.trim()
+    if (query.length < MIN_OMNIBOX || !is_search(query)) {
+      this.omnibox = null
+      this.push_state()
+      return
+    }
+    const wanted = query.toLowerCase()
+    const views: OmniHit[] = this.view_infos
+      .filter((view) => view.title.toLowerCase().includes(wanted))
+      .map((view) => ({ label: view.title, detail: "your view", target: { kind: "view", view_id: view.view_id } }))
+    const found = await this.brain.search(query, OMNIBOX_HITS).catch(() => [])
+    if (ticket !== this.omnibox_ticket) return
+    const items: OmniHit[] = found.map((hit) => ({
+      label: (hit.item.title || hit.item.text || hit.item.url).replace(/\s+/g, " ").slice(0, OMNIBOX_LABEL),
+      detail: `${hit.item.source_id} · ${(hit.item.published_at ?? hit.item.fetched_at).slice(0, 10)}`,
+      target: { kind: "link", url: hit.item.url },
+    }))
+    this.omnibox = { query, hits: [...views, ...items] }
+    this.push_state()
+  }
+
+  // One notice per collection says it was saved to, offering a tab for it while no view reads it.
+  private on_saved(info: CollectionInfo, saved: boolean): void {
+    if (!saved) return
+    this.retract(`collection:${info.name}`)
+    const action = info.views.length ? undefined : { label: `Make a ${info.title} tab`, command: { type: "collection_view" as const, name: info.name } }
+    this.notify(`Saved to ${info.title} (${info.count}).`, undefined, action, `collection:${info.name}`)
+  }
+
   private async on_view_created(view_id: string): Promise<void> {
     this.view_infos = await this.brain.views()
     await this.open_view(view_id)
@@ -627,6 +669,15 @@ export class Shell implements ViewHost {
       case "close_player":
         this.player.close()
         return
+      case "omnibox":
+        await this.search_reality(command.text)
+        return
+      case "collection_view": {
+        const view = await this.brain.collection_view(command.name)
+        this.retract(`collection:${command.name}`)
+        await this.on_view_created(view.view_id)
+        return
+      }
       case "select_tab":
         if (this.tabs.get(command.tab_id)) this.activate({ kind: "tab", tab_id: command.tab_id })
         return
@@ -639,6 +690,7 @@ export class Shell implements ViewHost {
         return
       }
       case "navigate": {
+        this.omnibox = null
         const tab = this.active_tab()
         if (tab) this.open_in_tab(tab.tab_id, command.url)
         else this.open_tab(command.url)
@@ -706,6 +758,7 @@ export class Shell implements ViewHost {
       gate: this.gate,
       stop: this.stop,
       player: this.player.playing,
+      omnibox: this.omnibox,
     }
   }
 

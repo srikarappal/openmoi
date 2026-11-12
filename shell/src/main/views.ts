@@ -2,7 +2,7 @@
 // Page sources read ahead of you: as you near the end of what is shown, their reader tabs scroll further, enough to
 // refill the view after your rules hide some, so the feed goes on like the site's own until a source ends.
 import { sleep } from "../shared/timing"
-import type { ContentWanted, Item, LensToHost, Notice, PageSource, RawRecord, ViewPage, WatchAlert } from "../shared/types"
+import type { CollectionInfo, ContentWanted, Item, LensToHost, Notice, PageSource, RawRecord, ViewPage, WatchAlert } from "../shared/types"
 import type { Track } from "./activity"
 import type { BrainClient } from "./brain"
 import type { DriverKind } from "./drivers"
@@ -31,6 +31,8 @@ export interface ViewHooks {
   open_original(url: string): void
   // Plays a video item in the host's player; false when it cannot (not a YouTube video).
   play(item: Item): boolean
+  // An item went into a collection or came out of it.
+  saved(info: CollectionInfo, saved: boolean): void
   notify(text: string, url?: string, tag?: string, action?: Notice["action"]): void
   retract(tag: string): void
   echo(text: string): void
@@ -222,11 +224,25 @@ export class ViewController {
   }
 
   // An item a summarize rule wants: read in full, then summarized by the brain onto its card for the next time it shows.
+  // Every open lens showing an item learns which collections it is in now, so its Save button says so.
+  private mark_saved(item_id: string, name: string, saved: boolean): void {
+    for (const context of this.lenses.all()) {
+      const shown = context.rendered.get(item_id)
+      if (!shown) continue
+      const collections = (context.collections.get(item_id) ?? []).filter((each) => each !== name)
+      if (saved) collections.push(name)
+      context.collections.set(item_id, collections)
+      context.send({ type: "update", items: [{ item: shown, reasons: [], collections }], cursor: null })
+    }
+  }
+
   async summarize(wanted: ContentWanted): Promise<void> {
-    const outcome = await this.hooks.track(`Reading ${wanted.url} in full`, () => this.readers.read_content(wanted.url, wanted.video))
+    const offline = wanted.purpose === "offline"
+    const label = offline ? `Keeping a copy of ${wanted.url} to read offline` : `Reading ${wanted.url} in full`
+    const outcome = await this.hooks.track(label, () => this.readers.read_content(wanted.url, wanted.video))
     if (outcome.status === "failed" && outcome.budget) return
     const content = outcome.status === "read" ? outcome.content : { title: "", text: "", caption_url: null }
-    const result = await this.brain.add_content(wanted.item_id, "summary", content.title, content.text, content.caption_url)
+    const result = await this.brain.add_content(wanted.item_id, offline ? "offline" : "summary", content.title, content.text, content.caption_url)
     if (!result.item) return
     for (const context of this.lenses.all()) {
       if (context.rendered.has(wanted.item_id)) context.send({ type: "update", items: [{ item: result.item, reasons: [] }], cursor: null })
@@ -479,6 +495,13 @@ export class ViewController {
     } else if (message.type === "play" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "open" }])
       if (!this.hooks.play(item)) this.hooks.open_original(item.url)
+    } else if ((message.type === "save" || message.type === "unsave") && item) {
+      const saved = message.type === "save"
+      const info = await this.brain.save_item(message.collection, item.item_id, saved)
+      this.mark_saved(item.item_id, info.name, saved)
+      this.hooks.saved(info, saved)
+    } else if (message.type === "highlight" && item) {
+      this.hooks.echo(`Kept in memory/highlights.md: ${await this.brain.highlight(item.item_id, message.quote, message.note)}`)
     } else if (message.type === "less_like_this" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "less_like_this" }])
       this.hooks.less_like_this(context.view_id, item)

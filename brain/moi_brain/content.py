@@ -76,3 +76,21 @@ def summary_extra(summary: ContentSummary) -> dict[str, str]:
     stretches = "; ".join(f"{clock(stretch.start)} to {clock(stretch.end)}{f': {stretch.why}' if stretch.why else ''}" for stretch in summary.worth_watching[:3] if stretch.end > stretch.start)
     extra = {"summary": summary.summary.strip()[:MAX_SUMMARY], "key_points": " | ".join(point.strip() for point in summary.key_points[:MAX_POINTS] if point.strip())}
     return {key: value for key, value in {**extra, "worth_watching": stretches}.items() if value}
+
+
+MAX_OFFLINE_BLOCKS = 400
+MAX_OFFLINE_CHARS = 200_000
+
+
+def offline_blocks(text: str) -> list[dict[str, str]]:
+    """An article's text as reader paragraphs, for reading it later without the network."""
+    blocks: list[dict[str, str]] = []
+    total = 0
+    for paragraph in (line.strip() for line in text.splitlines()):
+        if not paragraph:
+            continue
+        if total + len(paragraph) > MAX_OFFLINE_CHARS or len(blocks) >= MAX_OFFLINE_BLOCKS:
+            break
+        blocks.append({"type": "p", "text": paragraph})
+        total += len(paragraph)
+    return blocks

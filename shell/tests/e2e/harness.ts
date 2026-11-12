@@ -158,11 +158,13 @@ export class Harness {
   }
 
   // Clicks, with real mouse input through the main process, the element the expression finds in the first lens that
-  // has it, the way you would; returns that element's data-item-id, or null when no lens has it.
-  async click_lens(find: string): Promise<string | null> {
-    return this.app.evaluate(async ({ webContents }, expression) => {
+  // has it (the newest first when newest is set), the way you would; returns that element's data-item-id, or null
+  // when no lens has it.
+  async click_lens(find: string, newest = false): Promise<string | null> {
+    return this.app.evaluate(async ({ webContents }, [expression, newest_first]) => {
       const lenses = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("data:text/html"))
-      for (const contents of lenses.sort((first, second) => first.id - second.id)) {
+      const ordered = lenses.sort((first, second) => (newest_first ? second.id - first.id : first.id - second.id))
+      for (const contents of ordered) {
         const point = await contents.executeJavaScript(
           `(() => { const node = ${expression}; if (!node) return null; node.scrollIntoView({ block: "center" }); const box = node.getBoundingClientRect(); ` +
             `return { x: Math.round(box.left + Math.min(box.width / 2, 24)), y: Math.round(box.top + Math.min(box.height / 2, 12)), id: node.closest("[data-item-id]")?.dataset.itemId ?? "" } })()`,
@@ -172,7 +174,7 @@ export class Harness {
         return point.id as string
       }
       return null
-    }, find)
+    }, [find, newest] as const)
   }
 
   async in_tabs<T>(script: string): Promise<T[]> {

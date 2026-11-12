@@ -300,6 +300,19 @@ def judge_lens(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"matches": True, "problem": ""})
 
 
+def ask(payload: dict[str, Any], base_url: str) -> str:
+    """Answers from the first source whose title shares a word with the question, citing it; else says nothing answers."""
+    request = request_of(payload)
+    words = set(re.findall(r"[a-z]{4,}", request["question"].lower()))
+    for source in request["sources"]:
+        if words & set(re.findall(r"[a-z]{4,}", source["title"].lower())):
+            return json.dumps({"answer": f"You read about it in {source['title']} [{source['n']}].", "used": [source["n"]]})
+    for line in request["journal"]:
+        if words & set(re.findall(r"[a-z]{4,}", line.lower())):
+            return json.dumps({"answer": f"Your journal says: {line[2:80]}", "used": []})
+    return json.dumps({"answer": "Nothing you read answers that.", "used": []})
+
+
 def extractor(payload: dict[str, Any], base_url: str) -> str:
     request = request_of(payload)
     skeleton = request["skeleton"]
@@ -335,7 +348,7 @@ def update(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"update": changed, "what_changed": new["title"] if changed else ""})
 
 
-HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "lens_patch": lens_patch, "judge_lens": judge_lens, "extractor": extractor, "update": update, "summarize": summarize, "oracle": oracle}
+HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "lens_patch": lens_patch, "judge_lens": judge_lens, "ask": ask, "extractor": extractor, "update": update, "summarize": summarize, "oracle": oracle}
 
 
 def model_reply(task: str, payload: dict[str, Any], base_url: str) -> str:

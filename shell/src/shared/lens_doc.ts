@@ -5,6 +5,7 @@ export const LENS_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src moi-media: data:; font-src data:; media-src moi-media: data:"
 const MAX_IDS_PER_MESSAGE = 200
 const MAX_ID_LENGTH = 200
+const MAX_TEXT_LENGTH = 5_000
 
 // Puts the CSP before anything else in the document, right after the doctype, so it applies before any lens
 // script runs, then the shared design tokens, so the lens's own styles come after them; the parser files both into
@@ -46,6 +47,14 @@ export function with_media(items: ViewItem[], to_media: (url: string) => string 
   })
 }
 
+function is_collection(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z][a-z0-9_]{0,39}$/.test(value)
+}
+
+function is_text(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_TEXT_LENGTH
+}
+
 function is_id(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH
 }
@@ -61,6 +70,12 @@ export function parse_lens_message(raw: unknown): LensToHost | null {
     case "less_like_this":
     case "play":
       return is_id(message.item_id) ? { type: message.type, item_id: message.item_id } : null
+    case "save":
+    case "unsave":
+      return is_id(message.item_id) && is_collection(message.collection) ? { type: message.type, item_id: message.item_id, collection: message.collection } : null
+    case "highlight":
+      if (!is_id(message.item_id) || !is_text(message.quote) || !is_text(message.note) || !(message.quote || message.note)) return null
+      return { type: "highlight", item_id: message.item_id, quote: message.quote, note: message.note }
     case "more":
       return typeof message.cursor === "string" ? { type: "more", cursor: message.cursor } : null
     case "seen":

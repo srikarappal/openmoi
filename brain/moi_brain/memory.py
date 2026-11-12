@@ -38,6 +38,14 @@ class Memory:
                 lines += [line for line in read_text(path).splitlines() if line.startswith("* ")]
         return lines[-MAX_JOURNAL_LINES:]
 
+    def add_highlight(self, now: datetime, line: str) -> None:
+        """A highlight or note on what you read, kept in memory/highlights.md, newest last."""
+        path = self.paths.memory / "highlights.md"
+        if not path.exists():
+            path.write_text("# Highlights\n\nPassages you marked and notes you wrote on what you read.\n\n")
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"* {now.astimezone():%Y-%m-%d} {line}\n")
+
     def append_journal(self, now: datetime, line: str) -> None:
         """One line in today's journal, named and timed on your clock: an item opened at 18:00 lands in today's file."""
         now = now.astimezone()
