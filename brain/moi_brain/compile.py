@@ -9,6 +9,7 @@ import json
 import re
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -411,13 +412,18 @@ class Compiler:
 
     Each view has its own lock, so a slow model compiling one view never holds up the others."""
 
-    def __init__(self, paths: Paths, gateway: Gateway, memory: Memory):
+    def __init__(self, paths: Paths, gateway: Gateway, memory: Memory, subscriptions: Callable[[], list[str]] | None = None):
         self.paths = paths
         self.gateway = gateway
         self.memory = memory
+        # Channel ids "YouTube: subscriptions" stands for: your Google account's, else a Takeout file's.
+        self.subscriptions = subscriptions or self.takeout_channels
         self.locks_lock = threading.Lock()
         self.locks: dict[str, threading.Lock] = {}
         self.failures: dict[str, tuple[str, float, CompiledView]] = {}
+
+    def takeout_channels(self) -> list[str]:
+        return read_takeout(self.paths.takeout)
 
     def view_ids(self) -> list[str]:
         return [path.stem for path in sorted(self.paths.views.glob("*.md")) if VIEW_ID.fullmatch(path.stem)]
@@ -447,7 +453,7 @@ class Compiler:
     def input_hash(self, view_text: str) -> str:
         """Everything a compiled view depends on, plus the compiler's version, so a cached view made by an older
         openMoi (say with source ids named differently) is compiled again."""
-        parts = [COMPILER_VERSION, view_text, read_text(self.paths.takeout), self.memory.likes(), self.memory.dislikes()]
+        parts = [COMPILER_VERSION, view_text, "\n".join(self.subscriptions()), self.memory.likes(), self.memory.dislikes()]
         return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
     def compiled(self, view_id: str, wait: bool = True, use_model: bool = True) -> CompiledView:
@@ -485,7 +491,7 @@ class Compiler:
         self, view_id: str, view_text: str, file_hash: str, previous: CompiledView | None, use_model: bool = True
     ) -> tuple[CompiledView, bool]:
         title, sections = parse_sections(view_text)
-        sources, warnings = parse_sources(section_text(sections, "sources"), read_takeout(self.paths.takeout))
+        sources, warnings = parse_sources(section_text(sections, "sources"), self.subscriptions())
         time, time_warnings = parse_time_section(section_text(sections, "time"))
         warnings += time_warnings
         try:

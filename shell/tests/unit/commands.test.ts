@@ -16,6 +16,8 @@ describe("parse_chat", () => {
     ["/mirror 30", { kind: "mirror", days: 30 }],
     ["/import https://gist.example/ai.md", { kind: "import", url: "https://gist.example/ai.md" }],
     ["/share", { kind: "share" }],
+    ["/google", { kind: "google", connect: false }],
+    ["/google connect", { kind: "google", connect: true }],
     ["/newview Tech", { kind: "new_view", view_id: "tech", title: "Tech", description: "" }],
     ["/newview space_news space and physics", { kind: "new_view", view_id: "space_news", title: "space_news", description: "space and physics" }],
     ["/model", { kind: "model", change: null }],
@@ -51,6 +53,7 @@ describe("parse_chat", () => {
     ["/import http://gist.example/ai.md", "Usage: /import <https link to a view file>"],
     ["/import https://a.example/1 https://b.example/2", "Usage: /import <https link to a view file>"],
     ["/share feed", "Usage: /share"],
+    ["/google disconnect", "Usage: /google [connect]"],
     ["/nope", "Unknown command /nope. Type /help for the list."],
   ])("%s is a usage error", (typed, message) => {
     expect(parse_chat(typed)).toEqual({ kind: "error", message })

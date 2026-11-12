@@ -243,6 +243,16 @@ def import_view(body: ImportRequest, brain: BrainDep) -> Proposal:
     return brain.import_view(body.name, body.text, body.url)
 
 
+@router.post("/google/connect")
+def google_connect(brain: BrainDep) -> dict[str, str]:
+    return {"auth_url": brain.google_connect()}
+
+
+@router.get("/google/status")
+def google_status(brain: BrainDep) -> dict[str, Any]:
+    return brain.google_status()
+
+
 @router.post("/packs/update")
 def update_packs(brain: BrainDep) -> dict[str, str]:
     return {"status": brain.update_packs()}

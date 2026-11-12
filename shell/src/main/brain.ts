@@ -128,6 +128,14 @@ export class BrainClient {
     return this.request("POST", "/import", { name, text, url })
   }
 
+  google_connect(): Promise<{ auth_url: string }> {
+    return this.request("POST", "/google/connect")
+  }
+
+  google_status(): Promise<{ connected: boolean; status: string; client: boolean }> {
+    return this.request("GET", "/google/status")
+  }
+
   update_packs(): Promise<{ status: string }> {
     return this.request("POST", "/packs/update")
   }

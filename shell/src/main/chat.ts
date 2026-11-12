@@ -3,6 +3,7 @@
 import { format_mirror, format_model, format_overview, help_text, parse_chat, type ChatCommand } from "../shared/commands"
 import type { ChatEntry, EditScope, Proposal } from "../shared/types"
 import type { Track } from "./activity"
+import { sleep } from "../shared/timing"
 import { BrainError, type BrainClient } from "./brain"
 
 const MAX_ENTRIES = 60
@@ -16,6 +17,8 @@ export interface ChatHooks {
   // Turns reading in the background on or off; the reply says what that means.
   set_background(on: boolean): string
   show_file(path: string): void
+  // Opens an address in your system browser (Google's sign in never runs inside openMoi).
+  open_external(url: string): void
   track: Track
   changed(): void
 }
@@ -28,6 +31,8 @@ interface EditRequest {
 }
 
 const ASKING = "Asking the model about your request"
+const GOOGLE_POLL_MS = 2_000
+const GOOGLE_POLLS = 150
 
 export function explain(error: unknown): string {
   if (error instanceof BrainError && error.kind === "privacy") {
@@ -110,6 +115,8 @@ export class ChatController {
         return
       case "import":
         return this.offer_import(await this.hooks.track("Reading the shared view", () => this.brain.import_view("", null, command.url)))
+      case "google":
+        return command.connect ? this.connect_google() : this.google_status()
       case "share": {
         const { path } = await this.brain.share_view(view_id)
         this.hooks.show_file(path)
@@ -150,6 +157,30 @@ export class ChatController {
       const history = source_id.replace(/^history:/, "")
       this.say(`Your ${history} history now holds ${stored} items. Add "History: ${history}" to a view's Sources to see them.`)
     })
+  }
+
+  private async google_status(): Promise<void> {
+    const status = await this.brain.google_status()
+    if (!status.client) this.say("Google is not set up: add GOOGLE_CLIENT_ID (and GOOGLE_CLIENT_SECRET) from a Google desktop OAuth client to openMoi's .env.")
+    else this.say(status.connected ? "Google is connected: YouTube subscriptions come from your account." : `Google is ${status.status}. Use /google connect.`)
+  }
+
+  // Google's sign in opens in your browser; openMoi waits for it to come back for up to five minutes.
+  private async connect_google(): Promise<void> {
+    const { auth_url } = await this.brain.google_connect()
+    this.hooks.open_external(auth_url)
+    this.say("Sign in to Google in your browser; openMoi waits for it here.")
+    const status = await this.hooks.track("Waiting for Google", () => this.google_finished())
+    this.say(status.connected ? "Google is connected: YouTube subscriptions now come from your account." : `Google did not connect: ${status.status}.`)
+  }
+
+  private async google_finished(): Promise<{ connected: boolean; status: string }> {
+    for (let attempt = 0; attempt < GOOGLE_POLLS; attempt++) {
+      const status = await this.brain.google_status()
+      if (status.connected || status.status.startsWith("not connected:")) return status
+      await sleep(GOOGLE_POLL_MS)
+    }
+    return { connected: false, status: "no answer from the browser in five minutes" }
   }
 
   private offer_import(proposal: Proposal): void {

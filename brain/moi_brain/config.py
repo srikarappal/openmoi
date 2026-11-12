@@ -223,6 +223,14 @@ class Paths:
     def packs(self) -> Path:
         return self.state / "packs"
 
+    @property
+    def google_tokens(self) -> Path:
+        return self.state / "google_tokens.json"
+
+    @property
+    def google_subscriptions(self) -> Path:
+        return self.state / "youtube_subscriptions.json"
+
 
 def load_paths() -> Paths:
     home = Path(os.environ.get("MOI_HOME", Path.home() / "openMoi")).expanduser()

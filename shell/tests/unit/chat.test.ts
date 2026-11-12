@@ -34,6 +34,7 @@ function make_chat(brain: Partial<BrainClient>) {
     open_folder: vi.fn(),
     set_background: vi.fn((on: boolean) => (on ? "on now" : "off now")),
     show_file: vi.fn(),
+    open_external: vi.fn(),
     track,
     changed: vi.fn(),
   }
@@ -336,5 +337,42 @@ describe("ChatController history imports", () => {
     expect(import_history).toHaveBeenCalledWith("Retail.OrderHistory.1.csv", "csv")
     expect(labels).toEqual(["Reading Retail.OrderHistory.1.csv"])
     expect(last_reply(chat)).toBe('Your amazon history now holds 42 items. Add "History: amazon" to a view\'s Sources to see them.')
+  })
+})
+
+describe("ChatController Google", () => {
+  it("opens Google's sign in in your browser and waits for it to come back", async () => {
+    vi.useFakeTimers()
+    const statuses = [{ connected: false, status: "waiting for you in the browser", client: true }, { connected: true, status: "connected", client: true }]
+    const google_status = vi.fn(async () => statuses.shift() ?? { connected: true, status: "connected", client: true })
+    const { chat, hooks, labels } = make_chat({ google_connect: vi.fn(async () => ({ auth_url: "https://accounts.google.com/o/oauth2/v2/auth?x=1" })), google_status } as unknown as Partial<BrainClient>)
+    const sending = chat.send("/google connect")
+    await vi.advanceTimersByTimeAsync(2_500)
+    await sending
+    expect(hooks.open_external).toHaveBeenCalledWith("https://accounts.google.com/o/oauth2/v2/auth?x=1")
+    expect(labels).toContain("Waiting for Google")
+    expect(last_reply(chat)).toBe("Google is connected: YouTube subscriptions now come from your account.")
+    vi.useRealTimers()
+  })
+
+  it("says when the sign in failed, when nothing came back, and the status on its own", async () => {
+    vi.useFakeTimers()
+    const refused = make_chat({ google_connect: vi.fn(async () => ({ auth_url: "https://a" })), google_status: vi.fn(async () => ({ connected: false, status: "not connected: access_denied", client: true })) } as unknown as Partial<BrainClient>)
+    await refused.chat.send("/google connect")
+    expect(last_reply(refused.chat)).toBe("Google did not connect: not connected: access_denied.")
+    const silent = make_chat({ google_connect: vi.fn(async () => ({ auth_url: "https://a" })), google_status: vi.fn(async () => ({ connected: false, status: "waiting for you in the browser", client: true })) } as unknown as Partial<BrainClient>)
+    const waiting = silent.chat.send("/google connect")
+    await vi.advanceTimersByTimeAsync(301_000)
+    await waiting
+    expect(last_reply(silent.chat)).toBe("Google did not connect: no answer from the browser in five minutes.")
+    vi.useRealTimers()
+    const states = [{ connected: false, status: "not connected", client: false }, { connected: true, status: "connected", client: true }, { connected: false, status: "not connected", client: true }]
+    const status = make_chat({ google_status: vi.fn(async () => states.shift()) } as unknown as Partial<BrainClient>)
+    await status.chat.send("/google")
+    expect(last_reply(status.chat)).toContain("Google is not set up")
+    await status.chat.send("/google")
+    expect(last_reply(status.chat)).toBe("Google is connected: YouTube subscriptions come from your account.")
+    await status.chat.send("/google")
+    expect(last_reply(status.chat)).toBe("Google is not connected. Use /google connect.")
   })
 })

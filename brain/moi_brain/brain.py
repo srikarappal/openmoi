@@ -25,8 +25,9 @@ from moi_brain.extractor_gen import generate_spec
 from moi_brain.exports import SOURCE_IDS, read_export
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.files import read_json, write_atomic
+from moi_brain.google import GoogleAccount, GoogleError
 from moi_brain.health import HealthBook, OracleReply, RunReport, Verdict, oracle_prompt
-from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
+from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher, read_takeout
 from moi_brain.items import (
     HANDLE,
     Event,
@@ -67,6 +68,7 @@ SEEN_KEEP = timedelta(hours=12)
 FOLLOWS_EVERY = timedelta(days=7)
 NOBODY_KNOWN = "Rules about people you know have no one to go on yet: add a Following source, or people to memory/people.md."
 MIRROR_EVERY = timedelta(days=7)
+SUBSCRIPTIONS_EVERY = timedelta(days=1)
 # Items a summarize rule wants are summarized while they are this fresh and unseen.
 CONTENT_WINDOW = timedelta(hours=48)
 # When an item last could not be read or summarized; it is tried again a day later.
@@ -255,7 +257,8 @@ class Brain:
         self.fetcher = FeedFetcher(self.http, paths.channel_cache, youtube_base)
         self.youtube_base = youtube_base
         self.memory = Memory(paths)
-        self.compiler = Compiler(paths, self.gateway, self.memory)
+        self.google = GoogleAccount(paths.google_tokens, self.http)
+        self.compiler = Compiler(paths, self.gateway, self.memory, self.subscriptions)
         self.tagger = Tagger(self.store, self.gateway, paths.tagging_state, self.watch_list, self.watch_judgments)
         self.updater = Updater(self.store, self.gateway)
         self.editor = Editor(paths, self.gateway)
@@ -289,6 +292,7 @@ class Brain:
         """Drops expired items, then reads every feed source not read in the last few minutes."""
         try:
             self.store.expire(self.clock())
+            self.refresh_subscriptions()
             for source_id, location, reader in self.feed_readers(compiled):
                 key = (source_id, location)
                 last = self.fetched_at.get(key)
@@ -858,6 +862,42 @@ class Brain:
         kind, records = found
         items = self.store_records(SOURCE_IDS[kind], records)
         return SOURCE_IDS[kind], len(items)
+
+    def subscriptions(self) -> list[str]:
+        """The channels "YouTube: subscriptions" means: your Google account's (refreshed daily), else a Takeout file's."""
+        cached = read_json(self.paths.google_subscriptions, {})
+        channels = cached.get("channels") if isinstance(cached, dict) else None
+        if self.google.connected and isinstance(channels, list):
+            return [str(channel) for channel in channels]
+        return read_takeout(self.paths.takeout)
+
+    def refresh_subscriptions(self) -> None:
+        """With Google connected, your subscriptions are read again once a day; a failure keeps the last list."""
+        if not self.google.connected:
+            return
+        cached = read_json(self.paths.google_subscriptions, {})
+        try:
+            last = datetime.fromisoformat(cached.get("at", "")) if isinstance(cached, dict) else None
+        except ValueError:
+            last = None
+        if last and self.clock() - last < SUBSCRIPTIONS_EVERY:
+            return
+        try:
+            channels = self.google.youtube_subscriptions()
+        except GoogleError as error:
+            self.source_status[("youtube", "subscriptions")] = str(error)
+            return
+        self.source_status[("youtube", "subscriptions")] = "ok"
+        write_atomic(self.paths.google_subscriptions, json.dumps({"at": self.clock().isoformat(), "channels": channels}))
+
+    def google_connect(self) -> str:
+        try:
+            return self.google.start()
+        except GoogleError as error:
+            raise BadInput(str(error)) from error
+
+    def google_status(self) -> dict[str, Any]:
+        return {"connected": self.google.connected, "status": self.google.status, "client": bool(self.google.client_id)}
 
     def update_packs(self) -> str:
         """Fetch the pack channel's newest pack and install it if it is signed with openMoi's key and newer."""

@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { BrainClient } from "../../src/main/brain"
 import type { Proposal, RelayInfo, ShellCommand, ShellState, ViewPage } from "../../src/shared/types"
-import { FakeBrowserWindow, FakeNotification, FakeTray, FakeWebContentsView, app, ipc_event, ipcMain, opened_paths, powerMonitor, reset_electron } from "./fake_electron"
+import { FakeBrowserWindow, FakeNotification, FakeTray, FakeWebContentsView, app, external_urls, ipc_event, ipcMain, opened_paths, powerMonitor, reset_electron } from "./fake_electron"
 
 vi.mock("electron", async () => await import("./fake_electron"))
 
@@ -699,5 +699,15 @@ describe("Shell packs", () => {
     const quiet = await started({ update_packs: vi.fn(async () => ({ status: "pack v4 is current" })) })
     await wait(5)
     expect(state_of(quiet.shell).chat.some((entry) => entry.text.startsWith("Site packs"))).toBe(false)
+  })
+})
+
+describe("Shell system browser", () => {
+  it("opens only https addresses in your system browser", async () => {
+    const { shell, window } = await started({ google_connect: vi.fn(async () => ({ auth_url: "https://accounts.google.com/x" })), google_status: vi.fn(async () => ({ connected: true, status: "connected", client: true })) })
+    await command(window, { type: "chat_send", text: "/google connect" })
+    await vi.waitFor(() => expect(external_urls).toEqual(["https://accounts.google.com/x"]))
+    ;(shell.chat as unknown as { hooks: { open_external(url: string): void } }).hooks.open_external("javascript:alert(1)")
+    expect(external_urls).toHaveLength(1)
   })
 })

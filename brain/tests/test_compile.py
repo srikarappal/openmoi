@@ -105,6 +105,9 @@ def test_compiled_is_cached_until_an_input_changes(compiler, monkeypatch):
     assert counter.calls == 2
     compiler.paths.takeout.write_text("Channel Id,Channel Url,Channel Title\n")
     compiler.compiled("feed")
+    assert counter.calls == 2
+    compiler.paths.takeout.write_text("Channel Id,Channel Url,Channel Title\nUCaaaaaaaaaaaaaaaaaaaaaa,http://y/a,A\n")
+    compiler.compiled("feed")
     assert counter.calls == 3
     (compiler.paths.memory / "dislikes.md").write_text("# dislikes\n\n* crypto\n")
     compiler.compiled("feed")

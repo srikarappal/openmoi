@@ -21,6 +21,7 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/mirror", usage: "/mirror [days]", summary: "what each source showed you and how much passed your rules" },
   { name: "/import", usage: "/import <https link to a view file>", summary: "add a view someone shared; or drop its .md file here" },
   { name: "/share", usage: "/share", summary: "save a copy of this view to send, without your people" },
+  { name: "/google", usage: "/google [connect]", summary: "sign in to Google in your browser so YouTube subscriptions come from your account" },
   { name: "/help", usage: "/help", summary: "list the commands" },
 ]
 
@@ -38,6 +39,7 @@ export type ChatCommand =
   | { kind: "mirror"; days: number }
   | { kind: "import"; url: string }
   | { kind: "share" }
+  | { kind: "google"; connect: boolean }
   | { kind: "help" }
   | { kind: "error"; message: string }
 
@@ -82,6 +84,7 @@ export function parse_chat(input: string): ChatCommand {
   }
   if (command === "/import") return words.length === 1 && words[0].startsWith("https://") ? { kind: "import", url: words[0] } : usage_error(command)
   if (command === "/share") return words.length ? usage_error(command) : { kind: "share" }
+  if (command === "/google") return words.length === 0 || (words.length === 1 && words[0] === "connect") ? { kind: "google", connect: words[0] === "connect" } : usage_error(command)
   if (command === "/help") return { kind: "help" }
   return { kind: "error", message: `Unknown command ${name}. Type /help for the list.` }
 }

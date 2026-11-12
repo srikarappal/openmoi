@@ -130,6 +130,9 @@ export class Shell implements ViewHost {
       },
       set_background: (on) => this.set_background(on),
       show_file: (file) => desktop.showItemInFolder(file),
+      open_external: (url) => {
+        if (url.startsWith("https://")) desktop.openExternal(url).catch(ignore)
+      },
       changed: () => this.push_state(),
     })
     this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload), {

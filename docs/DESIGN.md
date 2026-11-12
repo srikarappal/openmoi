@@ -32,7 +32,7 @@ Part 1: MVP `[built]`
 Part 2: Later
 
 16. Later stages map
-17. L1 Robust reading `[partly built]`
+17. L1 Robust reading `[built]`
 18. L2 Smarter brain `[not built]`
 19. L3 Full lens engine `[partly built]`
 20. L4 Intent views `[not built]`
@@ -817,7 +817,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 576 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 433 shell and extension unit (97% of lines), 35 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 633 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 493 shell and extension unit (97% of lines), 36 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -831,7 +831,7 @@ Not yet measured: Mine on 7 of 10 real sites with a real smart model.
 ## 14. Simplicity budget
 
 * **Code:** about 8k lines of our own code at the end of M3 (shell about 3.5k TypeScript, brain about 3.5k Python, lenses and prompts about 1k). Over budget means cutting scope, not quality.
-* **Dependencies:** the shell uses Electron, React, esbuild and Mozilla Readability; the brain uses FastAPI, uvicorn, pydantic, feedparser, httpx and websockets (the relay needs a WebSocket server; its sync API keeps the brain free of async code). Anything else needs a one line reason in this doc.
+* **Dependencies:** the shell uses Electron, React, esbuild and Mozilla Readability; the brain uses FastAPI, uvicorn, pydantic, feedparser, httpx, websockets (the relay needs a WebSocket server; its sync API keeps the brain free of async code) and cryptography (Ed25519 signatures on packs, L1). Anything else needs a one line reason in this doc.
 * **No:** queues or job systems (threads are enough), ORMs (plain SQL), Docker, plugin systems, schema codegen, microservices, packaging, feature flags, settings screens (the files are the settings).
 * **Rule:** every later stage plugs into a bone from section 8. If a later feature needs a bone rewritten, fix the bone first.
 
@@ -870,7 +870,7 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 
 | Stage | Adds | Extends bone | Status |
 |---|---|---|---|
-| L1 Robust reading | Facebook, Amazon, rung 2, assist mode, health monitor, packs, site policy | Source adapter | partly built |
+| L1 Robust reading | Facebook, Amazon, rung 2, assist mode, health monitor, packs, site policy | Source adapter | built |
 | L2 Smarter brain | Learned ranking, clusters, embeddings, search, richer rules | Event log, Item | not built |
 | L3 Full lens engine | Test gate, visual judge, patch mode, media proxy, tokens, gesture binding | Lens contract | partly built |
 | L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file | not built |
@@ -880,9 +880,7 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 | L8 Native apps | Swift helper, app ladder | Source adapter | not built |
 | L9 Launch hardening | Packaging, socket RPC, privacy modes, kill switch, legal | LLM gateway, shell and brain split | not built |
 
-## 17. L1 Robust reading `[partly built]`
-
-**Built early:** any site's feed page as a source, its spec written from the page skeleton the first time (9.2); a daily scroll cap per source (200 steps); reader tabs that continue where they stopped (7); pilot and assist modes, the site policy file with daily caps and a 24 h challenge rest (34.7). Facebook and Instagram are untested on the real sites.
+## 17. L1 Robust reading `[built]`
 
 **Adds**
 
@@ -925,6 +923,21 @@ Full spec format adds action anchors and quality hints:
 ```
 
 **Exit:** field accuracy at least 95% on golden fixtures; simulated drift repaired in under 2 minutes; Facebook and Amazon working in Feed and Mine.
+
+**As built (Nov 12, 2026):**
+
+| Piece | Built | Not verified |
+|---|---|---|
+| Facebook | `extractors/facebook_feed.json` anchored on `role`, `aria-posinset` and the post's message markers; assist mode by default (34.7); your own posts and events from "Download your information" dropped on the chat (`* History: facebook`) | The live site |
+| Amazon | `extractors/amazon_search.json` keyed by `data-asin`, sponsored slots skipped; a product page in Mine read from its JSON-LD (price, rating); order history CSV dropped on the chat (`* History: amazon`) | The live site |
+| Rung 2 | The `structured` page operation: JSON-LD, microdata, OpenGraph, Next.js and Nuxt hydration state, advertised feeds (a page source offering RSS says so once); passive capture of the JSON a page fetches, through the debugger protocol in openMoi's own session, on per site policy (`capture`); never in Chrome, where it would show a warning bar | |
+| Health | Every spec run is judged (no items, missing links, nothing to read, far fewer items than usual); a candidate is active after 5 healthy runs; a new spec's first run goes to the model (oracle); a failing spec gives way to its earlier versions, then (for Mine) the page's structured data, then a new spec | |
+| Site policy | `policy/sites.json`: status (`removed` is the kill switch), mode, daily steps and capture per site; allowed rungs and write flags wait for L5 | |
+| Packs | Specs and site policy signed with Ed25519, on a channel set by `pack_url` in config.json, checked daily, installed only when newer and signed with the key in `policy/pack_key.pub`; `python -m moi_brain.packs keygen` and `sign` make and use the publisher's key. No key ships yet, so packs are off | A real channel |
+| Page classifier | video, product, search, profile, thread, article, feed, listing, from addresses, OpenGraph, schema.org types and page shape | |
+| Google | `/google connect`: Google's sign in in your browser, a loopback redirect with PKCE (RFC 8252), tokens readable only by you; "YouTube: subscriptions" then comes from your account, refreshed daily | Needs `GOOGLE_CLIENT_ID` from a Google desktop client |
+
+Golden pages: Amazon search and Facebook feed at 100% field accuracy. Simulated drift (a site that changes its markup) is repaired in about 10 seconds in the real app.
 
 ## 18. L2 Smarter brain `[not built]`
 

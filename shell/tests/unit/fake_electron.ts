@@ -317,10 +317,17 @@ export const session = {
     return existing
   },
 }
+export const external_urls: string[] = []
 export const shell = {
   async openPath(target: string): Promise<string> {
     opened_paths.push(target)
     return ""
+  },
+  async openExternal(url: string): Promise<void> {
+    external_urls.push(url)
+  },
+  showItemInFolder(target: string): void {
+    opened_paths.push(target)
   },
 }
 export const error_boxes: Array<[string, string]> = []
@@ -355,6 +362,7 @@ export function reset_electron(): void {
   powerMonitor.removeAllListeners()
   app.login = { openAtLogin: false, wasOpenedAtLogin: false }
   opened_paths.length = 0
+  external_urls.length = 0
   error_boxes.length = 0
   for (const name of Object.keys(exposed)) delete exposed[name]
 }
