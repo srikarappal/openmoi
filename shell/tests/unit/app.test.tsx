@@ -1,5 +1,5 @@
 import { act } from "react"
-import { beforeAll, describe, expect, it } from "vitest"
+import { beforeAll, describe, expect, it, vi } from "vitest"
 import type { ChatEntry, ShellCommand, ShellState } from "../../src/shared/types"
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -275,5 +275,31 @@ describe("App gate and stop screen", () => {
     expect(query(".stop .next")).toBeNull()
     await show({ stop: null, gate: null })
     expect(query(".content")).toBeNull()
+  })
+})
+
+// A drop event carrying files, as the browser makes one.
+function drop_event(type: string, files: File[]): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, "dataTransfer", { value: { files } })
+  return event
+}
+
+describe("App dropping a view file", () => {
+  it("imports a dropped view file and ignores anything else", async () => {
+    await show({})
+    const chat = query(".chat") as HTMLElement
+    await act(async () => chat.dispatchEvent(drop_event("dragover", [])))
+    expect(chat.className).toBe("chat dragging")
+    expect(query(".drop_hint")?.textContent).toBe("Drop a view file to add it")
+    await act(async () => chat.dispatchEvent(drop_event("dragleave", [])))
+    expect(chat.className).toBe("chat")
+    const sent = bridge.sent.length
+    await act(async () => chat.dispatchEvent(drop_event("drop", [new File(["binary"], "photo.png")])))
+    await act(async () => chat.dispatchEvent(drop_event("drop", [new File(["x".repeat(200_001)], "huge.md")])))
+    await act(async () => chat.dispatchEvent(drop_event("drop", [])))
+    expect(bridge.sent).toHaveLength(sent)
+    await act(async () => chat.dispatchEvent(drop_event("drop", [new File(["# AI news"], "ai.md")])))
+    await vi.waitFor(() => expect(last_sent()).toEqual({ type: "import_view", name: "ai.md", text: "# AI news" }))
   })
 })

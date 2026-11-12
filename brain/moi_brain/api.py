@@ -137,6 +137,16 @@ class ProposalRequest(BaseModel):
     proposal_id: str
 
 
+class ImportRequest(BaseModel):
+    name: str = Field(default="", max_length=200)
+    text: str | None = Field(default=None, max_length=200_000)
+    url: str | None = Field(default=None, max_length=2000)
+
+
+class ShareRequest(BaseModel):
+    view_id: str
+
+
 class ContentRequest(BaseModel):
     item_id: str
     purpose: Literal["summary", "note"]
@@ -220,6 +230,16 @@ def view_page(view_id: str, body: ViewRequest, brain: BrainDep) -> ViewPage:
 def open_early(view_id: str, brain: BrainDep) -> dict[str, str]:
     brain.open_early(view_id)
     return {"status": "open"}
+
+
+@router.post("/import")
+def import_view(body: ImportRequest, brain: BrainDep) -> Proposal:
+    return brain.import_view(body.name, body.text, body.url)
+
+
+@router.post("/share")
+def share_view(body: ShareRequest, brain: BrainDep) -> dict[str, str]:
+    return {"path": brain.share_view(body.view_id)}
 
 
 @router.get("/content/wanted")

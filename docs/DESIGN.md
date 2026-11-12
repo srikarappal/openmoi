@@ -439,6 +439,8 @@ The chat panel takes slash commands for each kind of setting; anything without a
 | `/settings [open]` | Shows the current view's sections, memory, models and Chrome; `open` opens `~/openMoi` | No |
 | `/background on\|off` | Starts openMoi at login and keeps it reading on schedule with its window closed | No |
 | `/mirror [days]` | What each source showed you lately, what passed your rules, strangers and judgments, and how you used your views (34.6); shown once a week by itself | No |
+| `/import <https link>`, or drop a view file on the chat | A view someone shared, kept to its own sections, as a proposal you confirm (34.6) | No |
+| `/share` | Saves a copy of the view to send, without people, following lists or watched pages, in `~/openMoi/shared` | No |
 | `/help` | Lists the commands | No |
 
 A scope is enforced in the brain, not just asked of the model: files outside the scope are not even sent and edits to other sections are dropped.
@@ -596,6 +598,7 @@ Items expire after 30 days unless opened; an account no following list named for
 | `POST /ingest {source_id, records, page_url, view_id?, kind?}` | Raw records to items; with a view id, also the Mine page ranked in page order and whether its lens is stale |
 | `POST /view/{view_id} {exclude_ids}` | Ranked page with reasons, excluding what the lens already shows, plus `refreshing`, `version`, `lens_stale` and `keep_rate` (per source, the share its rules let through, which sizes read ahead) |
 | `POST /follows {list_url, records}` | Accounts from a page listing who you follow (34.4) |
+| `POST /import {name, text or url}`, `POST /share {view_id}` | A shared view as a proposal for a new view file; a copy of a view to send (34.6) |
 | `GET /content/wanted`, `POST /content {item_id, purpose, title, text, caption_url}` | Items a summarize rule wants read in full; an item's text or captions, summarized onto its card or noted in the journal (34.5) |
 | `GET /watches/due`, `POST /watches/report {url, title, text}` | Watched pages due for a look; a look's text, answered with whether it changed and any alert (34.6) |
 | `GET /mirror?days=`, `GET /mirror/weekly`, `POST /moments {view_id, kind}`, `POST /view/{view_id}/early` | The algorithm mirror, once a week; a visit or five more minutes; an edition opened early (34.6) |
@@ -814,7 +817,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 553 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 417 shell and extension unit (97% of lines), 33 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 566 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 428 shell and extension unit (97% of lines), 34 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -1362,7 +1365,7 @@ Sites tune their feeds for their own goals: time on site, ads, outrage. openMoi 
 | 9 | Watch before you watch | 40 minute video -> transcript summary plus the 6 minutes worth watching -> watch those or nothing | built (YouTube captions untested on the real site) |
 | 10 | Your reading as memory | every article you open -> 3 line note in the journal -> "what was that lithium piece?" answered from what you actually read | built |
 | 11 | Updates, not repeats | new item on a story you followed -> "what changed since you read it Oct 3" -> retellings hidden | built |
-| 12 | Share a filter, not a feed | a friend's "AI news without hype" view file -> runs on your own sources and session -> experts publish judgment instead of content | views as .md built; import not built |
+| 12 | Share a filter, not a feed | a friend's "AI news without hype" view file -> runs on your own sources and session -> experts publish judgment instead of content | built |
 
 ## 34. Gaps
 
@@ -1434,7 +1437,7 @@ item kept by the rules -> its page opened by the reader driver within the page l
 | Completeness `[built]` | `caught_up` means openMoi has nothing more stored, not that the platform has nothing new | A `Page:` source marked `(newest first)` (X Following, Instagram Following) reads from the top until it reaches two posts in a row read before (one pinned post does not count), here or in an earlier run as the brain remembers; then, once you are caught up, "Nothing missed: everything new on <page> since <time> is in this view". A ranked feed never claims it | 2 |
 | Page watch `[built]` | Every source is a listing of items | `Watch: <url>` in Sources: the reader reads the page's main text at the source's pace, compares it with the last read and raises a notice when it changed in a way the view's Rules care about. As built: the first look is the baseline; spacing and relative times ("3 minutes ago") are not changes; a change is one item per page ("Visa slots changed", what was added and removed) that replaces the last; the alert waits for each watching view's rules (tagging the change at once when they test topics or judgments), shows as a notice with Show, and as a system notification while you are elsewhere. A refresh looks at once; a page that keeps failing is tried at most every 10 minutes | 7 |
 | History `[built]` | Keep rate is computed per render and never stored | As built, no new table for items: items live 30 days with their first read time, so the mirror is computed from them by today's rules (listed, kept by some view, seen, opened, from strangers, judged yes). A small `moments` table counts visits, five more minutes and early openings. `/mirror [days]` shows it in chat and it comes by itself once a week (the first launch starts the week; a week with nothing to show stays quiet) | 6 |
-| Import | A shared view file has no way in | Drop a view file in chat -> untrusted text -> a proposal you confirm like any edit -> its lens regenerated from Layout, never copied; people and personal rules stripped (L7 guardrails) | 12 |
+| Import `[built]` | A shared view file has no way in | Drop a view file in chat -> untrusted text -> a proposal you confirm like any edit -> its lens regenerated from Layout, never copied; people and personal rules stripped (L7 guardrails). As built: drop a .md file on the chat or `/import <https link>`; only Sources, Rules, Layout and Time are kept (comments and other sections are dropped); the proposal names the sources it would read in your own sessions; a name already taken gets a number. `/share` writes the copy you send, leaving out rule lines naming people, following lists and watched pages | 12 |
 
 ### 34.7 Reading risk
 

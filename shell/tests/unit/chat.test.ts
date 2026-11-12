@@ -33,6 +33,7 @@ function make_chat(brain: Partial<BrainClient>) {
     model_changed: vi.fn(),
     open_folder: vi.fn(),
     set_background: vi.fn((on: boolean) => (on ? "on now" : "off now")),
+    show_file: vi.fn(),
     track,
     changed: vi.fn(),
   }
@@ -287,5 +288,42 @@ describe("ChatController mirror", () => {
     await chat.send("/mirror 3")
     expect(mirror).toHaveBeenCalledWith(3)
     expect(last_reply(chat)).toBe("Nothing was read in the last 3 days.")
+  })
+})
+
+describe("ChatController sharing", () => {
+  const PROPOSAL = { proposal_id: "p9", view_id: "ai", changes: [{ file: "views/ai.md", diff: "+# AI" }], lens_action: null, reply: "AI news as a new view, ai. Its look is made fresh from its Layout." }
+
+  it("imports a view from a link as a proposal you confirm, then applies it", async () => {
+    const import_view = vi.fn(async () => PROPOSAL)
+    const apply_edit = vi.fn(async () => PROPOSAL)
+    const { chat, hooks, labels } = make_chat({ import_view, apply_edit } as unknown as Partial<BrainClient>)
+    await chat.send("/import https://gist.example/ai.md")
+    expect(import_view).toHaveBeenCalledWith("", null, "https://gist.example/ai.md")
+    expect(labels).toContain("Reading the shared view")
+    const entry = chat.list().at(-1)
+    expect([entry?.text, entry?.status, entry?.proposal?.proposal_id]).toEqual([`Add ${PROPOSAL.reply}`, "pending", "p9"])
+    await chat.apply("p9")
+    expect(hooks.on_applied).toHaveBeenCalledWith(PROPOSAL)
+  })
+
+  it("imports a dropped file and says why one is refused", async () => {
+    const import_view = vi.fn(async () => PROPOSAL)
+    const { chat } = make_chat({ import_view } as unknown as Partial<BrainClient>)
+    await chat.import_file("ai.md", "# AI")
+    expect(import_view).toHaveBeenCalledWith("ai.md", "# AI", null)
+    expect(chat.list().map((entry) => entry.text)).toEqual(["Import ai.md", `Add ${PROPOSAL.reply}`])
+    import_view.mockRejectedValueOnce(new Error("That is not an openMoi view: it has no Sources or Rules section."))
+    await chat.import_file("notes.md", "milk")
+    expect(last_reply(chat)).toBe("That is not an openMoi view: it has no Sources or Rules section.")
+  })
+
+  it("saves a copy of this view to send and shows it", async () => {
+    const share_view = vi.fn(async () => ({ path: "/Users/me/openMoi/shared/feed.md" }))
+    const { chat, hooks } = make_chat({ share_view } as unknown as Partial<BrainClient>)
+    await chat.send("/share")
+    expect(share_view).toHaveBeenCalledWith("feed")
+    expect(hooks.show_file).toHaveBeenCalledWith("/Users/me/openMoi/shared/feed.md")
+    expect(last_reply(chat)).toBe("Saved a copy of feed to send: /Users/me/openMoi/shared/feed.md. People, following lists and watched pages are left out.")
   })
 })

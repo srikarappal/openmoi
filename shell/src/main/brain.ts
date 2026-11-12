@@ -122,6 +122,14 @@ export class BrainClient {
     return this.request("POST", "/follows", { list_url, records })
   }
 
+  import_view(name: string, text: string | null, url: string | null): Promise<Proposal> {
+    return this.request("POST", "/import", { name, text, url })
+  }
+
+  share_view(view_id: string): Promise<{ path: string }> {
+    return this.request("POST", "/share", { view_id })
+  }
+
   content_wanted(): Promise<ContentWanted[]> {
     return this.request("GET", "/content/wanted")
   }

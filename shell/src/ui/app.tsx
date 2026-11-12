@@ -1,5 +1,5 @@
 // The chrome UI: view and web tabs, the address bar and the side panel.
-import { useEffect, useRef, useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type DragEvent, type FormEvent } from "react"
 import { createRoot } from "react-dom/client"
 import { matching_commands } from "../shared/commands"
 import type { Activity, ChatEntry, GateChoice, ShellCommand, ShellState, StopScreen } from "../shared/types"
@@ -143,8 +143,17 @@ function CommandHints({ text, pick }: { text: string; pick: (name: string) => vo
 }
 
 // New replies, proposals and "new look is live" land at the bottom, so the chat follows them there.
+const MAX_DROP_BYTES = 200_000
+
+// A view file dropped on the chat: a .md or .txt file small enough to be one; anything else is left alone.
+function dropped_view(event: DragEvent): File | null {
+  const file = event.dataTransfer.files[0]
+  return file && file.size <= MAX_DROP_BYTES && /\.(md|txt)$/i.test(file.name) ? file : null
+}
+
 function Chat({ state }: { state: ShellState }) {
   const [text, set_text] = useState("")
+  const [dragging, set_dragging] = useState(false)
   const messages = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (messages.current) messages.current.scrollTop = messages.current.scrollHeight
@@ -155,8 +164,19 @@ function Chat({ state }: { state: ShellState }) {
     send({ type: "chat_send", text: text.trim() })
     set_text("")
   }
+  const drag_over = (event: DragEvent) => {
+    event.preventDefault()
+    set_dragging(true)
+  }
+  const drop = (event: DragEvent) => {
+    event.preventDefault()
+    set_dragging(false)
+    const file = dropped_view(event)
+    if (file) file.text().then((content) => send({ type: "import_view", name: file.name, text: content }))
+  }
   return (
-    <section className="chat">
+    <section className={dragging ? "chat dragging" : "chat"} onDragOver={drag_over} onDragLeave={() => set_dragging(false)} onDrop={drop}>
+      {dragging && <div className="drop_hint">Drop a view file to add it</div>}
       <div className="messages" ref={messages}>
         {state.chat.map((entry) => (
           <ChatMessage key={entry.entry_id} entry={entry} />

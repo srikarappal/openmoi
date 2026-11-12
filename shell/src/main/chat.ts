@@ -15,6 +15,7 @@ export interface ChatHooks {
   open_folder(path: string): void
   // Turns reading in the background on or off; the reply says what that means.
   set_background(on: boolean): string
+  show_file(path: string): void
   track: Track
   changed(): void
 }
@@ -107,6 +108,14 @@ export class ChatController {
       case "mirror":
         this.say(format_mirror(await this.brain.mirror(command.days)))
         return
+      case "import":
+        return this.offer_import(await this.hooks.track("Reading the shared view", () => this.brain.import_view("", null, command.url)))
+      case "share": {
+        const { path } = await this.brain.share_view(view_id)
+        this.hooks.show_file(path)
+        this.say(`Saved a copy of ${view_id} to send: ${path}. People, following lists and watched pages are left out.`)
+        return
+      }
       case "help":
         this.say(help_text())
         return
@@ -127,6 +136,16 @@ export class ChatController {
   }
 
   // A bare name makes an empty view right away; with a description the model drafts the file for you to confirm.
+  // A view file you dropped here: it becomes a proposal for a new view, like any edit you confirm.
+  async import_file(name: string, text: string): Promise<void> {
+    this.add({ role: "you", text: `Import ${name}` })
+    await this.working(async () => this.offer_import(await this.brain.import_view(name, text, null)))
+  }
+
+  private offer_import(proposal: Proposal): void {
+    this.add({ role: "moi", text: `Add ${proposal.reply}`, proposal, status: "pending" })
+  }
+
   private async new_view(view_id: string, title: string, description: string): Promise<void> {
     if (description) {
       await this.propose({ view_id, text: description, scope: "view" })

@@ -651,3 +651,12 @@ describe("Shell watch alerts", () => {
     expect(check).toHaveBeenCalledWith(WATCHED, false)
   })
 })
+
+describe("Shell imports", () => {
+  it("hands a dropped view file to the chat, with a sane name", async () => {
+    const { shell, window } = await started()
+    const imported = vi.spyOn(shell.chat, "import_file").mockResolvedValue()
+    await command(window, { type: "import_view", name: "x".repeat(300), text: "# AI" })
+    expect(imported).toHaveBeenCalledWith("x".repeat(200), "# AI")
+  })
+})

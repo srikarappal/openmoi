@@ -36,6 +36,7 @@ from moi_brain.rank import PAGE_SIZE, Circles, Order, applies, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
+from moi_brain.sharing import MAX_IMPORT, clean_import, session_reads, share_text, view_name
 from moi_brain.stories import CLUSTER_WINDOW, Updater, assign_clusters, story_key
 from moi_brain.watch import change_item, changed_lines, watch_lines
 
@@ -696,6 +697,45 @@ class Brain:
     def propose_edit(self, view_id: str, request: str, item_id: str | None, scope: EditScope = "any") -> Proposal:
         item = self.store.get_item(item_id) if item_id else None
         return self.editor.propose(check_view_id(view_id), request, item, self.memory.journal_lines(self.clock()), scope)
+
+    def import_view(self, name: str, text: str | None, url: str | None) -> Proposal:
+        """A view someone shared, from a dropped file or a link: cleaned to a view's own sections and proposed as a new
+        view file you confirm. The proposal says which sources it would read in your session."""
+        if url:
+            text = self.fetch_shared(url)
+        cleaned = clean_import(text or "")
+        if cleaned is None:
+            raise BadInput("That is not an openMoi view: it has no Sources or Rules section.")
+        title, view_text = cleaned
+        base = view_name(name or title)
+        view_id = next(candidate for candidate in (base, *(f"{base}_{number}" for number in range(2, 100))) if not (self.paths.views / f"{candidate}.md").exists())
+        reads = session_reads(view_text)
+        reply = f"{title} as a new view, {view_id}. Its look is made fresh from its Layout."
+        if reads:
+            reply += f" It reads these in your own sessions: {'; '.join(reads)}."
+        return self.editor.propose_file(view_id, view_text, reply)
+
+    def fetch_shared(self, url: str) -> str:
+        if not url.startswith("https://"):
+            raise BadInput("A shared view link must start with https://.")
+        try:
+            response = self.http.get(url)
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise BadInput(f"Could not fetch {url}: {error}") from error
+        if not response.headers.get("content-type", "text/plain").startswith(("text/", "application/octet-stream")):
+            raise BadInput("That link is not a text file.")
+        return response.text[:MAX_IMPORT]
+
+    def share_view(self, view_id: str) -> str:
+        """A copy of a view to send to someone, in ~/openMoi/shared, without people, following lists or watched pages."""
+        text = self.compiler.view_text(check_view_id(view_id))
+        if not text:
+            raise BadInput(f"There is no views/{view_id}.md to share.")
+        target = self.paths.home / "shared" / f"{view_id}.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write_atomic(target, share_text(text))
+        return str(target)
 
     def create_view(self, view_id: str, title: str | None) -> ViewInfo:
         """A new empty view file, which becomes a new tab."""

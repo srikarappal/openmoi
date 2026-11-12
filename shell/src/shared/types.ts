@@ -377,4 +377,5 @@ export type ShellCommand =
   | { type: "choose_view"; view_id: string }
   | { type: "extend_visit" }
   | { type: "open_early"; view_id: string }
+  | { type: "import_view"; name: string; text: string }
   | { type: "end_visit" }

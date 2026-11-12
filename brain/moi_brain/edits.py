@@ -150,6 +150,17 @@ class Editor:
                 self.proposals.popitem(last=False)
         return proposal
 
+    def propose_file(self, view_id: str, text: str, reply: str) -> Proposal:
+        """A whole new view file to confirm, made without the model (an imported view)."""
+        file = f"views/{view_id}.md"
+        change = Change(file=file, old_text="", new_text=text, diff=unified_diff(file, "", text))
+        proposal = Proposal(proposal_id=uuid.uuid4().hex, view_id=view_id, changes=[change], reply=reply)
+        with self.lock:
+            self.proposals[proposal.proposal_id] = proposal
+            while len(self.proposals) > MAX_PROPOSALS:
+                self.proposals.popitem(last=False)
+        return proposal
+
     def change_for(self, view_id: str, edit: FileEdit, files: dict[str, str], scope: EditScope = "any") -> Change | None:
         """The concrete change for one model edit, or None if it targets something its scope does not allow."""
         file = edit.file.strip().removeprefix("./")

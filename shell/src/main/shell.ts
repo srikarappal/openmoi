@@ -126,6 +126,7 @@ export class Shell implements ViewHost {
         desktop.openPath(folder).catch(ignore)
       },
       set_background: (on) => this.set_background(on),
+      show_file: (file) => desktop.showItemInFolder(file),
       changed: () => this.push_state(),
     })
     this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload), {
@@ -556,6 +557,9 @@ export class Shell implements ViewHost {
         this.activate({ kind: "view", view_id: stop.view_id })
         return
       }
+      case "import_view":
+        await this.chat.import_file(command.name.slice(0, 200), command.text)
+        return
       case "open_early":
         await this.brain.open_early(command.view_id)
         this.retract(`edition:${command.view_id}`)

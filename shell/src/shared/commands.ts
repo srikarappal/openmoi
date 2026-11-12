@@ -19,6 +19,8 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/settings", usage: "/settings [open]", summary: "show this view's settings, memory and models; open the folder" },
   { name: "/background", usage: "/background on|off", summary: "keep reading on schedule with the window closed, and start at login" },
   { name: "/mirror", usage: "/mirror [days]", summary: "what each source showed you and how much passed your rules" },
+  { name: "/import", usage: "/import <https link to a view file>", summary: "add a view someone shared; or drop its .md file here" },
+  { name: "/share", usage: "/share", summary: "save a copy of this view to send, without your people" },
   { name: "/help", usage: "/help", summary: "list the commands" },
 ]
 
@@ -34,6 +36,8 @@ export type ChatCommand =
   | { kind: "settings"; open: boolean }
   | { kind: "background"; on: boolean }
   | { kind: "mirror"; days: number }
+  | { kind: "import"; url: string }
+  | { kind: "share" }
   | { kind: "help" }
   | { kind: "error"; message: string }
 
@@ -76,6 +80,8 @@ export function parse_chat(input: string): ChatCommand {
     const days = words[0] === undefined ? 7 : Number(words[0])
     return Number.isInteger(days) && days >= 1 && days <= 30 && words.length <= 1 ? { kind: "mirror", days } : usage_error(command)
   }
+  if (command === "/import") return words.length === 1 && words[0].startsWith("https://") ? { kind: "import", url: words[0] } : usage_error(command)
+  if (command === "/share") return words.length ? usage_error(command) : { kind: "share" }
   if (command === "/help") return { kind: "help" }
   return { kind: "error", message: `Unknown command ${name}. Type /help for the list.` }
 }
