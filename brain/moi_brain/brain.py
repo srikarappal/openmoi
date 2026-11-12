@@ -1,5 +1,6 @@
 """The Brain composes storage, sources, compilation, ranking and lenses behind one object."""
 
+import json
 import queue
 import sys
 import threading
@@ -19,6 +20,7 @@ from moi_brain.editions import LEAD, LOCAL_LEAD, Edition, EditionBook
 from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
+from moi_brain.files import read_json, write_atomic
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
 from moi_brain.items import HANDLE, Event, Item, ViewItem, normalize, page_source_id, profile_handle, rss_source_id, youtube_source_id
 from moi_brain.lens_gen import generate_lens
@@ -26,6 +28,7 @@ from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway
 from moi_brain.md import parse_sections, section_text
 from moi_brain.memory import TOPIC_FILES, Memory
+from moi_brain.mirror import MAX_DAYS, Mirror, build_mirror
 from moi_brain.rank import PAGE_SIZE, Circles, Order, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
@@ -40,6 +43,8 @@ SEEN_KEEP = timedelta(hours=12)
 # A following list is read again after this long; who you follow changes slowly.
 FOLLOWS_EVERY = timedelta(days=7)
 NOBODY_KNOWN = "Rules about people you know have no one to go on yet: add a Following source, or people to memory/people.md."
+MIRROR_EVERY = timedelta(days=7)
+MomentKind = Literal["visit", "extended", "early"]
 X_DOMAIN = "x.com"
 HTTP_TIMEOUT = 15.0
 
@@ -481,6 +486,39 @@ class Brain:
                 )
             )
         return found
+
+    def open_early(self, view_id: str) -> None:
+        """Show what arrived since the edition on show came out, now; it counts in the mirror as an early opening."""
+        compiled = self.compiler.compiled(check_view_id(view_id))
+        now = self.clock()
+        edition = self.editions.current(view_id, compiled.time, now) if compiled.time.editions else None
+        if edition is None:
+            raise BadInput(f"{view_id} does not come out in editions")
+        self.editions.open_early(view_id, edition.at, now)
+        self.store.add_moment(view_id, "early", now)
+
+    def add_moment(self, view_id: str, kind: MomentKind) -> None:
+        self.store.add_moment(check_view_id(view_id), kind, self.clock())
+
+    def mirror(self, days: int = 7) -> Mirror:
+        now = self.clock()
+        days = min(max(days, 1), MAX_DAYS)
+        since = now - timedelta(days=days)
+        views = self.compiler.all_compiled(use_model=False)
+        return build_mirror(days, now, self.store.fetched_since(since), self.store.opened_since(since), views, self.watch_judgments(), self.circles(), self.store.moment_counts(since))
+
+    def weekly_mirror(self) -> Mirror | None:
+        """The last week's mirror, once a week: None until a week passed since it was last shown."""
+        state = read_json(self.paths.mirror_state, {})
+        shown = state.get("shown_at") if isinstance(state, dict) else None
+        now = self.clock()
+        try:
+            if isinstance(shown, str) and now - datetime.fromisoformat(shown) < MIRROR_EVERY:
+                return None
+        except ValueError:
+            pass
+        write_atomic(self.paths.mirror_state, json.dumps({"shown_at": now.isoformat()}))
+        return self.mirror(7)
 
     def schedule_done(self, view_id: str, edition: datetime) -> None:
         """The read for this edition finished; one that finished after the edition came out moves it to now."""

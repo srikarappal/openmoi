@@ -1,6 +1,6 @@
 // Chat commands: "/memory", "/feed", "/sources", "/layout", "/settings", "/newview", "/model", "/help".
 // Anything without a slash stays free form and openMoi works out from context what to change.
-import type { EditScope, ModelChange, ModelInfo, Overview, SlotInfo } from "./types"
+import type { EditScope, Mirror, ModelChange, ModelInfo, Overview, SlotInfo, SourceMirror, ViewMirror } from "./types"
 
 export interface CommandHelp {
   name: string
@@ -18,6 +18,7 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/model", usage: "/model [fast|smart|both] [ollama|openrouter] <model>  or  /model privacy on|off", summary: "show or change models and the privacy switch" },
   { name: "/settings", usage: "/settings [open]", summary: "show this view's settings, memory and models; open the folder" },
   { name: "/background", usage: "/background on|off", summary: "keep reading on schedule with the window closed, and start at login" },
+  { name: "/mirror", usage: "/mirror [days]", summary: "what each source showed you and how much passed your rules" },
   { name: "/help", usage: "/help", summary: "list the commands" },
 ]
 
@@ -32,6 +33,7 @@ export type ChatCommand =
   | { kind: "model"; change: ModelChange | null }
   | { kind: "settings"; open: boolean }
   | { kind: "background"; on: boolean }
+  | { kind: "mirror"; days: number }
   | { kind: "help" }
   | { kind: "error"; message: string }
 
@@ -70,6 +72,10 @@ export function parse_chat(input: string): ChatCommand {
   if (command === "/model") return parse_model(words)
   if (command === "/settings") return words[0] && words[0] !== "open" ? usage_error(command) : { kind: "settings", open: words[0] === "open" }
   if (command === "/background") return words[0] === "on" || words[0] === "off" ? { kind: "background", on: words[0] === "on" } : usage_error(command)
+  if (command === "/mirror") {
+    const days = words[0] === undefined ? 7 : Number(words[0])
+    return Number.isInteger(days) && days >= 1 && days <= 30 && words.length <= 1 ? { kind: "mirror", days } : usage_error(command)
+  }
   if (command === "/help") return { kind: "help" }
   return { kind: "error", message: `Unknown command ${name}. Type /help for the list.` }
 }
@@ -114,4 +120,36 @@ export function format_overview(overview: Overview): string {
     `Chrome: ${overview.relay.connected ? "connected" : "not connected"}`,
     `Files: ${overview.home} (type /settings open to open the folder)`,
   ].join("\n")
+}
+
+function share(part: number, whole: number): string {
+  return `${Math.round((part / whole) * 100)}%`
+}
+
+function times(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
+function source_line(source: SourceMirror): string {
+  const parts = [`${times(source.listed, "item")}`, `${share(source.kept, source.listed)} passed your rules`]
+  if (source.strangers !== null) parts.push(`${share(source.strangers, source.listed)} from strangers`)
+  for (const [name, count] of Object.entries(source.judged)) if (count) parts.push(`${share(count, source.listed)} judged ${name.replaceAll("_", " ")}`)
+  return `* ${source.source_id}: ${parts.join(", ")}. You saw ${source.seen} and opened ${source.opened}.`
+}
+
+function view_line(view: ViewMirror): string {
+  const parts = []
+  if (view.visits) parts.push(times(view.visits, "visit"))
+  if (view.extended) parts.push(`${times(view.extended, "time")} 5 more minutes`)
+  if (view.early) parts.push(`opened early ${times(view.early, "time")}`)
+  return `* ${view.view_id}: ${parts.join(", ")}.`
+}
+
+// The mirror as chat text: per source what it showed and what passed, then how you used your views.
+export function format_mirror(mirror: Mirror): string {
+  const period = mirror.days === 1 ? "the last day" : `the last ${mirror.days} days`
+  if (!mirror.sources.length && !mirror.views.length) return `Nothing was read in ${period}.`
+  const lines = [`What your sources showed you in ${period}:`, ...mirror.sources.map(source_line)]
+  if (mirror.views.length) lines.push("How you used your views:", ...mirror.views.map(view_line))
+  return lines.join("\n")
 }

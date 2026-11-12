@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import Brain, MineRequest, Overview, PageSource, ViewPage, ViewSchedule
+from moi_brain.brain import Brain, MineRequest, MomentKind, Overview, PageSource, ViewPage, ViewSchedule
+from moi_brain.mirror import Mirror
 from moi_brain.compile import BadInput, ViewInfo
 from moi_brain.config import ModelChange, ModelInfo
 from moi_brain.edits import EditScope, Proposal, StaleProposal
@@ -134,6 +135,11 @@ class ProposalRequest(BaseModel):
     proposal_id: str
 
 
+class MomentRequest(BaseModel):
+    view_id: str
+    kind: MomentKind
+
+
 class ScheduleDoneRequest(BaseModel):
     view_id: str
     edition: datetime
@@ -192,6 +198,28 @@ def follows(body: FollowsRequest, brain: BrainDep) -> dict[str, int]:
 @router.post("/view/{view_id}")
 def view_page(view_id: str, body: ViewRequest, brain: BrainDep) -> ViewPage:
     return brain.view_page(view_id, body.exclude_ids, body.limit)
+
+
+@router.post("/view/{view_id}/early")
+def open_early(view_id: str, brain: BrainDep) -> dict[str, str]:
+    brain.open_early(view_id)
+    return {"status": "open"}
+
+
+@router.post("/moments")
+def moments(body: MomentRequest, brain: BrainDep) -> dict[str, str]:
+    brain.add_moment(body.view_id, body.kind)
+    return {"status": "recorded"}
+
+
+@router.get("/mirror")
+def mirror(brain: BrainDep, days: int = 7) -> Mirror:
+    return brain.mirror(days)
+
+
+@router.get("/mirror/weekly")
+def weekly_mirror(brain: BrainDep) -> Mirror | None:
+    return brain.weekly_mirror()
 
 
 @router.get("/schedule")

@@ -1,6 +1,6 @@
 // The chat panel: slash commands for each kind of setting, free form for everything else.
 // Every change to your .md files is a proposed edit you confirm or discard; /model, /settings and /help answer directly.
-import { format_model, format_overview, help_text, parse_chat, type ChatCommand } from "../shared/commands"
+import { format_mirror, format_model, format_overview, help_text, parse_chat, type ChatCommand } from "../shared/commands"
 import type { ChatEntry, EditScope, Proposal } from "../shared/types"
 import type { Track } from "./activity"
 import { BrainError, type BrainClient } from "./brain"
@@ -103,6 +103,9 @@ export class ChatController {
       }
       case "background":
         this.say(this.hooks.set_background(command.on))
+        return
+      case "mirror":
+        this.say(format_mirror(await this.brain.mirror(command.days)))
         return
       case "help":
         this.say(help_text())

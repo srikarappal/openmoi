@@ -69,17 +69,37 @@ class EditionBook:
 
     def done(self, view_id: str, edition_at: datetime, now: datetime) -> None:
         with self.lock:
-            self.reads[view_id] = {"edition": edition_at.astimezone().isoformat(), "done_at": now.isoformat()}
+            entry = self.reads.get(view_id)
+            early = {key: value for key, value in entry.items() if key.startswith("early")} if isinstance(entry, dict) else {}
+            self.reads[view_id] = {"edition": edition_at.astimezone().isoformat(), "done_at": now.isoformat(), **early}
+            snapshot = dict(self.reads)
+        write_atomic(self.path, json.dumps(snapshot, indent=2))
+
+    def opened_early_at(self, view_id: str, edition_at: datetime) -> datetime | None:
+        with self.lock:
+            entry = self.reads.get(view_id)
+        early = entry.get("early") if isinstance(entry, dict) and entry.get("early_for") == edition_at.isoformat() else None
+        try:
+            return datetime.fromisoformat(early) if isinstance(early, str) else None
+        except ValueError:
+            return None
+
+    def open_early(self, view_id: str, edition_at: datetime, now: datetime) -> None:
+        """You chose to see what arrived since this edition came out, without waiting for the next one."""
+        with self.lock:
+            entry = self.reads.get(view_id)
+            entry = dict(entry) if isinstance(entry, dict) else {}
+            self.reads[view_id] = {**entry, "early_for": edition_at.astimezone().isoformat(), "early": now.isoformat()}
             snapshot = dict(self.reads)
         write_atomic(self.path, json.dumps(snapshot, indent=2))
 
     def current(self, view_id: str, spec: TimeSpec, now: datetime) -> Edition | None:
-        """The edition on show now; one read late includes everything that read found."""
+        """The edition on show now; one read late includes everything that read found, one you opened early what came since."""
         at, upcoming = latest_edition(spec, now), next_edition(spec, now)
         if at is None or upcoming is None:
             return None
-        done_at = self.read_done_at(view_id, at)
-        return Edition(at=at, cutoff=max(at, done_at) if done_at else at, next_at=upcoming)
+        cutoff = max([at, *(moment for moment in (self.read_done_at(view_id, at), self.opened_early_at(view_id, at)) if moment)])
+        return Edition(at=at, cutoff=cutoff, next_at=upcoming)
 
     def due(self, view_id: str, spec: TimeSpec, now: datetime, lead: timedelta) -> datetime | None:
         """The edition whose read should run now: the next one once its lead time began, else a recent one never read."""

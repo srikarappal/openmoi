@@ -431,3 +431,14 @@ describe("ViewController following lists", () => {
     expect(fills(sources)).toEqual([["page:x.com/me/following", 2000, false, true]])
   })
 })
+
+describe("ViewController open anyway", () => {
+  it("offers to open an edition early once you have read it all", async () => {
+    const EDITION = { ...PAGE, edition: "2026-11-10T07:00:00Z", next_edition: "2026-11-10T18:00:00Z", caught_up: true } as ViewPage
+    const { views, context, hooks } = make_views([], [EDITION, EDITION])
+    await views.refresh(context, false)
+    const [, , tag, action] = hooks.notify.mock.calls.find((call) => call[2] === "edition:feed") ?? []
+    expect(tag).toBe("edition:feed")
+    expect(action).toEqual({ label: "Open anyway", command: { type: "open_early", view_id: "feed" } })
+  })
+})

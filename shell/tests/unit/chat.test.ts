@@ -279,3 +279,13 @@ describe("ChatController background", () => {
     expect(last_reply(chat)).toBe("off now")
   })
 })
+
+describe("ChatController mirror", () => {
+  it("shows the mirror for the days asked", async () => {
+    const mirror = vi.fn(async () => ({ days: 3, since: "2026-11-07T09:00:00Z", sources: [], views: [] }))
+    const { chat } = make_chat({ mirror } as unknown as Partial<BrainClient>)
+    await chat.send("/mirror 3")
+    expect(mirror).toHaveBeenCalledWith(3)
+    expect(last_reply(chat)).toBe("Nothing was read in the last 3 days.")
+  })
+})

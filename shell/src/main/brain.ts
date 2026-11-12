@@ -20,6 +20,8 @@ import type {
   ViewInfo,
   ViewPage,
   ViewSchedule,
+  Mirror,
+  MomentKind,
 } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
@@ -114,6 +116,22 @@ export class BrainClient {
 
   follows(list_url: string, records: RawRecord[]): Promise<{ stored: number }> {
     return this.request("POST", "/follows", { list_url, records })
+  }
+
+  open_early(view_id: string): Promise<{ status: string }> {
+    return this.request("POST", `/view/${encodeURIComponent(view_id)}/early`)
+  }
+
+  moment(view_id: string, kind: MomentKind): Promise<{ status: string }> {
+    return this.request("POST", "/moments", { view_id, kind })
+  }
+
+  mirror(days: number): Promise<Mirror> {
+    return this.request("GET", `/mirror?days=${days}`)
+  }
+
+  weekly_mirror(): Promise<Mirror | null> {
+    return this.request("GET", "/mirror/weekly")
   }
 
   schedule(): Promise<ViewSchedule[]> {

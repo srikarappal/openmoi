@@ -59,6 +59,14 @@ test("an edition shows only what was read by it, while its next read runs in the
     const debug = await (await fetch(`${harness.brain_url}/debug`, { headers: { "x-moi-token": TOKEN } })).json()
     expect(debug.store.items["page:127.0.0.1/pages/endless.html"]).toBeGreaterThanOrEqual(30)
     expect(debug.store.items["rss:tech"]).toBeGreaterThan(0)
+    await harness.chrome.locator(".notice", { hasText: "That is all of the" }).getByRole("button", { name: "Open anyway" }).click()
+    await eventually(
+      () => harness.lens_text(),
+      (text) => text.includes("New laptop chip"),
+    )
+    await harness.chat("/mirror")
+    await expect(harness.chrome.locator(".message.moi").last()).toContainText("rss:tech")
+    await expect(harness.chrome.locator(".message.moi").last()).toContainText("opened early 1 time")
   } finally {
     await harness.close()
   }

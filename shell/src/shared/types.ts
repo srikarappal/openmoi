@@ -100,6 +100,33 @@ export interface ViewSchedule {
   visit_minutes: number | null
 }
 
+// What a source showed you lately and what passed your rules, from the brain's mirror.
+export interface SourceMirror {
+  source_id: string
+  listed: number
+  kept: number
+  seen: number
+  opened: number
+  strangers: number | null
+  judged: Record<string, number>
+}
+
+export interface ViewMirror {
+  view_id: string
+  visits: number
+  extended: number
+  early: number
+}
+
+export interface Mirror {
+  days: number
+  since: string
+  sources: SourceMirror[]
+  views: ViewMirror[]
+}
+
+export type MomentKind = "visit" | "extended" | "early"
+
 // One answer to "why are you here?": a view, how long a visit lasts and when its next edition comes out.
 export interface GateChoice {
   view_id: string
@@ -308,4 +335,5 @@ export type ShellCommand =
   | { type: "relay_trust"; extension_id: string }
   | { type: "choose_view"; view_id: string }
   | { type: "extend_visit" }
+  | { type: "open_early"; view_id: string }
   | { type: "end_visit" }

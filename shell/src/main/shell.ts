@@ -11,6 +11,7 @@ import type {
   LensKind,
   LensToHost,
   MineRequestEvent,
+  MomentKind,
   Notice,
   Proposal,
   RelayInfo,
@@ -21,6 +22,7 @@ import type {
   ViewSchedule,
 } from "../shared/types"
 import type { BrainClient } from "./brain"
+import { format_mirror } from "../shared/commands"
 import { ChatController, explain } from "./chat"
 import { ElectronDriver } from "./drivers"
 import type { ViewHost } from "./host"
@@ -132,7 +134,7 @@ export class Shell implements ViewHost {
     })
     this.views = new ViewController(brain, this.lenses, this.readers, {
       open_original: (url) => this.open_original(url),
-      notify: (text, url, tag) => this.notify(text, url, undefined, tag),
+      notify: (text, url, tag, action) => this.notify(text, url, action, tag),
       retract: (tag) => this.retract(tag),
       echo: (text) => this.chat.say(text),
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
@@ -192,6 +194,10 @@ export class Shell implements ViewHost {
       this.scheduler.tick().catch(ignore)
     })
     if (!this.headless) this.make_tray()
+    this.brain
+      .weekly_mirror()
+      .then((mirror) => mirror && this.chat.say(`Your week in openMoi.\n${format_mirror(mirror)}`))
+      .catch(ignore)
     if (this.view_infos.length > 1 && this.scheduler.schedules.some((schedule) => schedule.visit_minutes)) {
       this.gate = this.choices()
       this.push_state()
@@ -241,11 +247,13 @@ export class Shell implements ViewHost {
   }
 
   // A visit starts when you open a view that has a visit length; opening another view ends it.
-  private begin_visit(view_id: string, minutes = this.schedule_of(view_id)?.visit_minutes ?? 0): void {
+  private begin_visit(view_id: string, minutes = this.schedule_of(view_id)?.visit_minutes ?? 0, kind: MomentKind = "visit"): void {
     if (this.visit?.view_id === view_id) return
     if (this.visit) clearTimeout(this.visit.timer)
     this.visit = null
-    if (minutes > 0) this.visit = { view_id, minutes, started_at: Date.now(), timer: setTimeout(() => this.visit_over(), minutes * MINUTE_MS) }
+    if (minutes <= 0) return
+    this.visit = { view_id, minutes, started_at: Date.now(), timer: setTimeout(() => this.visit_over(), minutes * MINUTE_MS) }
+    this.brain.moment(view_id, kind).catch(ignore)
   }
 
   // Time is up: if you are still in the view, it gives way to the stop screen with what you read.
@@ -527,10 +535,15 @@ export class Shell implements ViewHost {
         const stop = this.stop
         if (!stop) return
         this.stop = null
-        this.begin_visit(stop.view_id, EXTRA_MINUTES)
+        this.begin_visit(stop.view_id, EXTRA_MINUTES, "extended")
         this.activate({ kind: "view", view_id: stop.view_id })
         return
       }
+      case "open_early":
+        await this.brain.open_early(command.view_id)
+        this.retract(`edition:${command.view_id}`)
+        await this.views.after_edit(command.view_id)
+        return
       case "end_visit":
         this.stop = null
         this.gate = this.choices()

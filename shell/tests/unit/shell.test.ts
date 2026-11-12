@@ -37,6 +37,9 @@ function fake_brain(fields: Record<string, unknown> = {}) {
     ingest: vi.fn(async () => ({ items: [], view_items: [], lens_stale: false, layout_hash: "h" })),
     schedule: vi.fn(async () => []),
     schedule_done: vi.fn(async () => ({ status: "done" })),
+    weekly_mirror: vi.fn(async () => null),
+    moment: vi.fn(async () => ({ status: "recorded" })),
+    open_early: vi.fn(async () => ({ status: "open" })),
     ...fields,
   }
 }
@@ -579,5 +582,38 @@ describe("Shell in the background", () => {
     const quits = app.quits
     quit.click()
     expect(app.quits).toBe(quits + 1)
+  })
+})
+
+describe("Shell mirror and early openings", () => {
+  const MIRROR = { days: 7, since: SEVEN, sources: [{ source_id: "x", listed: 10, kept: 4, seen: 3, opened: 1, strangers: null, judged: {} }], views: [] }
+
+  it("shows the weekly mirror in the chat when one is due", async () => {
+    const { shell } = await started({ weekly_mirror: vi.fn(async () => MIRROR) })
+    await wait(5)
+    expect(state_of(shell).chat.at(-1)?.text).toBe("Your week in openMoi.\nWhat your sources showed you in the last 7 days:\n* x: 10 items, 40% passed your rules. You saw 3 and opened 1.")
+  })
+
+  it("records visits and five more minutes for the mirror", async () => {
+    const { window, brain } = await started({ schedule: vi.fn(async () => [view_schedule({ visit_minutes: 1 })]) })
+    await command(window, { type: "choose_view", view_id: "feed" })
+    await wait(60)
+    await command(window, { type: "extend_visit" })
+    expect(brain.moment.mock.calls).toEqual([
+      ["feed", "visit"],
+      ["feed", "extended"],
+    ])
+  })
+
+  it("opens an edition early from its notice and shows what came since", async () => {
+    const { shell, window, brain } = await started()
+    shell.notify("That is all of the 7:00 edition of feed.", undefined, { label: "Open anyway", command: { type: "open_early", view_id: "feed" } }, "edition:feed")
+    const notice = state_of(shell).notices.find((entry) => entry.tag === "edition:feed")
+    expect(notice?.action?.label).toBe("Open anyway")
+    const renders = brain.view_page.mock.calls.length
+    await command(window, notice?.action?.command as ShellCommand)
+    expect(brain.open_early).toHaveBeenCalledWith("feed")
+    expect(state_of(shell).notices.some((entry) => entry.tag === "edition:feed")).toBe(false)
+    expect(brain.view_page.mock.calls.length).toBeGreaterThan(renders)
   })
 })

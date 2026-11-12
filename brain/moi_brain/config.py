@@ -182,6 +182,10 @@ class Paths:
         return self.state / "editions.json"
 
     @property
+    def mirror_state(self) -> Path:
+        return self.state / "mirror.json"
+
+    @property
     def relay_trust(self) -> Path:
         return self.state / "relay_trusted.json"
 

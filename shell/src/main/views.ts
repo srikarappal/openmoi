@@ -2,7 +2,7 @@
 // Page sources read ahead of you: as you near the end of what is shown, their reader tabs scroll further, enough to
 // refill the view after your rules hide some, so the feed goes on like the site's own until a source ends.
 import { sleep } from "../shared/timing"
-import type { Item, LensToHost, PageSource, RawRecord, ViewPage } from "../shared/types"
+import type { Item, LensToHost, Notice, PageSource, RawRecord, ViewPage } from "../shared/types"
 import type { Track } from "./activity"
 import type { BrainClient } from "./brain"
 import type { DriverKind } from "./drivers"
@@ -29,7 +29,7 @@ const MAX_TITLE = 80
 
 export interface ViewHooks {
   open_original(url: string): void
-  notify(text: string, url?: string, tag?: string): void
+  notify(text: string, url?: string, tag?: string, action?: Notice["action"]): void
   retract(tag: string): void
   echo(text: string): void
   less_like_this(view_id: string, item: Item): void
@@ -157,6 +157,7 @@ export class ViewController {
       `That is all of the ${clock_time(page.edition)} edition of ${page.view_id}. The next one comes out at ${clock_time(page.next_edition)}.`,
       undefined,
       `edition:${page.view_id}`,
+      { label: "Open anyway", command: { type: "open_early", view_id: page.view_id } },
     )
   }
 

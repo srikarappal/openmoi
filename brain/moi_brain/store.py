@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS follows (
 )
 """
 FOLLOW_LISTS_TABLE = "CREATE TABLE IF NOT EXISTS follow_lists (list_url TEXT PRIMARY KEY, read_at TEXT NOT NULL)"
+# How you used a view: a visit started, five more minutes taken, an edition opened before it came out.
+MOMENTS_TABLE = """
+CREATE TABLE IF NOT EXISTS moments (
+    ts TEXT NOT NULL,
+    view_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('visit', 'extended', 'early'))
+)
+"""
 FOLLOW_TTL = timedelta(days=30)
 INDEXES = (
     "CREATE INDEX IF NOT EXISTS items_by_url ON items (url)",
@@ -72,6 +80,7 @@ class Store:
                 self.connection.execute(EVENTS_TABLE)
                 self.connection.execute(FOLLOWS_TABLE)
                 self.connection.execute(FOLLOW_LISTS_TABLE)
+                self.connection.execute(MOMENTS_TABLE)
                 for index in INDEXES:
                     self.connection.execute(index)
 
@@ -238,6 +247,29 @@ class Store:
         with self.lock:
             row = self.connection.execute("SELECT read_at FROM follow_lists WHERE list_url = ?", (list_url,)).fetchone()
         return datetime.fromisoformat(row[0]) if row else None
+
+    def add_moment(self, view_id: str, kind: str, now: datetime) -> None:
+        with self.lock, self.connection:
+            self.connection.execute("INSERT INTO moments (ts, view_id, kind) VALUES (?, ?, ?)", (iso(now), view_id, kind))
+
+    def moment_counts(self, since: datetime) -> dict[str, dict[str, int]]:
+        with self.lock:
+            rows = self.connection.execute("SELECT view_id, kind, COUNT(*) FROM moments WHERE ts >= ? GROUP BY view_id, kind", (iso(since),)).fetchall()
+        counts: dict[str, dict[str, int]] = {}
+        for view_id, kind, count in rows:
+            counts.setdefault(view_id, {})[kind] = count
+        return counts
+
+    def fetched_since(self, since: datetime) -> list[tuple[Item, datetime | None]]:
+        """Every item first read after since, with when you saw it: what the sources showed you lately."""
+        with self.lock:
+            rows = self.connection.execute("SELECT item_json, seen_at FROM items WHERE fetched_at >= ?", (iso(since),)).fetchall()
+        return [(Item.model_validate_json(item_json), datetime.fromisoformat(seen_at) if seen_at else None) for item_json, seen_at in rows]
+
+    def opened_since(self, since: datetime) -> set[str]:
+        with self.lock:
+            rows = self.connection.execute("SELECT DISTINCT item_id FROM events WHERE event_kind = 'open' AND ts >= ? AND item_id IS NOT NULL", (iso(since),)).fetchall()
+        return {row[0] for row in rows}
 
     def stats(self) -> dict[str, dict[str, int]]:
         with self.lock:
