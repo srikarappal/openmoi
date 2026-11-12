@@ -33,6 +33,7 @@ from moi_brain.rank import PAGE_SIZE, Circles, Order, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
+from moi_brain.stories import CLUSTER_WINDOW, Updater, assign_clusters, story_key
 from moi_brain.watch import change_item, changed_lines, watch_lines
 
 # A read scrolls a source page step by step at human pace; daily_steps caps how far it scrolls each source per day.
@@ -206,6 +207,7 @@ class Brain:
         self.memory = Memory(paths)
         self.compiler = Compiler(paths, self.gateway, self.memory)
         self.tagger = Tagger(self.store, self.gateway, paths.tagging_state, self.watch_list, self.watch_judgments)
+        self.updater = Updater(self.store, self.gateway)
         self.editor = Editor(paths, self.gateway)
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
@@ -359,15 +361,29 @@ class Brain:
         normalized = [normalize(source_id, record, now, page_url) for record in records]
         items = list({item.item_id: item for item in normalized if item}.values())
         known = self.store.get_items([item.item_id for item in items])
-        fresh = [item for item in items if item.item_id not in known]
+        recent = self.store.items_since(now - CLUSTER_WINDOW)
+        fresh = assign_clusters([item for item in items if item.item_id not in known], [item for item, _ in recent])
         if tag_now:
             fresh, known = self.tag_now(fresh, known)
         stored = {item.item_id: item for item in self.store.upsert_items([*known.values(), *fresh], listed_at=now)}
+        self.check_updates(list(stored.values()), recent)
         if not tag_now:
             self.tagger.enqueue(list(stored.values()))
         same_url = self.store.items_by_url(source_id, [item.url for item in fresh if item.item_id not in stored])
         found = [known.get(item.item_id) or stored.get(item.item_id) or same_url.get(item.url) for item in items]
         return [item for item in found if item]
+
+    def check_updates(self, stored: list[Item], recent: list[tuple[Item, datetime | None]]) -> None:
+        """A new copy of a story you saw goes to the update pass, compared with the copy you saw last. A copy of a link
+        you saw is seen already and needs no comparing."""
+        seen: dict[str, tuple[datetime, str]] = {}
+        seen_urls = {item.url for item, seen_at in recent if seen_at}
+        for item, seen_at in recent:
+            if seen_at and seen_at >= seen.get(story_key(item), (seen_at, ""))[0]:
+                seen[story_key(item)] = (seen_at, item.item_id)
+        pairs = [(seen[story_key(item)][1], item.item_id) for item in stored if story_key(item) in seen and item.url not in seen_urls]
+        if pairs:
+            self.updater.enqueue(pairs)
 
     def tag_now(self, fresh: list[Item], known: dict[str, Item]) -> tuple[list[Item], dict[str, Item]]:
         """Tags new items and any stored ones the background worker has not reached yet, so a page shown at once is
@@ -501,7 +517,7 @@ class Brain:
         ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles)
         with self.lock:
             reading = view_id in self.refreshing
-            refreshing = reading or self.tagger.busy
+            refreshing = reading or self.tagger.busy or self.updater.busy
         source_ids = set(compiled.source_ids())
         current = {(source_id, location) for source_id, location, _ in self.feed_readers(compiled)} | {(source_id, source_id) for source_id in source_ids}
         problems = [f"{source_id}: {status}" for source_id, status in self.status_by_source(current).items() if status != "ok"]

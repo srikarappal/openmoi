@@ -811,7 +811,7 @@ M1 bones [built] -> M2 yours [built] -> M3 mine [built] -> read ahead [built]
 
 | Check | Result |
 |---|---|
-| Tests | 521 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 403 shell and extension unit (97% of lines), 32 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
+| Tests | 532 brain (unit, property, API integration and user journeys; 100% line and branch coverage), 403 shell and extension unit (97% of lines), 32 end to end in the real app (6 with a real Chromium running the extension), all against the shared fake services |
 | Chrome relay | X read through a sign in that exists only in Chrome; originals open in Chrome; Mine from Chrome; passive reading of pages you browse; one reader tab per source that continues where it stopped |
 | One Feed from X, YouTube and RSS | All three visible 0.5 s after the window opens (target 5 s) |
 | Generated lens | Live 0.8 s after confirming the chat edit, with the fake model (target 60 s) |
@@ -1355,10 +1355,10 @@ Sites tune their feeds for their own goals: time on site, ads, outrage. openMoi 
 | 5 | Notification firewall | reader opens each site's notifications page -> replies from people you know pass, likes and "trending" drop -> one batch at noon -> every app's push turned off | `Page:` sources built; batching not built |
 | 6 | Algorithm mirror | keep rate and topics per source -> weekly "X showed you 600 posts, 7% passed your rules, a third were anger" -> X earns your time or loses its place | built |
 | 7 | Watch for me | visa slot page, school portal, a Marketplace seller -> reader checks at human pace -> one notice when it changes -> no more compulsive checking | built |
-| 8 | Hunts across sites | Zillow, Craigslist and Facebook Marketplace -> "pets ok, not ground floor, under $3k" -> one listing on 3 sites merged -> only new matches; the same for jobs, used cars and deals | `Page:` sources, rules and judgments built; merging not built |
+| 8 | Hunts across sites | Zillow, Craigslist and Facebook Marketplace -> "pets ok, not ground floor, under $3k" -> one listing on 3 sites merged -> only new matches; the same for jobs, used cars and deals | built (merging by title words) |
 | 9 | Watch before you watch | 40 minute video -> transcript summary plus the 6 minutes worth watching -> watch those or nothing | not built |
 | 10 | Your reading as memory | every article you open -> 3 line note in the journal -> "what was that lithium piece?" answered from what you actually read | journal of opens built; notes not built |
-| 11 | Updates, not repeats | new item on a story you followed -> "what changed since you read it Oct 3" -> retellings hidden | not built |
+| 11 | Updates, not repeats | new item on a story you followed -> "what changed since you read it Oct 3" -> retellings hidden | built |
 | 12 | Share a filter, not a feed | a friend's "AI news without hype" view file -> runs on your own sources and session -> experts publish judgment instead of content | views as .md built; import not built |
 
 ## 34. Gaps
@@ -1406,7 +1406,7 @@ Five building blocks and four smaller pieces cover all 12. Two of the gaps are g
 
 * **Missing:** `author_handle` belongs to one platform and duplicates merge only on an identical URL (11.2).
 * **People `[built]`:** `memory/people.md` already holds handles per source and L7's identity links fill it. "People you know" needs your following lists: each platform's Following page read weekly as a `Page:` source into a `follows (source_id, handle, seen_at)` table, machine state rather than memory. `Condition.field` gains `author_in` (`people` or `following`); a stranger is an author in neither. As built: a `Following:` source is read to its end within the daily budget; accounts are keyed by site (www., mobile. and twitter.com links count as one site); `known` means either circle; a rule about people with no one known yet warns instead of silently emptying the view. The rules compiler keeps a kind of item ("likes and trending notifications") as a judgment rather than hiding a whole source; checked with Nemotron 3.5, 3 of 3 runs.
-* **Duplicates:** L2 clusters for stories (simhash, then embeddings within 48 h); L7 `same_product` extended to listings (address, price and first image). One card per cluster with "also on".
+* **Duplicates `[built]`:** L2 clusters for stories (simhash, then embeddings within 48 h); L7 `same_product` extended to listings (address, price and first image). One card per cluster with "also on". As built, the first iteration is word overlap: a new item joins the cluster of the most similar item from another source in the last 48 hours when their title words overlap at least 60% (numbers count as words, and two titles carrying different numbers are different stories); two items of one source are never merged. Embeddings come with L2.
 
 ### 34.5 Full content (9, 10, 11)
 
@@ -1421,7 +1421,7 @@ item kept by the rules -> its page opened by the reader driver within the page l
 ```
 
 * **Journal:** opens already write the item's title to the journal (9.3), so web text already reaches a file prompts read. Make that the explicit rule: `memory/journal/` is the one place content may write, as quoted data with a link; topic files, views and rules still change only through a diff you confirm. Notes (10) append there and Chat Q&A (L4) cites them.
-* **Updates (11):** new item in a cluster you read -> pass comparing it with the summary you read -> "what changed" shown; a cluster with nothing new stays hidden.
+* **Updates (11) `[built]`:** new item in a cluster you read -> pass comparing it with the summary you read -> "what changed" shown; a cluster with nothing new stays hidden. As built, the update pass compares titles and snippets in the background (`stories.py`), the copy waits hidden until it answered, and an update shows with "update: <what changed>" first among its reasons; checked with Nemotron 3.5: a reworded copy and an opinion piece are repeats, "two more hikes likely" is an update.
 
 ### 34.6 Smaller pieces
 

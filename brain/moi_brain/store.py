@@ -200,6 +200,22 @@ class Store:
                     item = Item.model_validate_json(row[0]).model_copy(update={"topics": topics, "tagged": True})
                     self.connection.execute("UPDATE items SET item_json = ? WHERE item_id = ?", (item.model_dump_json(), item_id))
 
+    def items_since(self, since: datetime) -> list[tuple[Item, datetime | None]]:
+        """Every item from any source published (or fetched) after since, with when you saw it."""
+        with self.lock:
+            rows = self.connection.execute(
+                "SELECT item_json, seen_at FROM items WHERE COALESCE(published_at, fetched_at) >= ?", (iso(since),)
+            ).fetchall()
+        return [(Item.model_validate_json(item_json), datetime.fromisoformat(seen_at) if seen_at else None) for item_json, seen_at in rows]
+
+    def update_extra(self, item_id: str, values: dict[str, str]) -> None:
+        with self.lock, self.connection:
+            row = self.connection.execute("SELECT item_json FROM items WHERE item_id = ?", (item_id,)).fetchone()
+            if row:
+                item = Item.model_validate_json(row[0])
+                item = item.model_copy(update={"extra": {**item.extra, **values}})
+                self.connection.execute("UPDATE items SET item_json = ? WHERE item_id = ?", (item.model_dump_json(), item_id))
+
     def update_tags(self, tagged: list[Item]) -> None:
         """Save tagging results: topics plus the judged answers, kept next to whatever else the item holds."""
         with self.lock, self.connection:

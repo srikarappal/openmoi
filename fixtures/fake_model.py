@@ -231,7 +231,15 @@ def extractor(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps(next((spec for marker, spec in SPECS_BY_MARKER.items() if marker in skeleton), NOTHING_SPEC))
 
 
-HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "extractor": extractor}
+def update(payload: dict[str, Any], base_url: str) -> str:
+    """A new copy is an update when it says so ("update", "confirmed", "now"); anything else is a retelling."""
+    new = request_of(payload)["new"]
+    words = f"{new['title']} {new['text']}".lower()
+    changed = any(word in words for word in ("update", "confirmed", " now "))
+    return json.dumps({"update": changed, "what_changed": new["title"] if changed else ""})
+
+
+HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "extractor": extractor, "update": update}
 
 
 def model_reply(task: str, payload: dict[str, Any], base_url: str) -> str:

@@ -7,6 +7,7 @@ from typing import Literal
 
 from moi_brain.compile import Condition, Rule
 from moi_brain.items import JUDGED_PREFIX, Item, ViewItem, site_host, source_matches
+from moi_brain.stories import UPDATE_KEY, story_key
 
 PAGE_SIZE = 30
 HALF_LIFE_HOURS = 24.0
@@ -127,6 +128,12 @@ def reasons(item: Item, boosts: list[Rule], now: datetime) -> list[str]:
     return found
 
 
+def story_reasons(item: Item, also: dict[str, list[str]], plain: list[str]) -> list[str]:
+    """What an update adds comes first; where else the story appeared comes last."""
+    first = [f"update: {item.extra[UPDATE_KEY]}"] if item.extra.get(UPDATE_KEY) else []
+    return first + plain + ([f"also on {', '.join(also[item.item_id])}"] if item.item_id in also else [])
+
+
 def apply_limits(scored: list[Scored], rules: list[Rule], now: datetime, circles: Circles = NO_CIRCLES) -> list[Scored]:
     """Keep at most count_per_day matching items per published day on your clock, best scored first.
 
@@ -156,18 +163,29 @@ def kept_share(items: list[Item], rules: list[Rule], now: datetime, circles: Cir
     return {source_id: kept.get(source_id, 0) / total for source_id, total in totals.items()}
 
 
-def best_copy_per_url(scored: list[Scored], shown: set[str] | frozenset[str]) -> list[Scored]:
-    """One item per URL, in score order. A copy already shown or seen stays its URL's copy, so a newer copy
-    from another source never brings the same story back; otherwise the best scored copy the rules let
-    through, so a story hidden in one source still shows from another source a rule allows."""
-    kept: dict[str, str] = {}
-    for entry in scored:
-        if entry[1].item_id in shown:
-            kept.setdefault(entry[1].url, entry[1].item_id)
-    for entry in scored:
-        kept.setdefault(entry[1].url, entry[1].item_id)
-    chosen = set(kept.values())
-    return [entry for entry in scored if entry[1].item_id in chosen]
+def best_copy_per_story(scored: list[Scored], shown: set[str] | frozenset[str]) -> tuple[list[Scored], dict[str, list[str]]]:
+    """One item per story (its cluster, and every copy of one URL), in score order, with the other sources each kept
+    copy appeared on. A copy already shown or seen stays its story's copy, so a newer copy never brings the same story
+    back, unless the update pass found it adds something; otherwise the best scored copy the rules let through, so a
+    story hidden in one source still shows from another source a rule allows."""
+    keys: dict[str, str] = {}
+    by_url: dict[str, str] = {}
+    for _, item, _ in scored:
+        keys[item.item_id] = by_url.setdefault(item.url, story_key(item))
+    kept: dict[str, Item] = {}
+    for _, item, _ in scored:
+        if item.item_id in shown:
+            kept.setdefault(keys[item.item_id], item)
+    for _, item, _ in scored:
+        kept.setdefault(keys[item.item_id], item)
+    chosen = {item.item_id for item in kept.values()}
+    updates = {item.item_id for _, item, _ in scored if item.item_id not in chosen and item.item_id not in shown and item.extra.get(UPDATE_KEY)}
+    also: dict[str, set[str]] = {}
+    for _, item, _ in scored:
+        copy = kept[keys[item.item_id]]
+        if item.item_id != copy.item_id and item.source_id != copy.source_id:
+            also.setdefault(copy.item_id, set()).add(item.source_id)
+    return [entry for entry in scored if entry[1].item_id in chosen | updates], {item_id: sorted(sources) for item_id, sources in also.items()}
 
 
 def rank(
@@ -193,9 +211,9 @@ def rank(
         base = 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS) if order == "recency" else 1 - position / (len(items) + 1)
         scored.append((base + sum(rule.weight for rule in boosts), item, boosts))
     scored.sort(key=itemgetter(0), reverse=True)
-    scored = best_copy_per_url(scored, exclude_ids)
+    scored, also = best_copy_per_story(scored, exclude_ids)
     already = [entry for entry in scored if entry[1].item_id in exclude_ids]
     candidates = [entry for entry in scored if entry[1].item_id not in exclude_ids]
     remaining = [entry for entry in apply_limits([*already, *candidates], rules, now, circles) if entry[1].item_id not in exclude_ids]
-    page = [ViewItem(item=item, reasons=reasons(item, boosts, now)) for _, item, boosts in remaining[:limit]]
+    page = [ViewItem(item=item, reasons=story_reasons(item, also, reasons(item, boosts, now))) for _, item, boosts in remaining[:limit]]
     return page, len(remaining) > limit
