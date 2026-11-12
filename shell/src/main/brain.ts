@@ -30,6 +30,7 @@ import type {
   SearchHit,
   CollectionInfo,
   Answer,
+  ShopStart,
   LensVerdict,
 } from "../shared/types"
 
@@ -174,6 +175,10 @@ export class BrainClient {
 
   moment(view_id: string, kind: MomentKind): Promise<{ status: string }> {
     return this.request("POST", "/moments", { view_id, kind })
+  }
+
+  shop(query: string, view_id: string): Promise<ShopStart> {
+    return this.request("POST", "/shop", { query, view_id })
   }
 
   ask(question: string): Promise<Answer> {

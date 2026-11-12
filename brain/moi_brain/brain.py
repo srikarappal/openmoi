@@ -60,6 +60,7 @@ from moi_brain.ranker import Ranker, features
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
+from moi_brain.shop import MAX_QUERY, ShopState, parse_price, price_note, product_key, search_urls, shop_source_id
 from moi_brain.sharing import MAX_IMPORT, clean_import, people_names, session_reads, share_text, view_name
 from moi_brain.stories import CLUSTER_WINDOW, Updater, assign_clusters, make_vectors, story_key, story_text
 from moi_brain.vectors import HASHED, cosine, packed, unpacked
@@ -129,6 +130,13 @@ class ContentWanted(BaseModel):
     url: str
     video: bool
     purpose: Literal["summary", "offline"] = "summary"
+
+
+class ShopStart(BaseModel):
+    view_id: str
+    query: str
+    # A Shop view was made for this, from its template.
+    created: bool = False
 
 
 class CollectionInfo(BaseModel):
@@ -419,6 +427,9 @@ class Brain:
             if spec and spec.start_url and policy_for(self.policies, spec.start_url).status == "active":
                 policy = policy_for(self.policies, spec.start_url)
                 found.append(PageSource(source_id="x", page_type=spec.page_type, start_url=spec.start_url, spec=spec, budget=self.budget_for(spec.start_url), mode=policy.mode))
+        for url in self.shop_urls(compiled):
+            if policy_for(self.policies, url).status == "active":
+                found.append(PageSource(source_id=shop_source_id(url), page_type="listing", start_url=url, spec=self.best_spec(url), budget=self.budget_for(url), mode=policy_for(self.policies, url).mode))
         for source in compiled.sources:
             for page in source.pages:
                 policy = policy_for(self.policies, page)
@@ -535,6 +546,15 @@ class Brain:
         if tag_now:
             fresh, known = self.tag_now(fresh, known)
         stored = {item.item_id: item for item in self.store.upsert_items([*known.values(), *fresh], listed_at=now)}
+        prices = [(product_key(item), price.amount, price.symbol) for item in items if (price := parse_price(item.extra.get("price_text", "")))]
+        if prices:
+            self.store.record_prices(prices, now)
+        # A product listed again at another price shows the price it has now.
+        for item in items:
+            stored_item = known.get(item.item_id)
+            if stored_item and item.extra.get("price_text") and item.extra["price_text"] != stored_item.extra.get("price_text"):
+                self.store.update_extra(item.item_id, {"price_text": item.extra["price_text"]})
+                known[item.item_id] = stored_item.model_copy(update={"extra": {**stored_item.extra, "price_text": item.extra["price_text"]}})
         self.store.save_vectors({item.item_id: (kind, packed(vectors[item.item_id])) for item in fresh if item.item_id in stored})
         self.check_updates(list(stored.values()), recent)
         if not tag_now:
@@ -570,6 +590,18 @@ class Brain:
         scores = {item_id: TEXT_WEIGHT * text_scores.get(item_id, 0.0) + (1 - TEXT_WEIGHT) * closeness.get(item_id, 0.0) for item_id in found}
         ranked = sorted(found, key=scores.__getitem__, reverse=True)[:limit]
         return [SearchHit(item=found[item_id], score=round(scores[item_id], 4)) for item_id in ranked if scores[item_id] > 0]
+
+    def with_price_notes(self, ranked: list[ViewItem]) -> list[ViewItem]:
+        """Products whose price you saw on other days say how this one compares: the lowest you saw, or that it is."""
+        priced = {view_item.item.item_id: price for view_item in ranked if (price := parse_price(view_item.item.extra.get("price_text", "")))}
+        if not priced:
+            return ranked
+        history = self.store.price_history([product_key(view_item.item) for view_item in ranked if view_item.item.item_id in priced])
+        noted = []
+        for view_item in ranked:
+            note = price_note(priced[view_item.item.item_id], history.get(product_key(view_item.item), [])) if view_item.item.item_id in priced else ""
+            noted.append(view_item.model_copy(update={"item": view_item.item.model_copy(update={"extra": {**view_item.item.extra, "price_note": note}})}) if note else view_item)
+        return noted
 
     def check_updates(self, stored: list[Item], recent: list[tuple[Item, datetime | None]]) -> None:
         """A new copy of a story you saw goes to the update pass, compared with the copy you saw last. A copy of a link
@@ -682,6 +714,38 @@ class Brain:
             return Answer(answer="Nothing you read or noted matches that.")
         reply = self.gateway.complete_json("fast", "ask", answer_prompt(question, items, journal), True, AnswerReply)
         return cited(reply, items)
+
+    def shop_urls(self, compiled: CompiledView) -> list[str]:
+        """The store pages a view reads for what it last shopped for; none before you shop."""
+        query = self.shop_state().queries.get(compiled.view_id, "")
+        return search_urls([store for source in compiled.sources for store in source.stores], query) if query else []
+
+    def shop_state(self) -> ShopState:
+        try:
+            return ShopState.model_validate(read_json(self.paths.state / "shop.json", {}))
+        except ValueError:
+            return ShopState()
+
+    def shop(self, query: str, view_id: str | None = None) -> ShopStart:
+        """Shopping for your words: in the view given when it has stores, else the first view that does, else a new
+        Shop view from its template. The view then reads each store's search page for them."""
+        query = WHITESPACE.sub(" ", query).strip()[:MAX_QUERY]
+        if not query:
+            raise BadInput("Say what to shop for, such as /shop desk lamp.")
+        views = self.compiler.all_compiled(use_model=False)
+        shopping = [compiled.view_id for compiled in views if any(source.stores for source in compiled.sources)]
+        created = False
+        if view_id in shopping:
+            chosen = view_id
+        elif shopping:
+            chosen = shopping[0]
+        else:
+            chosen, created = self.create_view("shop", "Shop").view_id, True
+        with self.lock:
+            state = self.shop_state()
+            state.queries[chosen] = query
+            write_atomic(self.paths.state / "shop.json", state.model_dump_json())
+        return ShopStart(view_id=chosen, query=query, created=created)
 
     def save_item(self, name: str, item_id: str, saved: bool = True) -> CollectionInfo:
         """Puts an item in a collection, or takes it out."""
@@ -866,7 +930,11 @@ class Brain:
         compiled = self.compiler.compiled(view_id)
         self.retag_if_needed()
         now = self.clock()
-        entries = self.store.items_with_seen(compiled.source_ids(), now - VIEW_WINDOW)
+        shop_ids = [shop_source_id(url) for url in self.shop_urls(compiled)]
+        entries = self.store.items_with_seen([*compiled.source_ids(), *shop_ids], now - VIEW_WINDOW)
+        # A view of nothing but stores lists products in each store's own order.
+        if compiled.sources and all(source.source_id == "shop" for source in compiled.sources):
+            order = "page"
         kept_names = [name for source in compiled.sources for name in source.collections]
         kept_entries = self.store.collection_items(kept_names)
         kept = {item.item_id for item, _, _ in kept_entries}
@@ -891,6 +959,7 @@ class Brain:
         ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles, seen, self.ranker, compiled.explore)
         saved_in = self.store.collections_of([view_item.item.item_id for view_item in ranked])
         ranked = [view_item.model_copy(update={"collections": saved_in.get(view_item.item.item_id, [])}) for view_item in ranked]
+        ranked = self.with_price_notes(ranked)
         with self.lock:
             reading = view_id in self.refreshing
             refreshing = reading or self.tagger.busy or self.updater.busy
@@ -1140,7 +1209,9 @@ class Brain:
         path = self.paths.views / f"{view_id}.md"
         if path.exists():
             raise BadInput(f"views/{view_id}.md already exists")
-        path.write_text(NEW_VIEW.format(title=title or view_id))
+        # Watch, Read and Shop start from a template of their intent.
+        intent = self.paths.templates / "intents" / f"{view_id}.md"
+        path.write_text(intent.read_text() if intent.exists() else NEW_VIEW.format(title=title or view_id))
         return ViewInfo(view_id=view_id, title=title or view_id)
 
     def model_settings(self) -> ModelInfo:

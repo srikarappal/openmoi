@@ -30,6 +30,7 @@ function make_chat(brain: Partial<BrainClient>) {
     chat_view: () => "feed",
     on_applied: vi.fn(async () => {}),
     view_created: vi.fn(async () => {}),
+    shopping: vi.fn(async () => {}),
     model_changed: vi.fn(),
     open_folder: vi.fn(),
     set_background: vi.fn((on: boolean) => (on ? "on now" : "off now")),
@@ -289,6 +290,20 @@ describe("ChatController mirror", () => {
     await chat.send("/mirror 3")
     expect(mirror).toHaveBeenCalledWith(3)
     expect(last_reply(chat)).toBe("Nothing was read in the last 3 days.")
+  })
+})
+
+describe("ChatController shopping", () => {
+  it("starts shopping in a view, made for it when there was none, and says where", async () => {
+    const shop = vi.fn(async () => ({ view_id: "shop", query: "desk lamp", created: true }))
+    const { chat, hooks } = make_chat({ shop } as unknown as Partial<BrainClient>)
+    await chat.send("/shop desk lamp")
+    expect(shop).toHaveBeenCalledWith("desk lamp", "feed")
+    expect(hooks.shopping).toHaveBeenCalledWith("shop", true)
+    expect(last_reply(chat)).toBe('Looking for "desk lamp" in shop, a new Shop view (its stores are in views/shop.md).')
+    shop.mockResolvedValueOnce({ view_id: "gear", query: "tent", created: false })
+    await chat.send("/shop tent")
+    expect(last_reply(chat)).toBe('Looking for "tent" in gear.')
   })
 })
 

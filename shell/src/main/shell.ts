@@ -143,6 +143,7 @@ export class Shell implements ViewHost {
       chat_view: () => this.chat_view_id,
       on_applied: (proposal) => this.on_applied(proposal),
       view_created: (view_id) => this.on_view_created(view_id),
+      shopping: (view_id, created) => this.on_shopping(view_id, created),
       model_changed: () => {
         this.views.recheck(this.chat_view_id).catch((error) => this.notify(String(error)))
       },
@@ -595,6 +596,13 @@ export class Shell implements ViewHost {
     this.retract(`collection:${info.name}`)
     const action = info.views.length ? undefined : { label: `Make a ${info.title} tab`, command: { type: "collection_view" as const, name: info.name } }
     this.notify(`Saved to ${info.title} (${info.count}).`, undefined, action, `collection:${info.name}`)
+  }
+
+  private async on_shopping(view_id: string, created: boolean): Promise<void> {
+    if (created) await this.on_view_created(view_id)
+    else await this.open_view(view_id)
+    const context = this.lenses.get(view_lens_key(view_id))
+    if (context) await this.views.refresh(context, true)
   }
 
   private async on_view_created(view_id: string): Promise<void> {

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from moi_brain.brain import SEARCH_LIMIT, Brain, CollectionInfo, ContentWanted, MineRequest, MomentKind, Overview, PageSource, SearchHit, ViewPage, ViewSchedule, WatchReport
+from moi_brain.brain import SEARCH_LIMIT, Brain, CollectionInfo, ShopStart, ContentWanted, MineRequest, MomentKind, Overview, PageSource, SearchHit, ViewPage, ViewSchedule, WatchReport
 from moi_brain.content import MAX_CONTENT
 from moi_brain.watch import MAX_WATCH_TEXT
 from moi_brain.mirror import Mirror
@@ -320,6 +320,16 @@ class HighlightRequest(BaseModel):
     item_id: str = Field(min_length=1, max_length=200)
     quote: str = Field(default="", max_length=5000)
     note: str = Field(default="", max_length=5000)
+
+
+class ShopRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=200)
+    view_id: str | None = None
+
+
+@router.post("/shop")
+def shop(body: ShopRequest, brain: BrainDep) -> ShopStart:
+    return brain.shop(body.query, body.view_id)
 
 
 class AskRequest(BaseModel):

@@ -12,6 +12,8 @@ export interface ChatHooks {
   chat_view(): string
   on_applied(proposal: Proposal): Promise<void>
   view_created(view_id: string): Promise<void>
+  // A view was given something to shop for: show it, made just now or not, and read its stores.
+  shopping(view_id: string, created: boolean): Promise<void>
   model_changed(): void
   open_folder(path: string): void
   // Turns reading in the background on or off; the reply says what that means.
@@ -116,6 +118,12 @@ export class ChatController {
       case "search":
         this.say(format_search(command.query, await this.brain.search(command.query)))
         return
+      case "shop": {
+        const started = await this.brain.shop(command.query, view_id)
+        this.say(`Looking for "${started.query}" in ${started.view_id}${started.created ? ", a new Shop view (its stores are in views/shop.md)" : ""}.`)
+        await this.hooks.shopping(started.view_id, started.created)
+        return
+      }
       case "ask":
         this.say(format_answer(await this.hooks.track("Looking through what you read", () => this.brain.ask(command.question))))
         return

@@ -17,6 +17,7 @@
   .title { font-weight: 650; font-size: 16.5px; line-height: 1.3; }
   .text { color: var(--text); opacity: 0.88; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
   .details { font-weight: 600; font-size: 14px; }
+  .price_note { font-size: 12.5px; color: var(--accent); }
   .summary { border-left: 3px solid var(--accent); padding-left: 8px; margin-top: 6px; }
   .watching { font-size: 13px; opacity: 0.8; margin-top: 4px; }
   .summary.pending { color: var(--muted); font-style: italic; }
@@ -142,6 +143,7 @@
     body.append(...summary_parts(item, view_item.summary_only))
     const details = [item.extra.price_text, item.extra.rating_text, item.extra.site].filter(Boolean).join(" · ")
     if (details) body.append(element("div", "details", details))
+    if (item.extra.price_note) body.append(element("div", "price_note", item.extra.price_note))
     const row = element("div", "row")
     const chips = element("div", "chips")
     for (const reason of view_item.reasons.filter((reason) => !reason.startsWith("from "))) chips.append(element("span", "chip", reason))

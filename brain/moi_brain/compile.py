@@ -27,7 +27,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "16"
+COMPILER_VERSION = "17"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
@@ -38,6 +38,9 @@ NO_EXPLORE = re.compile(r"\b(?:no|without|stop|turn off)\s+(?:explor\w*|surprise
 READ_MODE = re.compile(r"\b(assist|pilot)\b", re.IGNORECASE)
 X_LINE = re.compile(r"^(x|twitter)\b", re.IGNORECASE)
 DEFAULT_BOOST = 3.0
+QUERY_SLOT = "{query}"
+# Stores a Shop line may name instead of giving an address.
+STORES = {"amazon": "https://www.amazon.com/s?k={query}"}
 # How deep all, any and not may nest, and how many parts one all or any may have.
 MAX_NESTING = 4
 MAX_PARTS = 12
@@ -267,7 +270,7 @@ HISTORIES = ("facebook", "amazon")
 
 
 class SourceRef(BaseModel):
-    source_id: Literal["x", "youtube", "rss", "page", "history", "collection"]
+    source_id: Literal["x", "youtube", "rss", "page", "history", "collection", "shop"]
     page_type: str | None = None
     channels: list[str] = Field(default_factory=list)
     feeds: list[str] = Field(default_factory=list)
@@ -281,6 +284,8 @@ class SourceRef(BaseModel):
     histories: list[str] = Field(default_factory=list)
     # Lists of items you keep: "read_later", "watch_later" or any name you saved items under.
     collections: list[str] = Field(default_factory=list)
+    # Store search addresses with {query} where your words go, searched when you shop.
+    stores: list[str] = Field(default_factory=list)
     # How a page asks to be read, when its line says: "assist" or "pilot".
     modes: dict[str, Literal["pilot", "assist"]] = Field(default_factory=dict)
     # Pages watched for changes: a change becomes an item your rules judge, and an alert if they keep it.
@@ -328,7 +333,7 @@ def check_view_id(view_id: str) -> str:
 
 def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRef], list[str]]:
     """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://... (newest first)' or a bare feed URL."""
-    has_x, channels, feeds, pages, ordered, following, watches, histories, collections, warnings = False, [], [], [], [], [], [], [], [], []
+    has_x, channels, feeds, pages, ordered, following, watches, histories, collections, stores, warnings = False, [], [], [], [], [], [], [], [], [], []
     modes: dict[str, Literal["pilot", "assist"]] = {}
     for line in bullets(body):
         label, _, rest = line.partition(":")
@@ -354,6 +359,13 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
             histories += found_histories
             if not found_histories:
                 warnings.append(f"No history openMoi knows in: {line} (facebook or amazon)")
+        elif key == "shop":
+            named = [STORES[part.strip().lower()] for part in URL.sub("", rest).split(",") if part.strip().lower() in STORES]
+            addresses = URL.findall(rest)
+            stores += named + [address for address in addresses if QUERY_SLOT in address]
+            warnings += [f"A Shop address needs {QUERY_SLOT} where your words go: {address}" for address in addresses if QUERY_SLOT not in address]
+            if not named and not addresses:
+                warnings.append(f"No store found in: {line} (amazon, or an address with {QUERY_SLOT})")
         elif key == "collection":
             found_collections = [name for part in rest.split(",") if is_collection_name(name := collection_name(part))]
             collections += found_collections
@@ -382,6 +394,8 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
         sources.append(SourceRef(source_id="history", histories=list(dict.fromkeys(histories))))
     if collections:
         sources.append(SourceRef(source_id="collection", collections=list(dict.fromkeys(collections))))
+    if stores:
+        sources.append(SourceRef(source_id="shop", stores=list(dict.fromkeys(stores))))
     if pages or following or watches:
         unique_watches = list({watch.url: watch for watch in watches}.values())
         sources.append(

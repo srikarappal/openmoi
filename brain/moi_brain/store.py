@@ -68,6 +68,15 @@ CREATE TABLE IF NOT EXISTS collections (
     PRIMARY KEY (name, item_id)
 )
 """
+# Prices you saw for each product, one row per change or per day, for "the lowest you have seen".
+PRICES_TABLE = """
+CREATE TABLE IF NOT EXISTS prices (
+    product_key TEXT NOT NULL,
+    amount REAL NOT NULL,
+    symbol TEXT NOT NULL,
+    seen_at TEXT NOT NULL
+)
+"""
 # How you used a view: a visit started, five more minutes taken, an edition opened before it came out.
 MOMENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS moments (
@@ -83,6 +92,7 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS items_by_url ON items (url)",
     "CREATE INDEX IF NOT EXISTS items_by_source ON items (source_id, published_at)",
     "CREATE INDEX IF NOT EXISTS events_by_item ON events (item_id)",
+    "CREATE INDEX IF NOT EXISTS prices_by_product ON prices (product_key, seen_at)",
 )
 
 
@@ -114,6 +124,7 @@ class Store:
                 self.connection.execute(WATCHES_TABLE)
                 self.connection.execute(VECTORS_TABLE)
                 self.connection.execute(COLLECTIONS_TABLE)
+                self.connection.execute(PRICES_TABLE)
                 self.index_for_search()
                 for index in INDEXES:
                     self.connection.execute(index)
@@ -414,6 +425,29 @@ class Store:
         found: dict[str, list[str]] = {}
         for item_id, name in rows:
             found.setdefault(item_id, []).append(name)
+        return found
+
+    def record_prices(self, prices: list[tuple[str, float, str]], now: datetime) -> int:
+        """Prices seen now, by product key: kept when the price changed or the last one was seen on another day."""
+        kept = 0
+        with self.lock, self.connection:
+            for key, amount, symbol in prices:
+                last = self.connection.execute("SELECT amount, seen_at FROM prices WHERE product_key = ? ORDER BY seen_at DESC LIMIT 1", (key,)).fetchone()
+                if last and last[0] == amount and datetime.fromisoformat(last[1]).date() == now.astimezone(UTC).date():
+                    continue
+                self.connection.execute("INSERT INTO prices (product_key, amount, symbol, seen_at) VALUES (?, ?, ?, ?)", (key, amount, symbol, iso(now)))
+                kept += 1
+        return kept
+
+    def price_history(self, keys: list[str]) -> dict[str, list[tuple[float, datetime]]]:
+        if not keys:
+            return {}
+        marks = ", ".join("?" for _ in keys)
+        with self.lock:
+            rows = self.connection.execute(f"SELECT product_key, amount, seen_at FROM prices WHERE product_key IN ({marks}) ORDER BY seen_at", keys).fetchall()
+        found: dict[str, list[tuple[float, datetime]]] = {}
+        for key, amount, seen_at in rows:
+            found.setdefault(key, []).append((amount, datetime.fromisoformat(seen_at)))
         return found
 
     def add_moment(self, view_id: str, kind: str, now: datetime) -> None:

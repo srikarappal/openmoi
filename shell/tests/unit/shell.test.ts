@@ -780,3 +780,18 @@ describe("Shell omnibox", () => {
     expect(state_of(shell).omnibox).toBeNull()
   })
 })
+
+describe("Shell shopping", () => {
+  it("opens the view it shops in, made or not, and reads its stores", async () => {
+    const { shell } = await started()
+    const inside = shell as unknown as { on_shopping(view_id: string, created: boolean): Promise<void>; on_view_created(view_id: string): Promise<void> }
+    const opened = vi.spyOn(shell, "open_view").mockResolvedValue()
+    const created = vi.spyOn(inside, "on_view_created").mockResolvedValue()
+    const refreshed = vi.spyOn(shell.views, "refresh").mockResolvedValue()
+    await inside.on_shopping("feed", false)
+    expect(opened).toHaveBeenCalledWith("feed")
+    expect(refreshed).toHaveBeenCalledWith(shell.lenses.get("view:feed"), true)
+    await inside.on_shopping("shop", true)
+    expect(created).toHaveBeenCalledWith("shop")
+  })
+})

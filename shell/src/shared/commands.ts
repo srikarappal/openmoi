@@ -21,6 +21,7 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/mirror", usage: "/mirror [days]", summary: "what each source showed you and how much passed your rules" },
   { name: "/search", usage: "/search <words>", summary: "find items you were shown, by their words and by meaning" },
   { name: "/ask", usage: "/ask <question>", summary: "answer a question from what you read, with links to where it came from" },
+  { name: "/shop", usage: "/shop <what you want>", summary: "search your stores, ranked your way, with the lowest prices you have seen" },
   { name: "/collections", usage: "/collections", summary: "your Read later, Watch later and other lists, with how many items each" },
   { name: "/export", usage: "/export [md|json] [collection]", summary: "save this view, or a collection, as a Markdown or JSON file" },
   { name: "/import", usage: "/import <https link to a view file>", summary: "add a view someone shared; or drop its .md file here" },
@@ -43,6 +44,7 @@ export type ChatCommand =
   | { kind: "mirror"; days: number }
   | { kind: "search"; query: string }
   | { kind: "ask"; question: string }
+  | { kind: "shop"; query: string }
   | { kind: "collections" }
   | { kind: "export"; format: "md" | "json"; collection: string | null }
   | { kind: "import"; url: string }
@@ -94,6 +96,7 @@ export function parse_chat(input: string): ChatCommand {
     return Number.isInteger(days) && days >= 1 && days <= 30 && words.length <= 1 ? { kind: "mirror", days } : usage_error(command)
   }
   if (command === "/search") return rest ? { kind: "search", query: rest } : usage_error(command)
+  if (command === "/shop") return rest ? { kind: "shop", query: rest } : usage_error(command)
   if (command === "/ask") return rest ? { kind: "ask", question: rest } : usage_error(command)
   if (command === "/collections") return words.length ? usage_error(command) : { kind: "collections" }
   if (command === "/export") {

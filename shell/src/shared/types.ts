@@ -279,6 +279,12 @@ export interface Answer {
   citations: Citation[]
 }
 
+export interface ShopStart {
+  view_id: string
+  query: string
+  created: boolean
+}
+
 export interface CollectionInfo {
   name: string
   title: string
