@@ -12,31 +12,41 @@ count as your own shopping history like an export.
 import json
 import os
 import re
+import signal
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from moi_brain.compile import AppName, AppRef
 from moi_brain.config import REPO_DIR
+from moi_brain.items import is_private_host
 from moi_brain.shop import parse_price
 
-Capability = Literal["calendar", "mail", "notes"]
+Capability = Literal["calendar", "mail", "notes", "files"]
 HELPER_TIMEOUT = 30
+# A macOS permission prompt waits for you; asking gets this long.
+REQUEST_TIMEOUT = 300
+SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu"}
 DEFAULT_HELPER = REPO_DIR / "helper" / "build" / "moi_mac_helper"
 MAIL_DAYS = 14
 ORDER_DAYS = 90
 MAX_FILE_TEXT = 4000
 TEXT_FILES = (".txt", ".md", ".markdown")
 LINK = re.compile(r"https://[^\s<>\"')\]]+")
-ORDER_SUBJECT = re.compile(r"\b(your order|order confirm\w*|order #|order number|has shipped|your receipt|purchase confirm\w*)\b", re.IGNORECASE)
+# An order confirmation's subject, written so Python and the helper's JavaScript read it the same way.
+ORDER_PATTERN = r"\border\s*#\s*\w|\border (confirm|number|received|placed)|\byour order (has|is|was|of|from|#)|\byour (package|shipment|item|items|order) (has|have) (shipped|been shipped)|\byour receipt\b|\bpurchase confirm"
+ORDER_SUBJECT = re.compile(ORDER_PATTERN, re.IGNORECASE)
+# A reply, a forward, or a store asking you to finish buying is no order.
+NOT_ORDER = re.compile(r"^\s*(re|fwd?|aw)\s*:|\bcomplete your order\b|\bsave \d+\s*%|% off\b|\bstill in your cart\b|\bforgot something\b", re.IGNORECASE)
 # The text a newsletter's web copy link usually has nearby; the first link is the fallback.
 WEB_COPY = re.compile(r"(view (it |this )?(in|on) (your |a )?(web )?browser|view online|read online|web version)", re.IGNORECASE)
 WHY = {
     "calendar": "to show today's meetings in your views. It reads events only and never changes them.",
     "mail": "to read newsletters and order confirmations from your inbox. It reads messages only and never sends or moves one.",
     "notes": "to show your notes in a view. It reads them only and never changes them.",
+    "files": "to show the files in the folders your views name. It reads them only and never changes them.",
 }
 
 
@@ -62,17 +72,25 @@ class MacHelper:
     def __init__(self, path: Path | None = None):
         self.path = path or helper_path()
 
-    def run(self, command: str, args: dict[str, Any]) -> Any:
+    def run(self, command: str, args: dict[str, Any], timeout: float = HELPER_TIMEOUT) -> Any:
+        """One command; a helper that does not answer in time is stopped with everything it started (a script it ran
+        for Mail included), so nothing it began lives on."""
         if not self.path.exists():
             raise AppError("unavailable", "the Mac helper is not built yet: run helper/build.sh")
         try:
-            done = subprocess.run([str(self.path), command], input=json.dumps(args), capture_output=True, text=True, timeout=HELPER_TIMEOUT, check=False)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise AppError("unavailable", f"the Mac helper did not answer: {error}") from error
+            process = subprocess.Popen([str(self.path), command], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        except OSError as error:
+            raise AppError("unavailable", f"the Mac helper could not start: {error}") from error
         try:
-            reply = json.loads(done.stdout)
+            stdout, _ = process.communicate(json.dumps(args), timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise AppError("unavailable", f"the Mac helper did not answer in {int(timeout)} s") from error
+        try:
+            reply = json.loads(stdout)
         except ValueError as error:
-            raise AppError("unavailable", f"the Mac helper answered something that is not JSON: {done.stdout[:200]}") from error
+            raise AppError("unavailable", f"the Mac helper answered something that is not JSON: {stdout[:200]}") from error
         if not isinstance(reply, dict) or not reply.get("ok"):
             raise AppError(str(reply.get("kind", "unavailable")) if isinstance(reply, dict) else "unavailable", str(reply.get("error", "")) if isinstance(reply, dict) else "")
         return reply.get("data")
@@ -82,7 +100,7 @@ class MacHelper:
         return {str(name): str(value) for name, value in found.items()} if isinstance(found, dict) else {}
 
     def allow(self, capability: Capability) -> str:
-        found = self.run("request", {"capability": capability})
+        found = self.run("request", {"capability": capability}, REQUEST_TIMEOUT)
         return str(found.get(capability, "unavailable")) if isinstance(found, dict) else "unavailable"
 
 
@@ -93,14 +111,24 @@ def local_when(start: datetime, end: datetime, all_day: bool) -> str:
     return f"{start.astimezone():%H:%M} to {end.astimezone():%H:%M}"
 
 
+def start_of_day(moment: datetime) -> datetime:
+    """Midnight of a moment's local day, with that midnight's own offset (right on the days clocks change)."""
+    return datetime.combine(moment.astimezone().date(), time()).astimezone()
+
+
 def calendar_records(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each occurrence as its own item, known by its event and start, so a recurring meeting shows every day and a
+    moved one leaves its old time behind; attendees without you."""
     records = []
     for event in events:
+        if not event.get("id") or not event.get("start") or not event.get("end"):
+            continue
         start, end = datetime.fromisoformat(event["start"]), datetime.fromisoformat(event["end"])
-        attendees = [person for person in event.get("attendees", []) if isinstance(person, dict)]
+        attendees = [person for person in event.get("attendees", []) if isinstance(person, dict) and not person.get("me")]
+        native_id = f"{event['id']}@{start.isoformat()}"
         records.append({
-            "native_id": event["id"],
-            "url": app_url("calendar", event["id"]),
+            "native_id": native_id,
+            "url": app_url("calendar", native_id),
             "title": event.get("title") or "Busy",
             "text": " ".join(part for part in (event.get("location", ""), event.get("notes", "")[:500]) if part),
             "published_at": start.isoformat(),
@@ -122,27 +150,44 @@ def sender_parts(sender: str) -> tuple[str, str]:
     return "", sender.strip().lower()
 
 
-def web_copy(body: str) -> str | None:
-    """A newsletter's web copy, or an order's page: the link after "view in browser", else its first link."""
+def registrable(host: str) -> str:
+    """The part of a host its owner registered: batteryweekly.example of news.batteryweekly.example, shop.co.uk."""
+    labels = host.lower().strip(".").split(".")
+    keep = 3 if len(labels) >= 3 and labels[-2] in SECOND_LEVEL else 2
+    return ".".join(labels[-keep:])
+
+
+def web_copy(body: str, sender_domain: str) -> str | None:
+    """A newsletter's web copy, or an order's page, only on the sender's own site and never on a private address:
+    the link after "view in browser", else the first such link; a mail cannot point its card anywhere else."""
+    own = registrable(sender_domain) if sender_domain else ""
     marker = WEB_COPY.search(body)
-    after = LINK.search(body, marker.end()) if marker else None
-    found = after or LINK.search(body)
-    return found.group(0) if found else None
+    links = [match.group(0) for match in LINK.finditer(body, marker.end())] if marker else []
+    for link in [*links, *(match.group(0) for match in LINK.finditer(body))]:
+        host = (urlparse(link).hostname or "").lower()
+        if own and host and registrable(host) == own and not is_private_host(host):
+            return link
+    return None
+
+
+def is_order(subject: str, body: str) -> bool:
+    """An order confirmation: its subject says so, it is no reply, forward or nudge to finish buying, and it names a
+    price."""
+    return bool(ORDER_SUBJECT.search(subject)) and not NOT_ORDER.search(subject) and parse_price(body) is not None
 
 
 def mail_records(messages: list[dict[str, Any]], orders: bool) -> list[dict[str, Any]]:
     """Newsletters (they carry a List-Unsubscribe header) as articles, or order confirmations as products."""
     records = []
     for message in messages:
-        subject, body = message.get("subject", ""), message.get("body", "")
-        is_order = bool(ORDER_SUBJECT.search(subject))
-        if orders != is_order or (not orders and not message.get("unsubscribe")):
+        subject, body = message.get("subject") or "", message.get("body") or ""
+        if not message.get("id") or orders != is_order(subject, body) or (not orders and not message.get("unsubscribe")):
             continue
-        name, address = sender_parts(message.get("sender", ""))
+        name, address = sender_parts(message.get("sender") or "")
         price = parse_price(body)
         records.append({
             "native_id": message["id"],
-            "url": web_copy(body) or app_url("mail", message["id"]),
+            "url": web_copy(body, address.rpartition("@")[2]) or app_url("mail", message["id"]),
             "title": subject,
             "text": body,
             "author_name": name or address,
@@ -159,6 +204,7 @@ def notes_records(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {"native_id": note["id"], "url": app_url("notes", note["id"]), "title": note.get("title", ""), "text": note.get("body", ""), "published_at": note.get("modified"), "kind": "article"}
         for note in notes
+        if note.get("id")
     ]
 
 
@@ -194,15 +240,22 @@ def file_records(files: list[dict[str, Any]], folders: list[str]) -> list[dict[s
 def read_app(helper: MacHelper, ref: AppRef, now: datetime) -> list[dict[str, Any]]:
     """The records an app source has now: Calendar from the start of today, Mail since a while back, Notes, Files."""
     if ref.app == "calendar":
-        today = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
-        return calendar_records(helper.run("calendar", {"from": today.isoformat(timespec="seconds"), "to": (today + timedelta(days=ref.days)).isoformat(timespec="seconds")}))
+        today = start_of_day(now)
+        end = start_of_day(today + timedelta(days=ref.days, hours=12))
+        return calendar_records(helper.run("calendar", {"from": today.isoformat(timespec="seconds"), "to": end.isoformat(timespec="seconds")}))
     if ref.app == "mail":
         orders = ref.what == "orders"
         since = now - timedelta(days=ORDER_DAYS if orders else MAIL_DAYS)
-        return mail_records(helper.run("mail", {"since": since.isoformat(timespec="seconds"), "limit": 100}), orders)
+        found = helper.run("mail", {"since": since.isoformat(timespec="seconds"), "limit": 100, "mode": "orders" if orders else "newsletters", "orders": ORDER_PATTERN})
+        return mail_records(found, orders)
     if ref.app == "notes":
         return notes_records(helper.run("notes", {"limit": 50}))
     return file_records(helper.run("files", {"folders": ref.folders, "limit": 100}), ref.folders)
+
+
+def app_location(ref: AppRef) -> str:
+    """Where an app source reads, for its status: each Calendar window and each set of folders on its own."""
+    return f"calendar:{ref.days}" if ref.app == "calendar" else ref.source_id.removeprefix("app:") if ref.app == "files" else ref.app
 
 
 def permission_text(app: str, kind: str, message: str) -> str:

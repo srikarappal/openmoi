@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -23,12 +24,15 @@ from moi_brain.apps import (
     mail_records,
     notes_records,
     sender_parts,
+    start_of_day,
     web_copy,
 )
 from moi_brain.brain import Brain
 from moi_brain.compile import AppRef, parse_sources
 from moi_brain.config import REPO_DIR
-from moi_brain.items import MAIL_ORDERS, normalize
+from moi_brain.items import MAIL_ORDERS, Item, normalize
+from moi_brain.mashups import day_related
+from moi_brain.sharing import share_text
 
 NOW = datetime(2026, 11, 12, 15, 0, tzinfo=UTC)
 FAKE_HELPER = REPO_DIR / "fixtures" / "fake_mac_helper.py"
@@ -72,19 +76,23 @@ def test_source_lines_name_apps_and_only_folders_inside_your_home(tmp_path):
     assert [(app.app, app.what, app.days) for app in apps.apps] == [("calendar", "", 3), ("mail", "newsletters", 1), ("mail", "orders", 1), ("notes", "", 1), ("files", "", 1)]
     assert apps.apps[-1].folders == [str(inside.resolve()), str((Path.home() / "Desktop").resolve())]
     assert warnings == ["Files: /etc is not a folder inside your home folder, so it is not read.", "Files: ~ is not a folder inside your home folder, so it is not read."]
-    assert [app.source_id for app in apps.apps] == ["app:calendar", "app:mail", MAIL_ORDERS, "app:notes", "app:files"]
+    assert [app.source_id for app in apps.apps][:4] == ["app:calendar", "app:mail", MAIL_ORDERS, "app:notes"]
+    assert apps.apps[-1].source_id.startswith("app:files:") and AppRef(app="files", folders=["/a"]).source_id != AppRef(app="files", folders=["/b"]).source_id
     assert parse_sources("* Calendar: this week\n* Mail\n", [])[0][0].apps == [AppRef(app="calendar", days=7), AppRef(app="mail", what="newsletters")]
     assert parse_sources("* Files:\n", [])[1] == ["Files needs the folders to read, such as Files: ~/Documents/Papers"]
 
 
 def test_app_records_keep_their_place_in_the_app_and_open_nowhere(tmp_path):
     [standup] = calendar_records([EVENTS[1]])
-    assert standup["url"] == "moi-app://calendar/e1" and standup["extra.when"].count(":") == 2 and standup["extra.attendees"] == ""
-    [review] = calendar_records([EVENTS[0]])
+    assert standup["native_id"] == "e1@2026-11-12T16:00:00+00:00" and standup["url"] == "moi-app://calendar/e1%402026-11-12T16%3A00%3A00%2B00%3A00"
+    assert standup["extra.when"].count(":") == 2 and standup["extra.attendees"] == ""
+    me = {"name": "Me Myself", "email": "me@example.com", "me": True}
+    [review] = calendar_records([{**EVENTS[0], "attendees": [*EVENTS[0]["attendees"], me]}])
     assert json.loads(review["extra.attendees"]) == [{"name": "Maya Kim", "email": "maya@example.com"}]
     assert calendar_records([{**EVENTS[1], "all_day": True}])[0]["extra.when"] == "all day"
+    assert calendar_records([{**EVENTS[1], "id": None}, {**EVENTS[1], "start": ""}]) == []
     item = normalize("app:calendar", review, NOW)
-    assert item is not None and item.url == "moi-app://calendar/e2" and item.kind == "post"
+    assert item is not None and item.url.startswith("moi-app://calendar/e2%40") and item.kind == "post"
     assert normalize("rss:blog", {**review, "url": "moi-app://calendar/e2"}, NOW) is None
     assert normalize("app:calendar", {**review, "url": "moi-app://shell/rm"}, NOW) is None
     assert normalize("app:calendar", {**review, "url": "moi-app://calendar/../x y"}, NOW) is None
@@ -99,7 +107,60 @@ def test_mail_gives_newsletters_to_read_and_orders_as_your_history():
     assert (order["url"], order["extra.price_text"], order["kind"], order["extra.site"]) == ("https://shop.example/orders/123", "$24.99", "product", "shop.example")
     assert mail_records([{**MAIL[1], "unsubscribe": True}], orders=False)[0]["url"] == "moi-app://mail/%3Cp1%40friend%3E"
     assert sender_parts('"Maya Kim" <Maya@Example.com>') == ("Maya Kim", "maya@example.com") and sender_parts("x@y.z") == ("", "x@y.z")
-    assert web_copy("no links here") is None
+    assert web_copy("no links here", "a.example") is None
+    assert mail_records([{**MAIL[0], "id": None}, {**MAIL[0], "id": ""}], orders=False) == []
+
+
+@pytest.mark.parametrize(
+    ("body", "sender", "url"),
+    [
+        ("View in browser https://192.168.1.1/cgi-bin/reboot then https://news.batteryweekly.example/12", "hello@batteryweekly.example", "https://news.batteryweekly.example/12"),
+        ("Read online: https://evil.example/login?magic=1", "hello@batteryweekly.example", None),
+        ("https://localhost.batteryweekly.example.evil.example/x", "hello@batteryweekly.example", None),
+        ("Your order https://www.shop.co.uk/orders/1", "orders@mail.shop.co.uk", "https://www.shop.co.uk/orders/1"),
+        ("Your order https://other.co.uk/orders/1", "orders@mail.shop.co.uk", None),
+    ],
+)
+def test_a_mail_points_its_card_only_at_its_senders_own_site(body, sender, url):
+    assert web_copy(body, sender.rpartition("@")[2]) == url
+
+
+@pytest.mark.parametrize(
+    ("subject", "body", "order"),
+    [
+        ("Your order #123 has shipped", "Desk lamp, $24.99.", True),
+        ("Order # 5512 confirmed", "Total $12.00", True),
+        ("Version 2.0 has shipped!", "New features, $0 to upgrade? No price here", False),
+        ("Complete your order and save 20%", "Your cart: lamp $24.99", False),
+        ("Re: your order of the slides", "I paid $40 for the printing", False),
+        ("Fwd: Your order #9 has shipped", "Lamp $24.99", False),
+        ("Your order has shipped", "Thanks for shopping with us", False),
+    ],
+)
+def test_only_order_confirmations_with_a_price_count_as_orders(subject, body, order):
+    message = {"id": "<x@shop>", "subject": subject, "sender": "Shop <orders@shop.example>", "date": "2026-11-01T09:00:00.000Z", "unsubscribe": True, "body": body}
+    assert len(mail_records([message], orders=True)) == int(order)
+
+
+def test_the_calendar_day_starts_at_local_midnight_even_when_clocks_change(pacific_clock):
+    assert start_of_day(datetime(2026, 11, 1, 20, 0, tzinfo=UTC)) == datetime(2026, 11, 1, 7, 0, tzinfo=UTC)
+    assert start_of_day(datetime(2027, 3, 14, 20, 0, tzinfo=UTC)) == datetime(2027, 3, 14, 8, 0, tzinfo=UTC)
+
+
+def test_a_helper_that_hangs_is_stopped_with_everything_it_started(tmp_path):
+    marker = tmp_path / "child.pid"
+    hung = tmp_path / "hung"
+    hung.write_text(f"#!/bin/sh\nsleep 60 &\necho $! > {marker}\nwait\n")
+    hung.chmod(0o755)
+    started = time.monotonic()
+    with pytest.raises(AppError) as stopped:
+        MacHelper(hung).run("mail", {}, timeout=1)
+    assert stopped.value.kind == "unavailable" and "did not answer in 1 s" in str(stopped.value) and time.monotonic() - started < 10
+    child = int(marker.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and subprocess.run(["kill", "-0", str(child)], capture_output=True, check=False).returncode == 0:
+        time.sleep(0.1)
+    assert subprocess.run(["kill", "-0", str(child)], capture_output=True, check=False).returncode != 0
 
 
 def test_files_come_only_from_the_folders_you_opted_into(tmp_path):
@@ -151,7 +212,7 @@ def test_a_today_card_asks_for_calendar_once_you_allow_it_and_drops_moved_events
     assert [call["args"] for call in calls(world_path) if call["command"] == "request"] == [{"capability": "calendar"}]
     denied = client.post("/apps/allow", json={"capability": "notes"}).json()
     assert denied["status"] == {"notes": "denied"} and "System Settings" in denied["message"]
-    assert client.post("/apps/allow", json={"capability": "files"}).status_code == 422
+    assert client.post("/apps/allow", json={"capability": "contacts"}).status_code == 422
 
 
 def test_newsletters_and_orders_read_from_mail(mac, paths):
@@ -212,3 +273,64 @@ def test_the_real_helper_builds_answers_without_asking_and_reads_only_opted_in_f
     assert (code == 0 and isinstance(calendar["data"], list)) or calendar["kind"] == "permission"
     assert ask(target, "calendar", {"from": "nope", "to": "x"})[1]["kind"] in {"bad_input", "permission"}
     assert os.access(target, os.X_OK) and b"NSCalendarsFullAccessUsageDescription" in target.read_bytes()
+
+
+def test_a_recurring_meeting_shows_each_day_and_a_renamed_one_shows_its_new_name(mac, paths):
+    _, client, world_path, clock = mac
+    data = json.loads(world_path.read_text())
+    data["status"]["calendar"] = "allowed"
+    data["calendar"] = [{**EVENTS[1], "id": "rec1"}, {**EVENTS[1], "id": "rec1", "start": "2026-11-13T16:00:00Z", "end": "2026-11-13T16:15:00Z"}]
+    world_path.write_text(json.dumps(data))
+    (paths.views / "today.md").write_text("# Today\n\n## Sources\n* Calendar\n")
+    client.post("/refresh", json={"view_id": "today", "force": True})
+    assert [entry["item"]["title"] for entry in wait_until_refreshed(client, "today")["items"]] == ["Standup"]
+    data["calendar"][0]["title"] = "Standup, moved to the big room"
+    world_path.write_text(json.dumps(data))
+    client.post("/refresh", json={"view_id": "today", "force": True})
+    assert [entry["item"]["title"] for entry in wait_until_refreshed(client, "today")["items"]] == ["Standup, moved to the big room"]
+    clock.moment += timedelta(days=1)
+    client.post("/refresh", json={"view_id": "today", "force": True})
+    [tomorrow] = wait_until_refreshed(client, "today")["items"]
+    assert tomorrow["item"]["title"] == "Standup" and tomorrow["item"]["published_at"].startswith("2026-11-13")
+
+
+def test_each_view_keeps_its_own_calendar_window_and_folders(mac, paths, tmp_path):
+    brain, client, world_path, _ = mac
+    data = json.loads(world_path.read_text())
+    data["status"]["calendar"] = "allowed"
+    data["calendar"] = [*EVENTS, {**EVENTS[1], "id": "offsite", "title": "Offsite", "start": "2026-11-17T16:00:00Z", "end": "2026-11-17T20:00:00Z"}]
+    documents, desktop = Path.home() / "Documents" / "moi_test_a", Path.home() / "Desktop" / "moi_test_b"
+    data["files"] = [{"path": f"{documents}/secret.txt", "modified": "2026-11-12T08:00:00Z"}, {"path": f"{desktop}/b.txt", "modified": "2026-11-12T08:00:00Z"}]
+    world_path.write_text(json.dumps(data))
+    (paths.views / "week.md").write_text("# Week\n\n## Sources\n* Calendar: next 7 days\n")
+    (paths.views / "today.md").write_text("# Today\n\n## Sources\n* Calendar\n")
+    client.post("/refresh", json={"view_id": "week", "force": True})
+    assert "Offsite" in [entry["item"]["title"] for entry in wait_until_refreshed(client, "week")["items"]]
+    client.post("/refresh", json={"view_id": "today"})
+    assert [entry["item"]["title"] for entry in wait_until_refreshed(client, "today")["items"]] == ["Standup", "Lithium recycling review"]
+    (paths.views / "a.md").write_text(f"# A\n\n## Sources\n* Files: {documents}\n")
+    (paths.views / "b.md").write_text(f"# B\n\n## Sources\n* Files: {desktop}\n")
+    client.post("/refresh", json={"view_id": "a", "force": True})
+    page = wait_until_refreshed(client, "a")
+    assert page["items"] == [] and any("say /allow files" in warning for warning in page["warnings"])
+    assert client.post("/apps/allow", json={"capability": "files"}).json()["status"] == {"files": "allowed"}
+    assert client.get("/apps").json()["status"]["files"] == "allowed"
+    client.post("/refresh", json={"view_id": "a", "force": True})
+    assert [entry["item"]["title"] for entry in wait_until_refreshed(client, "a")["items"]] == ["secret.txt"]
+    client.post("/refresh", json={"view_id": "b"})
+    assert [entry["item"]["title"] for entry in wait_until_refreshed(client, "b")["items"]] == ["b.txt"]
+    assert not brain.readable_in_a_tab("moi-app://files/x") and not brain.readable_in_a_tab("moi-app://notes/1")
+
+
+def test_a_shared_view_leaves_out_the_folders_it_reads(paths):
+    shared = share_text("# A\n\n## Sources\n* Files: ~/Documents/Papers\n* Calendar\n")
+    assert "Papers" not in shared and "* Calendar" in shared
+
+
+def test_a_day_board_matches_attendees_by_full_name_or_by_a_mail_from_their_address():
+    event = Item(item_id="e", source_id="app:calendar", native_id="e", kind="post", url="moi-app://calendar/e", title="Budget sync", fetched_at=NOW,
+                 extra={"attendees": json.dumps([{"name": "Sam", "email": "sam@company.com"}, {"name": "Maya Kim", "email": "maya@example.com"}])})
+    cat = Item(item_id="c", source_id="x", native_id="c", kind="post", url="https://x.com/sam/status/1", text="my cat", author_name="sam", author_handle="sam", fetched_at=NOW)
+    mail = Item(item_id="m", source_id="app:mail", native_id="m", kind="article", url="moi-app://mail/m", title="Numbers", author_name="Sam", author_handle="sam@company.com", fetched_at=NOW)
+    maya = Item(item_id="k", source_id="x", native_id="k", kind="post", url="https://x.com/maya/status/2", text="slides", author_name="Maya Kim", author_handle="maya", fetched_at=NOW)
+    assert [(related.item_id, related.label) for related in day_related(event, [cat, mail, maya])] == [("m", "from Sam"), ("k", "from Maya Kim")]

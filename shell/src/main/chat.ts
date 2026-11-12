@@ -157,7 +157,7 @@ export class ChatController {
         if (!command.capability) {
           const access = await this.brain.apps()
           const lines = Object.entries(access.status).map(([app, status]) => `${app}: ${status.replaceAll("_", " ")}`)
-          this.say(lines.length ? `What openMoi may read on this Mac: ${lines.join(", ")}. Say /allow calendar, mail or notes to ask for one.` : `Apps on this Mac are out of reach: ${access.message}`)
+          this.say(lines.length ? `What openMoi may read on this Mac: ${lines.join(", ")}. Say /allow calendar, mail, notes or files to ask for one.` : `Apps on this Mac are out of reach: ${access.message}`)
           return
         }
         const capability = command.capability

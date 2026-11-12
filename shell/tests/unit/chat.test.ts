@@ -390,7 +390,7 @@ describe("ChatController apps", () => {
     const allow_app = vi.fn(async () => ({ status: { calendar: "allowed" }, message: "openMoi can read calendar now, to show today's meetings." }))
     const { chat, labels, hooks } = make_chat({ apps, allow_app } as unknown as Partial<BrainClient>)
     await chat.send("/allow")
-    expect(last_reply(chat)).toBe("What openMoi may read on this Mac: calendar: not asked, mail: allowed. Say /allow calendar, mail or notes to ask for one.")
+    expect(last_reply(chat)).toBe("What openMoi may read on this Mac: calendar: not asked, mail: allowed. Say /allow calendar, mail, notes or files to ask for one.")
     await chat.send("/allow calendar")
     expect(allow_app).toHaveBeenCalledWith("calendar")
     expect(labels).toContain("Asking macOS about calendar")

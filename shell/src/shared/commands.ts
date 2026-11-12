@@ -28,7 +28,7 @@ export const COMMANDS: CommandHelp[] = [
   { name: "/import", usage: "/import <https link to a view file>", summary: "add a view someone shared; or drop its .md file here" },
   { name: "/share", usage: "/share", summary: "save a copy of this view to send, without your people" },
   { name: "/people", usage: "/people", summary: "accounts on different sites that look like one person, to link in people.md" },
-  { name: "/allow", usage: "/allow [calendar|mail|notes]", summary: "let openMoi read one app on this Mac (macOS asks you), or see what it may read" },
+  { name: "/allow", usage: "/allow [calendar|mail|notes|files]", summary: "let openMoi read one app on this Mac (macOS asks you), or see what it may read" },
   { name: "/google", usage: "/google [connect]", summary: "sign in to Google in your browser so YouTube subscriptions come from your account" },
   { name: "/help", usage: "/help", summary: "list the commands" },
 ]
@@ -54,10 +54,16 @@ export type ChatCommand =
   | { kind: "import"; url: string }
   | { kind: "share" }
   | { kind: "people" }
-  | { kind: "allow"; capability: "calendar" | "mail" | "notes" | null }
+  | { kind: "allow"; capability: AppCapability | null }
   | { kind: "google"; connect: boolean }
   | { kind: "help" }
   | { kind: "error"; message: string }
+
+export type AppCapability = "calendar" | "mail" | "notes" | "files"
+
+function is_capability(word: string): word is AppCapability {
+  return word === "calendar" || word === "mail" || word === "notes" || word === "files"
+}
 
 function usage_error(name: string): ChatCommand {
   const help = COMMANDS.find((command) => command.name === name)
@@ -124,7 +130,7 @@ export function parse_chat(input: string): ChatCommand {
   if (command === "/allow") {
     if (!words.length) return { kind: "allow", capability: null }
     const capability = words[0].toLowerCase()
-    return words.length === 1 && (capability === "calendar" || capability === "mail" || capability === "notes") ? { kind: "allow", capability } : usage_error(command)
+    return words.length === 1 && is_capability(capability) ? { kind: "allow", capability } : usage_error(command)
   }
   if (command === "/google") return words.length === 0 || (words.length === 1 && words[0] === "connect") ? { kind: "google", connect: words[0] === "connect" } : usage_error(command)
   if (command === "/help") return { kind: "help" }

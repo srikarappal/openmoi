@@ -341,18 +341,19 @@ def enrich_related(lead: Item, candidates: list[Item]) -> list[Related]:
 
 
 def attendees_of(event: Item) -> tuple[set[str], set[str]]:
-    """The names and the addresses (with their local parts, which often are handles) of an event's attendees."""
+    """The full names (two words or more) and the email addresses of an event's attendees, you not among them."""
     try:
         people = json.loads(event.extra.get("attendees") or "[]")
     except ValueError:
         return set(), set()
-    names = {" ".join(str(person.get("name", "")).split()).casefold() for person in people if isinstance(person, dict)} - {""}
-    emails = {str(person.get("email", "")).lower() for person in people if isinstance(person, dict)} - {""}
-    return names, emails | {email.partition("@")[0] for email in emails}
+    names = {" ".join(str(person.get("name", "")).split()).casefold() for person in people if isinstance(person, dict)}
+    emails = {str(person.get("email", "")).lower() for person in people if isinstance(person, dict)}
+    return {name for name in names if len(name.split()) >= 2}, {email for email in emails if "@" in email}
 
 
 def day_related(event: Item, candidates: list[Item]) -> list[Related]:
-    """For a Day board: what other sources hold by an event's attendees, or about its title, best first."""
+    """For a Day board: what other sources hold by an event's attendees (by full name, or a mail by its sender's
+    address, never a handle that happens to match an address), or about its title, best first."""
     names, addresses = attendees_of(event)
     words = story_words(event)
     found = []
@@ -360,9 +361,9 @@ def day_related(event: Item, candidates: list[Item]) -> list[Related]:
         if candidate.item_id == event.item_id:
             continue
         author = " ".join((candidate.author_name or "").split()).casefold()
-        handle = (candidate.author_handle or "").lower()
-        if (author and author in names) or (handle and handle in addresses):
-            found.append((2.0, as_related(candidate, f"from {candidate.author_name or handle}")))
+        address = (candidate.author_handle or "").lower() if "@" in (candidate.author_handle or "") else ""
+        if (author and author in names) or (address and address in addresses):
+            found.append((2.0, as_related(candidate, f"from {candidate.author_name or address}")))
         elif words and (score := overlap(words, story_words(candidate))) >= ENRICH_LIKENESS:
             found.append((score, as_related(candidate, "about this")))
     found.sort(key=lambda entry: -entry[0])

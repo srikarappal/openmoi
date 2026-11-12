@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from moi_brain.enrich import with_judged_rage
-from moi_brain.items import JUDGED_PREFIX, Event, Item
+from moi_brain.items import JUDGED_PREFIX, MAIL_ORDERS, Event, Item
 
 ITEM_TTL = timedelta(days=30)
 ITEM_COLUMNS = "item_id, source_id, url, published_at, fetched_at, seen_at, item_json"
@@ -115,6 +115,11 @@ def search_row(item: Item) -> tuple[str, str, str, str]:
     return (item.item_id, item.title or "", item.text or "", " ".join(part for part in (item.author_name, item.author_handle) if part))
 
 
+def rewritten(source_id: str) -> bool:
+    """Sources whose items change where they live (events, notes, files, mail) and are taken as they are now."""
+    return source_id.startswith("app:") or source_id == MAIL_ORDERS
+
+
 def like_prefix(text: str) -> str:
     """Text for a LIKE pattern that matches only itself: its % and _ escaped."""
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -204,12 +209,31 @@ class Store:
                 if cursor.rowcount:
                     new_items.append(item)
                     self.connection.execute("INSERT INTO items_search (item_id, title, text, author) VALUES (?, ?, ?, ?)", search_row(item))
+                elif rewritten(item.source_id):
+                    self.rewrite(item, listed)
                 else:
                     self.connection.execute(
                         "UPDATE items SET listed_at = ? WHERE item_id = ? OR (source_id = ? AND url = ?)",
                         (listed, item.item_id, item.source_id, item.url),
                     )
         return new_items
+
+    def rewrite(self, item: Item, listed: str | None) -> None:
+        """An app item read again takes what the app says now (a renamed event, an edited note), keeping the answers
+        tagging gave it while its words are the same. Called with the lock held."""
+        row = self.connection.execute("SELECT item_json FROM items WHERE item_id = ?", (item.item_id,)).fetchone()
+        if not row:
+            return
+        old = Item.model_validate_json(row[0])
+        same = (old.title, old.text) == (item.title, item.text)
+        kept = {key: value for key, value in old.extra.items() if same and key.startswith(JUDGED_PREFIX)}
+        fresh = item.model_copy(update={"topics": old.topics if same else [], "tagged": old.tagged and same, "extra": {**item.extra, **kept}, "available_actions": old.available_actions})
+        self.connection.execute(
+            "UPDATE items SET published_at = ?, listed_at = ?, item_json = ? WHERE item_id = ?",
+            (iso(fresh.published_at), listed, fresh.model_dump_json(), fresh.item_id),
+        )
+        self.connection.execute("DELETE FROM items_search WHERE item_id = ?", (fresh.item_id,))
+        self.connection.execute("INSERT INTO items_search (item_id, title, text, author) VALUES (?, ?, ?, ?)", search_row(fresh))
 
     def items_by_url(self, source_id: str, urls: list[str]) -> dict[str, Item]:
         """Stored items of one source by URL, for records whose id changed but whose URL is known."""

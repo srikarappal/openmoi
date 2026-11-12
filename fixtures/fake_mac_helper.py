@@ -9,10 +9,44 @@ test can see what openMoi asked and that it never asked to write.
 
 import json
 import os
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
-DATA_COMMANDS = {"calendar": "calendar", "mail": "mail", "notes": "notes"}
+
+def when(text: str) -> datetime:
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def calendar(events: list, args: dict) -> list:
+    """Events overlapping the window asked for, as EventKit gives them."""
+    start, end = when(args["from"]), when(args["to"])
+    return [event for event in events if when(event["start"]) < end and when(event["end"]) > start][: args.get("limit", 200)]
+
+
+def mail(messages: list, args: dict) -> list:
+    """Messages since the time asked for, of the kind asked for, counting only those toward the limit, as the
+    helper's script does."""
+    since = when(args["since"])
+    orders = re.compile(args.get("orders", "order"), re.IGNORECASE)
+    found = []
+    for message in messages:
+        if when(message["date"]) < since:
+            continue
+        if args.get("mode") == "orders" and not orders.search(message.get("subject", "")):
+            continue
+        if args.get("mode") == "newsletters" and not message.get("unsubscribe"):
+            continue
+        found.append(message)
+    return found[: args.get("limit", 50)]
+
+
+def notes(entries: list, args: dict) -> list:
+    return entries[: args.get("limit", 50)]
+
+
+DATA_COMMANDS = {"calendar": calendar, "mail": mail, "notes": notes}
 
 
 def answer(payload: dict) -> None:
@@ -44,12 +78,13 @@ def main() -> None:
     if command in DATA_COMMANDS:
         if status.get(command, "not_asked") != "allowed":
             answer({"ok": False, "kind": "permission", "error": f"{command.title()} access is {status.get(command, 'not_asked')}"})
-        answer({"ok": True, "data": world.get(command, [])})
+        answer({"ok": True, "data": DATA_COMMANDS[command](world.get(command, []), args)})
     if command == "files":
         folders = args.get("folders") or []
         if not folders:
             answer({"ok": False, "kind": "bad_input", "error": "folders must list the folders you opted into"})
-        answer({"ok": True, "data": world.get("files", [])})
+        inside = [entry for entry in world.get("files", []) if any(entry["path"].startswith(folder.rstrip("/") + "/") for folder in folders)]
+        answer({"ok": True, "data": inside[: args.get("limit", 100)]})
     answer({"ok": False, "kind": "bad_input", "error": f"unknown command {command}"})
 
 

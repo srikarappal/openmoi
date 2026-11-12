@@ -38,7 +38,8 @@ function apps_world(): string {
 test("Calendar and Mail fill a view through the Mac helper, Calendar only once you allow it, and nothing is clicked", async () => {
   const apps = apps_world()
   const feed = `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/tech.xml\n`
-  const today = "# Today\n\n## Sources\n* Calendar\n* Mail: newsletters\n"
+  // Two days, so meetings an hour or three away still show when the test runs late in the evening.
+  const today = "# Today\n\n## Sources\n* Calendar: next 2 days\n* Mail: newsletters\n"
   const harness = await Harness.launch(world, { views: { feed, today }, env: { MOI_MAC_HELPER: FAKE_HELPER, MOI_FAKE_APPS: apps } })
   try {
     await eventually(

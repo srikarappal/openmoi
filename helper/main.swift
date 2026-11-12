@@ -16,6 +16,8 @@ let MAX_ITEMS = 200
 let MAIL_BUNDLE = "com.apple.mail"
 let NOTES_BUNDLE = "com.apple.Notes"
 let FOLDER_DEPTH = 2
+// A script talking to Mail or Notes gets this long; then it is stopped, so a hung app never holds a read.
+let SCRIPT_SECONDS = 20.0
 
 struct HelperError: Error {
     let kind: String
@@ -79,8 +81,8 @@ func calendar_events(_ args: [String: Any]) throws -> [[String: Any]] {
     let store = EKEventStore()
     let events = store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: nil))
     return events.prefix(limit_of(args, MAX_ITEMS)).map { event in
-        let attendees: [[String: String]] = (event.attendees ?? []).map { person in
-            ["name": person.name ?? "", "email": person.url.absoluteString.replacingOccurrences(of: "mailto:", with: "")]
+        let attendees: [[String: Any]] = (event.attendees ?? []).map { person in
+            ["name": person.name ?? "", "email": person.url.absoluteString.replacingOccurrences(of: "mailto:", with: ""), "me": person.isCurrentUser]
         }
         return [
             "id": event.calendarItemIdentifier,
@@ -115,6 +117,7 @@ let MAIL_SCRIPT = """
 function run(argv) {
   const args = JSON.parse(argv[0])
   const since = new Date(args.since)
+  const orders = new RegExp(args.orders, "i")
   const Mail = Application("Mail")
   const messages = Mail.inbox.messages
   const total = messages.length
@@ -123,10 +126,13 @@ function run(argv) {
     const message = messages[index]
     const received = message.dateReceived()
     if (received < since) continue
+    const subject = message.subject() || ""
+    if (args.mode === "orders" && !orders.test(subject)) continue
     const headers = (message.allHeaders() || "").toLowerCase()
+    if (args.mode === "newsletters" && headers.indexOf("list-unsubscribe:") < 0) continue
     found.push({
       id: message.messageId(),
-      subject: message.subject() || "",
+      subject: subject,
       sender: message.sender() || "",
       date: received.toISOString(),
       unsubscribe: headers.indexOf("list-unsubscribe:") >= 0,
@@ -161,9 +167,21 @@ func run_jxa(_ script: String, _ args: [String: Any]) throws -> Any {
     process.standardOutput = output
     process.standardError = errors
     try process.run()
+    var timed_out = false
+    let deadline = DispatchWorkItem {
+        if process.isRunning {
+            timed_out = true
+            process.terminate()
+        }
+    }
+    DispatchQueue.global().asyncAfter(deadline: .now() + SCRIPT_SECONDS, execute: deadline)
     let data = output.fileHandleForReading.readDataToEndOfFile()
     let problem = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     process.waitUntilExit()
+    deadline.cancel()
+    if timed_out {
+        throw HelperError(kind: "unavailable", message: "the app did not answer within \(Int(SCRIPT_SECONDS)) s")
+    }
     guard process.terminationStatus == 0 else {
         let kind = problem.contains("-1743") || problem.contains("Not authorized") ? "permission" : "unavailable"
         throw HelperError(kind: kind, message: problem.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -178,7 +196,12 @@ func mail_messages(_ args: [String: Any]) throws -> Any {
     }
     let since = try parse_date(args["since"], "since")
     let limit = limit_of(args, 50)
-    return try run_jxa(MAIL_SCRIPT, ["since": iso(since), "limit": limit, "scan": limit * 4, "body": MAX_BODY])
+    let mode = (args["mode"] as? String) ?? "newsletters"
+    guard mode == "newsletters" || mode == "orders" else {
+        throw HelperError(kind: "bad_input", message: "mode must be newsletters or orders")
+    }
+    let orders = (args["orders"] as? String) ?? "order"
+    return try run_jxa(MAIL_SCRIPT, ["since": iso(since), "limit": limit, "scan": 2000, "body": MAX_BODY, "mode": mode, "orders": orders])
 }
 
 func notes_list(_ args: [String: Any]) throws -> Any {

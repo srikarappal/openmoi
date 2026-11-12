@@ -227,7 +227,7 @@ export class BrainClient {
     return this.request("GET", "/apps")
   }
 
-  allow_app(capability: "calendar" | "mail" | "notes"): Promise<AppAccess> {
+  allow_app(capability: "calendar" | "mail" | "notes" | "files"): Promise<AppAccess> {
     return this.request("POST", "/apps/allow", { capability })
   }
 

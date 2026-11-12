@@ -22,7 +22,7 @@ from moi_brain.compile import VIEW_ID, AppRef, BadInput, CompiledView, Compiler,
 from moi_brain.agents import AgentKind, AgentRun, AgentRunner, Budget, ComposerReply, ItemSummary, PlanDraft, PlanStep, composer_messages, load_runs, plan_expiry, planner_messages, summary_messages
 from moi_brain.actions import KINDS, RATE_CAPS, RATE_WINDOW, UNDO_SECONDS, ActionAnchor, ActionDecision, ActionKind, ActionRequest, ActionResult, AuditLog, new_request_id, plain_url, policy_flag, state_key
 from moi_brain.answers import MAX_SOURCES, Answer, AnswerReply, answer_prompt, cited
-from moi_brain.apps import WHY, AppError, Capability, MacHelper, permission_text, read_app
+from moi_brain.apps import WHY, AppError, Capability, MacHelper, app_location, permission_text, read_app, start_of_day
 from moi_brain.collections import READ_LATER, collection_name, collection_title, export_json, export_markdown, is_collection_name
 from moi_brain.content import ContentSummary, caption_allowed, is_video, offline_blocks, summary_extra, summary_prompt, transcript_text
 from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, save_settings
@@ -81,7 +81,7 @@ from moi_brain.policy import Mode, load_policy, policy_for
 from moi_brain.rank import PAGE_SIZE, Circles, Order, applies, kept_share, rank
 from moi_brain.ranker import Ranker, features
 from moi_brain.relay import RelayHub
-from moi_brain.store import Store
+from moi_brain.store import Store, rewritten
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
 from moi_brain.shop import MAX_QUERY, ShopState, parse_price, price_note, product_key, search_urls, shop_source_id
 from moi_brain.sharing import MAX_IMPORT, clean_import, people_names, session_reads, share_text, view_name
@@ -437,7 +437,7 @@ class Brain:
                 except FeedError as error:
                     self.source_status[key] = str(error)
                 except AppError as error:
-                    self.source_status[key] = permission_text(location, error.kind, str(error))
+                    self.source_status[key] = permission_text(location.split(":")[0], error.kind, str(error))
                 except Exception as error:
                     print(f"refresh of {source_id} failed: {error!r}", file=sys.stderr)
                     self.source_status[key] = f"could not be stored: {error}"
@@ -451,29 +451,45 @@ class Brain:
         for source in compiled.sources:
             readers += [(youtube_source_id(channel), channel, partial(self.fetcher.fetch_youtube, channel)) for channel in source.channels]
             readers += [(rss_source_id(feed), feed, partial(self.fetcher.fetch_rss, feed)) for feed in source.feeds]
-            readers += [(app.source_id, app.app, partial(self.read_app_source, app)) for app in source.apps]
+            readers += [(app.source_id, app_location(app), partial(self.read_app_source, app)) for app in source.apps]
         return readers
 
     def read_app_source(self, ref: AppRef) -> list[dict[str, Any]]:
-        """An app's records now; for Calendar, which events are current, so a moved or deleted one leaves the view."""
+        """An app's records now; for Calendar, which events are current in that window (today, or some days), so a
+        moved or deleted one leaves the views reading it. Files are read only once you allowed them."""
+        if ref.app == "files" and not self.files_allowed():
+            raise AppError("permission", "Files are not allowed yet")
         records = read_app(self.mac, ref, self.clock())
         if ref.app == "calendar":
-            write_atomic(self.paths.state / "calendar.json", json.dumps({"ids": [record["native_id"] for record in records]}))
+            with self.lock:
+                windows = read_json(self.paths.state / "calendar.json", {})
+                windows = windows if isinstance(windows, dict) else {}
+                windows[str(ref.days)] = [record["native_id"] for record in records]
+                write_atomic(self.paths.state / "calendar.json", json.dumps(windows))
         return records
 
-    def current_events(self) -> set[str] | None:
-        """The native ids of events in the last Calendar read, or None before the first one."""
-        found = read_json(self.paths.state / "calendar.json", None)
-        return set(found.get("ids", [])) if isinstance(found, dict) else None
+    def current_events(self, days: int) -> set[str] | None:
+        """The native ids of events in the last read of a Calendar window, or None before its first one."""
+        found = read_json(self.paths.state / "calendar.json", {})
+        ids = found.get(str(days)) if isinstance(found, dict) else None
+        return set(ids) if isinstance(ids, list) else None
+
+    def files_allowed(self) -> bool:
+        return bool(read_json(self.paths.state / "apps.json", {}).get("files"))
 
     def app_access(self) -> AppAccess:
+        files = "allowed" if self.files_allowed() else "not_asked"
         try:
-            return AppAccess(status=self.mac.status())
+            return AppAccess(status={**self.mac.status(), "files": files})
         except AppError as error:
             return AppAccess(message=str(error))
 
     def allow_app(self, capability: Capability) -> AppAccess:
-        """You said /allow for one app: macOS asks you, once, for read access to it alone."""
+        """You said /allow for one app: macOS asks you, once, for read access to it alone. Files are openMoi's own
+        switch: once on, the next read may make macOS ask about a protected folder (Documents, Desktop), right then."""
+        if capability == "files":
+            write_atomic(self.paths.state / "apps.json", json.dumps({**read_json(self.paths.state / "apps.json", {}), "files": True}))
+            return AppAccess(status={"files": "allowed"}, message=f"openMoi can read files now, {WHY['files']} macOS may ask about a protected folder such as Documents.")
         try:
             status = self.mac.allow(capability)
         except AppError as error:
@@ -525,7 +541,10 @@ class Brain:
         return PageSource(source_id=watch_source_id(url), page_type="watch", start_url=url, spec=None, budget=self.budget_for(url), purpose="watch", mode=policy_for(self.policies, url).mode)
 
     def readable_in_a_tab(self, url: str) -> bool:
-        """A page openMoi may open in a reader tab of its own: its site is active and not assist only."""
+        """A web page openMoi may open in a reader tab of its own: its site is active and not assist only. An item
+        from an app on this Mac never is."""
+        if not url.startswith(("https://", "http://")):
+            return False
         policy = policy_for(self.policies, url)
         return policy.status == "active" and policy.mode == "pilot"
 
@@ -665,6 +684,9 @@ class Brain:
         normalized = [normalize(source_id, record, now, page_url) for record in records]
         items = list({item.item_id: item for item in normalized if item}.values())
         known = self.store.get_items([item.item_id for item in items])
+        if rewritten(source_id):
+            # An app item is taken as the app has it now; the store keeps what tagging said while its words hold.
+            known = {item.item_id: item for item in items if item.item_id in known}
         recent = self.store.items_since(now - CLUSTER_WINDOW)
         new_items = [enriched(item) for item in items if item.item_id not in known]
         kind, vectors = self.item_vectors(new_items, [item for item, _ in recent])
@@ -1035,15 +1057,21 @@ class Brain:
                 mentions.setdefault(item.item_id, []).append(Mention(entity=entity, status=status, can_look_up=status == "unresolved" and searchable))
         return cards, related, mentions
 
-    def current_calendar(self, items: list[Item], now: datetime) -> list[Item]:
-        """Calendar events still on: in the last read of Calendar, and not over before today began."""
-        current = self.current_events()
-        today = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    def current_calendar(self, compiled: CompiledView, items: list[Item], now: datetime) -> list[Item]:
+        """Calendar events still on for this view: in the last read of its own window, starting before that window
+        ends and not over before today began."""
+        windows = [app.days for source in compiled.sources for app in source.apps if app.app == "calendar"]
+        if not windows:
+            return [item for item in items if item.source_id != "app:calendar"]
+        days = max(windows)
+        current = self.current_events(days)
+        today = start_of_day(now)
+        until = start_of_day(today + timedelta(days=days, hours=12))
         kept = []
         for item in items:
             if item.source_id == "app:calendar":
-                end = parse_time(item.extra.get("end"))
-                if (current is not None and item.native_id not in current) or (end and end < today):
+                end, start = parse_time(item.extra.get("end")), item.published_at
+                if (current is not None and item.native_id not in current) or (end and end < today) or (start and start >= until):
                     continue
             kept.append(item)
         return kept
@@ -1566,7 +1594,7 @@ class Brain:
             items, related, mentions = self.mention_cards(compiled, items, now)
         elif match.kind == "enrich" and match.lead:
             items = [item for item in items if in_source(item.source_id, match.lead)]
-        items = self.current_calendar(items, now)
+        items = self.current_calendar(compiled, items, now)
         if match.kind == "time_window":
             events = [item for item in items if item.source_id == "app:calendar"]
             others = [item for item in items if item.source_id != "app:calendar" and (item.published_at or item.fetched_at) >= now - DAY_WINDOW]

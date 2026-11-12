@@ -312,8 +312,12 @@ class AppRef(BaseModel):
 
     @property
     def source_id(self) -> str:
+        """Mail newsletters and orders apart; each set of folders its own source, so a view sees only the folders
+        it names."""
         if self.app == "mail":
             return MAIL_ORDERS if self.what == "orders" else "app:mail"
+        if self.app == "files":
+            return f"app:files:{hashlib.sha256(chr(10).join(sorted(self.folders)).encode()).hexdigest()[:12]}"
         return f"app:{self.app}"
 
 
@@ -494,7 +498,8 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
         sources.append(SourceRef(source_id="shop", stores=list(dict.fromkeys(stores))))
     if apps:
         folders = list(dict.fromkeys(folder for app in apps for folder in app.folders))
-        merged = {app.source_id: app for app in apps if app.app != "files"} | ({"app:files": AppRef(app="files", folders=folders)} if folders else {})
+        files = [AppRef(app="files", folders=folders)] if folders else []
+        merged = {app.source_id: app for app in [*apps, *files] if app.app != "files" or app.folders == folders}
         sources.append(SourceRef(source_id="app", apps=list(merged.values())))
     if pages or following or watches:
         unique_watches = list({watch.url: watch for watch in watches}.values())
