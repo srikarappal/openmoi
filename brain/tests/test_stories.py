@@ -174,3 +174,14 @@ def test_the_update_worker_survives_failures_and_a_model_that_is_down(tmp_path, 
         updater.enqueue([(seen.item_id, new.item_id)])
         wait_quiet(updater)
         assert store.get_item(new.item_id).extra[UPDATE_KEY] == "Update: new facts now"
+
+
+def test_a_retelling_never_replaces_a_story_you_saw_an_hour_ago(client, paths):
+    (paths.views / "news.md").write_text("# News\n\n## Sources\n* RSS: https://a.example/rss\n* RSS: https://b.example/rss\n")
+    earlier = (NOW - timedelta(hours=3)).isoformat()
+    record = {"native_id": "a1", "url": "https://rss-a.example/a1", "title": "Bridge closed after storm damage downtown", "published_at": earlier}
+    [first] = [item["item_id"] for item in client.post("/ingest", json={"source_id": "rss:a", "records": [record]}).json()["items"]]
+    client.post("/events", json={"events": [{"view_id": "news", "item_id": first, "event_kind": "seen"}]})
+    ingest(client, "rss:b", [("b1", "Bridge closed after storm damage downtown, officials say")])
+    page = settled(client)
+    assert [entry["item"]["item_id"] for entry in page["items"]] == [first]

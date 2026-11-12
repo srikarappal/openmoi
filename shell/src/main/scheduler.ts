@@ -4,7 +4,8 @@ import type { ContentWanted, PageSource, ViewSchedule } from "../shared/types"
 import type { BrainClient } from "./brain"
 
 const TICK_MS = 60_000
-const SUMMARIES = "summaries"
+// Keys of reads that are not a view's: a view id never holds a NUL or a colon.
+const SUMMARIES = "\0summaries"
 
 export interface SchedulerHooks {
   read(view_id: string): Promise<void>
@@ -14,6 +15,8 @@ export interface SchedulerHooks {
   summarize(wanted: ContentWanted): Promise<void>
   // An edition came out while openMoi was running.
   edition_out(schedule: ViewSchedule): void
+  // A read for an edition finished and the edition is marked read.
+  read_done(view_id: string): void
   failed(text: string): void
 }
 
@@ -65,6 +68,8 @@ export class Scheduler {
     }
     for (const schedule of this.schedules) {
       if (schedule.read_for && !this.running.has(schedule.view_id)) this.read(schedule.view_id, schedule.read_for)
+      // An edition whose own read is still due (the Mac slept through it) is announced once that read is done.
+      if (schedule.edition && schedule.read_for === schedule.edition) continue
       const previous = this.editions.get(schedule.view_id)
       if (schedule.edition && previous !== undefined && previous !== schedule.edition) this.hooks.edition_out(schedule)
       if (schedule.edition) this.editions.set(schedule.view_id, schedule.edition)
@@ -113,7 +118,10 @@ export class Scheduler {
       .read(view_id)
       .catch((error) => this.hooks.failed(`Reading for ${view_id} failed: ${error instanceof Error ? error.message : String(error)}`))
       .then(() => this.brain.schedule_done(view_id, edition))
-      .then(ignore, (error) => this.hooks.failed(`Could not mark the ${view_id} edition read: ${error instanceof Error ? error.message : String(error)}`))
+      .then(
+        () => this.hooks.read_done(view_id),
+        (error) => this.hooks.failed(`Could not mark the ${view_id} edition read: ${error instanceof Error ? error.message : String(error)}`),
+      )
       .finally(() => this.running.delete(view_id))
     this.running.set(view_id, run)
   }

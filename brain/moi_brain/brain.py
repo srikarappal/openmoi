@@ -25,7 +25,20 @@ from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.files import read_json, write_atomic
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
-from moi_brain.items import HANDLE, Event, Item, ViewItem, normalize, page_source_id, profile_handle, rss_source_id, site_host, watch_source_id, youtube_source_id
+from moi_brain.items import (
+    HANDLE,
+    Event,
+    Item,
+    ViewItem,
+    is_private_host,
+    normalize,
+    page_source_id,
+    profile_handle,
+    rss_source_id,
+    site_host,
+    watch_source_id,
+    youtube_source_id,
+)
 from moi_brain.lens_gen import generate_lens
 from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway, LlmError
@@ -37,7 +50,7 @@ from moi_brain.rank import PAGE_SIZE, Circles, Order, applies, kept_share, rank
 from moi_brain.relay import RelayHub
 from moi_brain.store import Store
 from moi_brain.tag import Tagger, is_judged, rule_topics, watch_judgments, watch_list
-from moi_brain.sharing import MAX_IMPORT, clean_import, session_reads, share_text, view_name
+from moi_brain.sharing import MAX_IMPORT, clean_import, people_names, session_reads, share_text, view_name
 from moi_brain.stories import CLUSTER_WINDOW, Updater, assign_clusters, story_key
 from moi_brain.watch import change_item, changed_lines, watch_lines
 
@@ -53,7 +66,9 @@ NOBODY_KNOWN = "Rules about people you know have no one to go on yet: add a Foll
 MIRROR_EVERY = timedelta(days=7)
 # Items a summarize rule wants are summarized while they are this fresh and unseen.
 CONTENT_WINDOW = timedelta(hours=48)
-CONTENT_FAILED = "summary_failed"
+# When an item last could not be read or summarized; it is tried again a day later.
+CONTENT_FAILED = "summary_failed_at"
+CONTENT_RETRY = timedelta(hours=24)
 WHITESPACE = re.compile(r"\s+")
 MomentKind = Literal["visit", "extended", "early"]
 X_DOMAIN = "x.com"
@@ -93,6 +108,8 @@ class WatchAlert(BaseModel):
     view_id: str
     title: str
     text: str
+    # False when the model was not answering, so the change could not be checked against the view's rules.
+    checked: bool = True
 
 
 class WatchReport(BaseModel):
@@ -172,6 +189,14 @@ def url_prefix(url: str) -> str:
     """The part of a page URL a passive source matches on: no query, no fragment."""
     parts = urlparse(url)
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
+
+
+def recently_failed(item: Item, now: datetime) -> bool:
+    """An item whose full read or summary failed less than a day ago."""
+    try:
+        return now - datetime.fromisoformat(item.extra.get(CONTENT_FAILED, "")) < CONTENT_RETRY
+    except ValueError:
+        return False
 
 
 def edition_items(
@@ -283,6 +308,23 @@ class Brain:
             readers += [(rss_source_id(feed), feed, partial(self.fetcher.fetch_rss, feed)) for feed in source.feeds]
         return readers
 
+    def judgment_conflicts(self, compiled: CompiledView) -> list[str]:
+        """A question this view names that another view already asks differently: one name, one set of answers."""
+        shared = {judgment.name: judgment for judgment in self.watch_judgments()}
+        return [
+            f'The question "{judgment.name}" is answered as another view asks it ("{shared[judgment.name].question}"); give it another name in one of the views.'
+            for judgment in compiled.judgments
+            if judgment.name in shared and shared[judgment.name] != judgment
+        ]
+
+    def watch_source(self, url: str) -> PageSource:
+        return PageSource(source_id=watch_source_id(url), page_type="watch", start_url=url, spec=None, budget=self.budget_for(url), purpose="watch", mode=policy_for(self.policies, url).mode)
+
+    def readable_in_a_tab(self, url: str) -> bool:
+        """A page openMoi may open in a reader tab of its own: its site is active and not assist only."""
+        policy = policy_for(self.policies, url)
+        return policy.status == "active" and policy.mode == "pilot"
+
     def policy_warnings(self, compiled: CompiledView) -> list[str]:
         """Pages of this view that the site policy turned off, said once per site."""
         urls = [page for source in compiled.sources for page in [*source.pages, *source.following, *(watch.url for watch in source.watches)]]
@@ -323,14 +365,24 @@ class Brain:
                 )
             for watch in source.watches:
                 if policy_for(self.policies, watch.url).status == "active":
-                    found.append(PageSource(source_id=watch_source_id(watch.url), page_type="watch", start_url=watch.url, spec=None, budget=self.budget_for(watch.url), purpose="watch"))
+                    found.append(self.watch_source(watch.url))
             for page in source.following:
                 if policy_for(self.policies, page).status != "active":
                     continue
                 read_at = self.store.list_read_at(page)
                 if read_at is None or self.clock() - read_at >= FOLLOWS_EVERY:
                     spec = self.extractors.for_url(page)
-                    found.append(PageSource(source_id=page_source_id(page), page_type="following", start_url=page, spec=spec, budget=PILOT_BUDGET, purpose="follows"))
+                    found.append(
+                        PageSource(
+                            source_id=page_source_id(page),
+                            page_type="following",
+                            start_url=page,
+                            spec=spec,
+                            budget=self.budget_for(page),
+                            purpose="follows",
+                            mode=policy_for(self.policies, page).mode,
+                        )
+                    )
         return found
 
     def passive_sources(self) -> list[PageSource]:
@@ -470,7 +522,7 @@ class Brain:
             if not rules:
                 continue
             for item, seen_at in self.store.items_with_seen(compiled.source_ids(), now - CONTENT_WINDOW):
-                if seen_at or "summary" in item.extra or CONTENT_FAILED in item.extra:
+                if seen_at or "summary" in item.extra or recently_failed(item, now) or not self.readable_in_a_tab(item.url):
                     continue
                 if any(applies(rule, item, now, circles) for rule in rules):
                     found[item.item_id] = (item.published_at or item.fetched_at, ContentWanted(item_id=item.item_id, url=item.url, video=is_video(item.url)))
@@ -487,13 +539,13 @@ class Brain:
             text = self.captions(caption_url) or text
         if not text.strip():
             if purpose == "summary":
-                self.store.update_extra(item_id, {CONTENT_FAILED: "no text"})
+                self.store.update_extra(item_id, {CONTENT_FAILED: self.clock().isoformat()})
             return "empty"
         try:
             summary = self.gateway.complete_json("fast", "summarize", summary_prompt(item, title, text), True, ContentSummary)
         except LlmError as error:
             if purpose == "summary":
-                self.store.update_extra(item_id, {CONTENT_FAILED: str(error)[:200]})
+                self.store.update_extra(item_id, {CONTENT_FAILED: self.clock().isoformat()})
             return f"failed: {error}"
         if purpose == "summary":
             self.store.update_extra(item_id, summary_extra(summary))
@@ -518,7 +570,7 @@ class Brain:
         opened = self.store.get_items([event.item_id for event in events if event.event_kind == "open" and event.item_id])
         for event in events:
             item = opened.get(event.item_id or "")
-            if item is None or event.event_kind != "open":
+            if item is None or event.event_kind != "open" or not self.readable_in_a_tab(item.url):
                 continue
             rules = [rule for rule in self.compiler.compiled(check_view_id(event.view_id)).rules if rule.do == "note"]
             if any(applies(rule, item, now, self.circles()) for rule in rules):
@@ -536,7 +588,7 @@ class Brain:
                     if policy_for(self.policies, watch.url).status != "active":
                         continue
                     if last is None or now - last[1] >= timedelta(minutes=watch.every_minutes):
-                        due[watch.url] = PageSource(source_id=watch_source_id(watch.url), page_type="watch", start_url=watch.url, spec=None, budget=PILOT_BUDGET, purpose="watch")
+                        due[watch.url] = self.watch_source(watch.url)
         return list(due.values())
 
     def watch_report(self, url: str, title: str, text: str) -> WatchReport:
@@ -567,7 +619,9 @@ class Brain:
             judged = item
             if needs_tags(compiled):
                 [judged] = self.tagger.tag([item], self.watch_list(), self.watch_judgments())
-                self.store.update_tags([judged] if judged.tagged else [])
+                if not judged.tagged:
+                    return WatchAlert(view_id=compiled.view_id, title=item.title or "", text=item.text or "", checked=False)
+                self.store.update_tags([judged])
             ranked, _ = rank([judged], compiled.rules, self.clock(), circles=self.circles())
             if ranked:
                 return WatchAlert(view_id=compiled.view_id, title=item.title or "", text=item.text or "")
@@ -624,7 +678,8 @@ class Brain:
         circles = self.circles()
         if edition and compiled.time.edition_size:
             items = edition_items(compiled.time.edition_size, edition, entries, items, exclude_ids, compiled.rules, now, long_seen, circles)
-        ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles)
+        seen = {item.item_id for item, seen_at in entries if seen_at}
+        ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles, seen)
         with self.lock:
             reading = view_id in self.refreshing
             refreshing = reading or self.tagger.busy or self.updater.busy
@@ -635,7 +690,7 @@ class Brain:
             problems.append(self.tagger.status)
         if circles.empty and any(condition and condition.field == "author_in" for rule in compiled.rules for condition in (rule.when, rule.unless)):
             problems.append(NOBODY_KNOWN)
-        problems += self.policy_warnings(compiled)
+        problems += self.policy_warnings(compiled) + self.judgment_conflicts(compiled)
         return ViewPage(
             view_id=view_id,
             items=ranked,
@@ -744,16 +799,26 @@ class Brain:
         return self.editor.propose_file(view_id, view_text, reply)
 
     def fetch_shared(self, url: str) -> str:
+        """A shared view from a public https link: no redirects, nothing on this machine or your network, at most 20k."""
         if not url.startswith("https://"):
             raise BadInput("A shared view link must start with https://.")
+        if is_private_host(urlparse(url).hostname or ""):
+            raise BadInput("A shared view link must point to a public site.")
         try:
-            response = self.http.get(url)
-            response.raise_for_status()
+            with self.http.stream("GET", url, follow_redirects=False) as response:
+                if response.is_redirect:
+                    raise BadInput("That link redirects; use the address it leads to.")
+                response.raise_for_status()
+                if not response.headers.get("content-type", "text/plain").startswith(("text/", "application/octet-stream")):
+                    raise BadInput("That link is not a text file.")
+                text = ""
+                for chunk in response.iter_text():
+                    text += chunk
+                    if len(text) >= MAX_IMPORT:
+                        break
         except httpx.HTTPError as error:
             raise BadInput(f"Could not fetch {url}: {error}") from error
-        if not response.headers.get("content-type", "text/plain").startswith(("text/", "application/octet-stream")):
-            raise BadInput("That link is not a text file.")
-        return response.text[:MAX_IMPORT]
+        return text[:MAX_IMPORT]
 
     def share_view(self, view_id: str) -> str:
         """A copy of a view to send to someone, in ~/openMoi/shared, without people, following lists or watched pages."""
@@ -762,7 +827,7 @@ class Brain:
             raise BadInput(f"There is no views/{view_id}.md to share.")
         target = self.paths.home / "shared" / f"{view_id}.md"
         target.parent.mkdir(parents=True, exist_ok=True)
-        write_atomic(target, share_text(text))
+        write_atomic(target, share_text(text, people_names(self.memory.topic_text("people.md"))))
         return str(target)
 
     def create_view(self, view_id: str, title: str | None) -> ViewInfo:

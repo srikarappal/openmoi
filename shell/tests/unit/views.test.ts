@@ -272,7 +272,7 @@ describe("ViewController editions", () => {
     })
     await views.read_for_edition("morning")
     expect(brain.refresh).toHaveBeenCalledWith("morning", true)
-    expect(fills(sources)).toEqual([["x", 120, true, true]])
+    expect(fills(sources)).toEqual([["x", 120, false, true]])
     expect(brain.ingest).toHaveBeenCalledWith("x", [{ url: "https://x.com/1", text: "hi" }], "https://x.com/home")
     expect(brain.view_page).toHaveBeenCalledTimes(2)
     expect(context.send).not.toHaveBeenCalled()
@@ -334,7 +334,7 @@ describe("ViewController editions", () => {
     await views.read_for_edition("morning")
     await views.chrome_connected()
     expect(fills(sources)).toEqual([
-      ["x", 120, true, true],
+      ["x", 120, false, true],
       ["x", 30, true, true],
     ])
   })
@@ -420,7 +420,7 @@ describe("ViewController following lists", () => {
       return { status: "ended", delivered: 1, driver: "chrome" } as FillOutcome
     })
     await views.read_for_edition("morning")
-    expect(fills(sources)).toEqual([["page:x.com/me/following", 2000, true, true]])
+    expect(fills(sources)).toEqual([["page:x.com/me/following", 2000, false, true]])
   })
 
   it("still reads a due following list when an edition opens by itself", async () => {
@@ -576,5 +576,31 @@ describe("ViewController assist pages", () => {
     await views.refresh(context, true)
     expect(hooks.notify).not.toHaveBeenCalled()
     expect(hooks.retract).toHaveBeenCalledWith("source:page:facebook.com/events")
+  })
+})
+
+describe("ViewController after the review", () => {
+  it("shows an open edition view again when a new edition comes out, though its files did not change", async () => {
+    const made = make_views([], [])
+    const lenses = { get: () => made.context, open: vi.fn(async () => made.context), all: () => [made.context] }
+    const seven = { ...PAGE, edition: "2026-11-10T07:00:00Z" } as ViewPage
+    const six = { ...PAGE, edition: "2026-11-10T18:00:00Z" } as ViewPage
+    const answers = [seven, seven, six, six]
+    Object.assign(made.brain, { view_page: vi.fn(async () => answers.shift() ?? six), lens: vi.fn(async () => "<p></p>") })
+    const views = new ViewController(made.brain as unknown as BrainClient, lenses as unknown as LensManager, made.sources as unknown as ReaderPool, made.hooks)
+    await views.on_ready(made.context)
+    const sent = () => (made.context.send as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0].type)
+    await vi.waitFor(() => expect(sent()).toEqual(["render", "append"]))
+    await views.show("feed")
+    expect(sent()).toEqual(["render", "append", "render"])
+  })
+
+  it("skips a summary for now when the day's reads in full are used, without marking the item", async () => {
+    const made = make_views([])
+    Object.assign(made.sources, { read_content: vi.fn(async () => ({ status: "failed", error: "budget", budget: true })) })
+    const add_content = vi.fn()
+    Object.assign(made.brain, { add_content })
+    await made.views.summarize({ item_id: "a1", url: "https://blog.example/1", video: false })
+    expect(add_content).not.toHaveBeenCalled()
   })
 })

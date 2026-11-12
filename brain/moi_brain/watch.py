@@ -6,7 +6,12 @@ from datetime import datetime
 
 from moi_brain.items import Item, clean_text, make_item_id, site_host
 
-RELATIVE_TIME = re.compile(r"\b\d+\s*(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)\s+ago\b|\bjust now\b", re.IGNORECASE)
+RELATIVE_TIME = re.compile(
+    r"\b(?:\d+|an?|one)\s*(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|wks?|months?|years?|[smhdw])\.?\s+ago\b|\bjust now\b",
+    re.IGNORECASE,
+)
+# A line that is only a short time stamp: "5h", "3 m", "12:40", "9:05 pm".
+COMPACT_TIME = re.compile(r"^(?:\d{1,3}\s?[smhdw]|\d{1,2}:\d{2}(?:\s?[ap]m)?)$", re.IGNORECASE)
 MAX_WATCH_TEXT = 20_000
 MAX_CHANGE_TEXT = 1_500
 
@@ -14,7 +19,7 @@ MAX_CHANGE_TEXT = 1_500
 def watch_lines(text: str) -> list[str]:
     """The page's lines with spacing collapsed and relative times taken out, so only real changes differ."""
     lines = (" ".join(RELATIVE_TIME.sub("", line).split()) for line in text[:MAX_WATCH_TEXT].splitlines())
-    return [line for line in lines if line]
+    return [line for line in lines if line and not COMPACT_TIME.match(line)]
 
 
 def changed_lines(before: list[str], after: list[str]) -> tuple[list[str], list[str]]:

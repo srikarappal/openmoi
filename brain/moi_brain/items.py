@@ -96,6 +96,17 @@ def is_local_host(hostname: str) -> bool:
     return True
 
 
+def is_private_host(hostname: str) -> bool:
+    """localhost, or an address on this machine or a private network: never fetched for a shared link."""
+    if hostname in ("localhost", "") or hostname.endswith(".local"):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname.strip("[]"))
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local or address.is_reserved
+
+
 def host_label(url: str) -> str:
     """The memorable part of a host: feeds.arstechnica.com becomes arstechnica, alice.substack.com alice.substack.
 
@@ -135,6 +146,8 @@ HOST_ALIASES = {"twitter.com": "x.com"}
 HOST_PREFIXES = ("www.", "mobile.", "m.")
 # First path parts of a profile link that are not handles.
 NOT_HANDLES = {"i", "home", "explore", "settings", "search", "hashtag", "p", "reel", "reels", "stories", "watch", "pages"}
+# Profile links that name the account in their second part: linkedin.com/in/maya, youtube.com/channel/UC..., /user/maya.
+PROFILE_PREFIXES = {"in", "channel", "c", "user", "u", "company", "school", "people", "profile"}
 
 
 def site_host(url: str) -> str:
@@ -156,7 +169,12 @@ def profile_handle(record: dict[str, Any], base_url: str | None) -> tuple[str, s
     handle = clean_text(record.get("author_handle"), 200)
     if not handle:
         parts = [part for part in urlparse(url).path.split("/") if part]
-        handle = parts[0] if parts and parts[0].lower() not in NOT_HANDLES else None
+        if parts and parts[0].lower() == "profile.php":
+            handle = dict(parse_qsl(urlparse(url).query)).get("id")
+        elif len(parts) > 1 and parts[0].lower() in PROFILE_PREFIXES:
+            handle = parts[1]
+        elif parts and parts[0].lower() not in NOT_HANDLES | PROFILE_PREFIXES:
+            handle = parts[0]
     handle = handle.lstrip("@/").lower() if handle else ""
     return (site_host(url), handle) if handle else None
 

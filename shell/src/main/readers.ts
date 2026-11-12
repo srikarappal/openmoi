@@ -5,6 +5,7 @@
 // newer than them was missed. One old post alone (a pinned one) does not count.
 import { record_key } from "../shared/extract"
 import { Throttle, sleep } from "../shared/timing"
+import { MAX_FULL_TEXT } from "../shared/article"
 import type { ExtractorSpec, ItemContent, PageSource, PageText, RawRecord, TranscriptSource } from "../shared/types"
 import type { BrainClient } from "./brain"
 import type { DriverKind, PageDriver } from "./drivers"
@@ -41,7 +42,8 @@ export type FillOutcome =
   // final: retrying cannot help (the page has no items a spec can find), so no second attempt is made.
   | { status: "failed"; error: string; driver: DriverKind; final?: boolean }
 
-export type ContentOutcome = { status: "read"; content: ItemContent } | { status: "failed"; error: string }
+// budget: the day's reads in full are used up, which says nothing about the item itself.
+export type ContentOutcome = { status: "read"; content: ItemContent } | { status: "failed"; error: string; budget?: boolean }
 
 export type TextOutcome = { status: "read"; page: PageText; driver: DriverKind } | { status: "skipped" } | { status: "challenge"; url: string; driver: DriverKind } | { status: "failed"; error: string; driver: DriverKind }
 
@@ -121,7 +123,7 @@ export class ReaderPool {
   // One item read in full in a quiet tab that closes again: an article's text, or a video page's captions address.
   // At most 50 a day over all sites.
   async read_content(url: string, video: boolean): Promise<ContentOutcome> {
-    if (!this.spend(CONTENT_BUDGET, DAILY_CONTENT_READS)) return { status: "failed", error: "today's budget for reading items in full is used" }
+    if (!this.spend(CONTENT_BUDGET, DAILY_CONTENT_READS)) return { status: "failed", error: "today's budget for reading items in full is used", budget: true }
     const driver = await this.driver_for()
     let handle: string | null = null
     try {
@@ -132,7 +134,7 @@ export class ReaderPool {
         const source = await driver.run<TranscriptSource>(handle, "transcript")
         return { status: "read", content: { title: source.title, text: source.description, caption_url: source.caption_url } }
       }
-      const article = await driver.run<RawRecord | null>(handle, "readability")
+      const article = await driver.run<RawRecord | null>(handle, "readability", { max_text: MAX_FULL_TEXT })
       if (article) return { status: "read", content: { title: article.title ?? "", text: article.text ?? "", caption_url: null } }
       const page = await driver.run<PageText>(handle, "text")
       return { status: "read", content: { title: page.title, text: page.text, caption_url: null } }
@@ -244,9 +246,10 @@ export class ReaderPool {
     const known = this.known.get(tab.source_id) ?? new Set<string>()
     this.known.set(tab.source_id, known)
     const fresh = records.filter((record) => !known.has(record_key(record)))
-    for (const record of fresh) known.add(record_key(record))
     if (!fresh.length) return 0
     const stored = await on_batch(fresh)
+    // Only records the brain took count as handed over: a batch that failed is offered again on the next look.
+    for (const record of fresh) known.add(record_key(record))
     for (const index of stored ?? []) if (fresh[index]) tab.read_before.add(record_key(fresh[index]))
     return fresh.length
   }

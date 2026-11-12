@@ -47,6 +47,8 @@ const UNRECOGNIZED_TAG = "relay:unrecognized"
 // Tests run time faster; a minute is a minute otherwise.
 const MINUTE_MS = Number(process.env.MOI_MINUTE_MS) || 60_000
 const EXTRA_MINUTES = 5
+// A visit that ran out while you were elsewhere still ends at the stop screen if you come back this soon.
+const OVERDUE_MINUTES = 30
 
 interface Visit {
   view_id: string
@@ -77,6 +79,7 @@ export class Shell implements ViewHost {
   private gate: GateChoice[] | null = null
   private stop: StopScreen | null = null
   private visit: Visit | null = null
+  private overdue: (Visit & { ended_at: number }) | null = null
   private readonly chrome_pages = new Map<number, ChromePageInfo>()
   private next_chrome_page = 1
   private active: ActiveTarget = { kind: "view", view_id: "feed" }
@@ -157,6 +160,9 @@ export class Shell implements ViewHost {
         // Not forced: a page that keeps failing is tried at most every 10 minutes, not every minute.
         watch: (source) => this.views.check_watch(source, false),
         summarize: (wanted) => this.views.summarize(wanted),
+        read_done: (view_id) => {
+          this.views.after_edit(view_id).catch((error) => this.notify(String(error)))
+        },
         edition_out: (schedule) => this.edition_out(schedule),
         failed: (text) => this.notify(text),
       },
@@ -255,6 +261,12 @@ export class Shell implements ViewHost {
   // A visit starts when you open a view that has a visit length; opening another view ends it.
   private begin_visit(view_id: string, minutes = this.schedule_of(view_id)?.visit_minutes ?? 0, kind: MomentKind = "visit"): void {
     if (this.visit?.view_id === view_id) return
+    const overdue = this.overdue
+    this.overdue = null
+    if (kind === "visit" && overdue?.view_id === view_id && Date.now() - overdue.ended_at < OVERDUE_MINUTES * MINUTE_MS) {
+      this.show_stop(overdue)
+      return
+    }
     if (this.visit) clearTimeout(this.visit.timer)
     this.visit = null
     if (minutes <= 0) return
@@ -262,11 +274,20 @@ export class Shell implements ViewHost {
     this.brain.moment(view_id, kind).catch(ignore)
   }
 
-  // Time is up: if you are still in the view, it gives way to the stop screen with what you read.
+  // Time is up: if you are still in the view, it gives way to the stop screen with what you read; if you went
+  // elsewhere, the stop screen waits for you to come back to the view.
   private visit_over(): void {
     const visit = this.visit
     this.visit = null
-    if (!visit || this.active.kind !== "view" || this.active.view_id !== visit.view_id) return
+    if (!visit) return
+    if (this.active.kind !== "view" || this.active.view_id !== visit.view_id) {
+      this.overdue = { ...visit, ended_at: Date.now() }
+      return
+    }
+    this.show_stop(visit)
+  }
+
+  private show_stop(visit: Visit): void {
     this.stop = {
       view_id: visit.view_id,
       title: this.view_infos.find((view) => view.view_id === visit.view_id)?.title ?? visit.view_id,
@@ -291,6 +312,7 @@ export class Shell implements ViewHost {
 
   // An edition that came out while the window is away from you shows as a system notification; click it to read.
   private edition_out(schedule: ViewSchedule): void {
+    this.views.after_edit(schedule.view_id).catch((error) => this.notify(String(error)))
     if (!schedule.edition || (this.window.isVisible() && this.window.isFocused())) return
     const notification = new Notification({ title: schedule.title, body: `The ${clock_time(schedule.edition)} edition is out.` })
     notification.on("click", () => {

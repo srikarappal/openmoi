@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from moi_brain.api import create_app
 from moi_brain.brain import Brain
-from moi_brain.sharing import MAX_IMPORT, clean_import, session_reads, share_text, view_name
+from moi_brain.sharing import MAX_IMPORT, clean_import, people_names, session_reads, share_text, view_name
 
 FRIEND = """# AI news without hype
 <!-- made by a friend; ## Secrets inside a comment is not a section -->
@@ -55,6 +55,13 @@ def test_an_import_says_what_it_reads_in_your_session():
     assert session_reads(text) == ["Page: https://www.reddit.com/r/MachineLearning/new (newest first)"]
 
 
+def test_a_shared_copy_leaves_out_people_named_in_your_people_file():
+    names = people_names("# people\n\n* Maya Kumar, my sister: @maya on x.com\n* Ben (work)\n* @solo\n")
+    assert names == ["Maya Kumar", "Maya", "Ben"]
+    mine = "# Feed\n\n## Rules\n* Always show Maya first.\n* Mayan history is fine.\n* More of Ben's posts.\n* No shorts.\n"
+    assert share_text(mine, names) == "# Feed\n\n## Rules\n* Mayan history is fine.\n* No shorts.\n"
+
+
 def test_a_shared_copy_leaves_out_people_following_lists_and_watched_pages():
     mine = "# Friends\n\n## Sources\n* X home timeline\n* Following: https://x.com/me/following\n* Watch: https://school.example/news\n\n## Rules\n* Posts from @maya first.\n* No shorts.\n\n## Layout\nTwo columns.\n"
     shared = share_text(mine)
@@ -85,6 +92,10 @@ def test_a_file_that_is_no_view_is_refused(client):
 def shared_link(request: httpx.Request) -> httpx.Response:
     if request.url.path == "/friend.md":
         return httpx.Response(200, text=FRIEND, headers={"content-type": "text/markdown; charset=utf-8"})
+    if request.url.path == "/moved.md":
+        return httpx.Response(302, headers={"location": "http://127.0.0.1:8080/admin"})
+    if request.url.path == "/huge.md":
+        return httpx.Response(200, text=FRIEND + "x" * 100_000, headers={"content-type": "text/plain"})
     if request.url.path == "/image.png":
         return httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"})
     return httpx.Response(404)
@@ -96,7 +107,18 @@ def test_importing_from_a_link(paths, settings, services):
     client = TestClient(create_app(brain, TOKEN), headers={"x-moi-token": TOKEN})
     try:
         assert client.post("/import", json={"url": "https://gist.example/friend.md"}).json()["view_id"] == "ai_news_without_hype"
-        for url, reason in (("http://gist.example/friend.md", "https://"), ("https://gist.example/missing.md", "Could not fetch"), ("https://gist.example/image.png", "not a text file")):
+        assert client.post("/import", json={"url": "https://gist.example/huge.md"}).status_code == 200
+        refusals = (
+            ("http://gist.example/friend.md", "https://"),
+            ("https://gist.example/missing.md", "Could not fetch"),
+            ("https://gist.example/image.png", "not a text file"),
+            ("https://gist.example/moved.md", "redirects"),
+            ("https://127.0.0.1/friend.md", "public site"),
+            ("https://localhost/friend.md", "public site"),
+            ("https://192.168.1.10/friend.md", "public site"),
+            ("https://printer.local/friend.md", "public site"),
+        )
+        for url, reason in refusals:
             refused = client.post("/import", json={"url": url})
             assert refused.status_code == 400 and reason in refused.json()["detail"]
     finally:

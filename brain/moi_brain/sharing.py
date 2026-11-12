@@ -47,14 +47,29 @@ def session_reads(text: str) -> list[str]:
     return [line for line in bullets(section_text(sections, "sources")) if re.match(r"^\s*(x|twitter|page|watch|following)\b", line, re.IGNORECASE)]
 
 
-def share_text(text: str) -> str:
-    """Your view without rule lines that name people, your following lists or the pages you watch."""
+def people_names(people: str) -> list[str]:
+    """Names from memory/people.md, and each one's first name: "* Maya Kumar, my sister: @maya" gives Maya Kumar and Maya."""
+    names: list[str] = []
+    for line in bullets(people):
+        name = re.split(r"[,:(]", HANDLE.sub("", line), maxsplit=1)[0].strip()
+        if len(name) >= 2:
+            names += [name, name.split()[0]]
+    return list(dict.fromkeys(names))
+
+
+def names_someone(line: str, names: list[str]) -> bool:
+    return bool(HANDLE.search(line)) or any(re.search(rf"\b{re.escape(name)}\b", line, re.IGNORECASE) for name in names)
+
+
+def share_text(text: str, names: list[str] | None = None) -> str:
+    """Your view without rule lines that name people (a handle, or someone in your people file), your following
+    lists or the pages you watch."""
     title, sections = parse_sections(text)
     kept = dict(sections)
     for name, body in sections.items():
         lowered = name.lower()
         if lowered == "rules":
-            kept[name] = "\n".join(f"* {line}" for line in bullets(body) if not HANDLE.search(line))
+            kept[name] = "\n".join(f"* {line}" for line in bullets(body) if not names_someone(line, names or []))
         elif lowered == "sources":
             kept[name] = "\n".join(f"* {line}" for line in bullets(body) if not PERSONAL_SOURCES.match(line))
     return view_text(title or "Shared view", kept)

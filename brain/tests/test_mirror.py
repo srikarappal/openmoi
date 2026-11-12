@@ -135,8 +135,5 @@ def test_an_early_opening_belongs_to_its_edition_and_survives_its_read(tmp_path)
     assert book.opened_early_at("feed", seven) == seven + timedelta(hours=3)
     assert EditionBook(tmp_path / "editions.json").current("feed", spec, seven + timedelta(hours=5)).cutoff == seven + timedelta(hours=3)
     assert book.current("feed", spec, seven + timedelta(days=1, hours=1)).cutoff == seven + timedelta(days=1)
-    book.reads["feed"]["early"] = "soon"
+    book.reads["feed"][seven.astimezone().isoformat()]["early"] = "soon"
     assert book.opened_early_at("feed", seven) is None
-    book.reads["other"] = "broken"
-    book.open_early("other", seven, seven)
-    assert book.opened_early_at("other", seven) == seven

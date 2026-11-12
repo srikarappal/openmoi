@@ -67,6 +67,11 @@ function and_list(parts: string[]): string {
   return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts.join("")
 }
 
+// What a lens shows changes with its files and, for a view in editions, with the edition on show.
+function render_version(page: ViewPage): string {
+  return `${page.version}@${page.edition ?? ""}`
+}
+
 function label_of(item: Item): string {
   return item.title || item.text?.slice(0, MAX_TITLE) || item.url
 }
@@ -113,7 +118,7 @@ export class ViewController {
     const existing = this.lenses.get(view_lens_key(view_id))
     if (!existing) return this.lenses.open(view_lens_key(view_id), view_id, await this.brain.lens(view_id, "feed"))
     const page = await this.brain.view_page(view_id, [])
-    if (page.version !== this.versions.get(view_id)) await existing.serial(() => this.render(existing))
+    if (render_version(page) !== this.versions.get(view_id)) await existing.serial(() => this.render(existing))
     return existing
   }
 
@@ -132,7 +137,7 @@ export class ViewController {
     const page = await this.brain.view_page(context.view_id, [])
     this.furthest.delete(context.key)
     context.send({ type: "render", items: page.items, cursor: this.cursor_for(page) })
-    this.versions.set(context.view_id, page.version)
+    this.versions.set(context.view_id, render_version(page))
     const previous = this.summaries.get(context.view_id)
     if (previous !== undefined && previous !== page.summary) this.hooks.echo(`I understood: ${page.summary}`)
     this.summaries.set(context.view_id, page.summary)
@@ -211,6 +216,7 @@ export class ViewController {
   // An item a summarize rule wants: read in full, then summarized by the brain onto its card for the next time it shows.
   async summarize(wanted: ContentWanted): Promise<void> {
     const outcome = await this.hooks.track(`Reading ${wanted.url} in full`, () => this.readers.read_content(wanted.url, wanted.video))
+    if (outcome.status === "failed" && outcome.budget) return
     const content = outcome.status === "read" ? outcome.content : { title: "", text: "", caption_url: null }
     const result = await this.brain.add_content(wanted.item_id, "summary", content.title, content.text, content.caption_url)
     if (!result.item) return
@@ -278,7 +284,8 @@ export class ViewController {
     await this.hooks.track(`Reading for the next ${view_id} edition`, async () => {
       const { page_sources } = await this.brain.refresh(view_id, true)
       const wanted = this.wanted_first(page_sources, EDITION_RECORDS)
-      await this.queued(view_id, () => this.read_sources(view_id, page_sources, true, wanted, true))
+      // Not forced: a source read minutes ago, or resting after a sign in check, is not read again for the edition.
+      await this.queued(view_id, () => this.read_sources(view_id, page_sources, false, wanted, true))
       await this.feeds_fetched(view_id)
     })
   }

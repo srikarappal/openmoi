@@ -25,7 +25,7 @@ from moi_brain.memory import Memory
 
 VIEW_ID = re.compile(r"^[\w.-]+$")
 # Bump when compiled views change meaning, so caches from an older openMoi are compiled again.
-COMPILER_VERSION = "11"
+COMPILER_VERSION = "12"
 URL = re.compile(r"https?://[^\s,<>\"]+[^\s,<>\".;:)]")
 HANDLE = re.compile(r"@[\w.-]*\w")
 # A page whose posts come newest first (a Following tab, a chronological list) can be read until it reaches what was read before.
@@ -111,10 +111,26 @@ class Judgment(BaseModel):
         return question.strip()[:MAX_QUESTION] if isinstance(question, str) else question
 
 
+def plain_value(value: object) -> object:
+    """A rule value as answers are stored: true is "yes", 2800.0 is "2800"; text and lists of text stay as they are."""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, int | float):
+        return str(int(value)) if float(value).is_integer() else str(value)
+    if isinstance(value, list):
+        return [plain_value(entry) for entry in value]
+    return value
+
+
 class Condition(BaseModel):
     field: str
     op: Literal["eq", "in", "contains", "gt", "lt"]
-    value: str | float | list[str]
+    value: str | list[str]
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def as_stored(cls, value: object) -> object:
+        return plain_value(value)
 
     @field_validator("field")
     @classmethod

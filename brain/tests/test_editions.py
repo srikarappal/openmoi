@@ -1,5 +1,6 @@
 """The Time section: editions that give a feed its last item, when their reads are due, and visit lengths."""
 
+import json
 import re
 from datetime import UTC, datetime, timedelta
 
@@ -162,13 +163,43 @@ def test_reads_are_due_in_the_lead_time_or_late_but_not_twice(tmp_path):
 
 
 def test_a_damaged_edition_file_starts_over(tmp_path):
-    (tmp_path / "editions.json").write_text('{"feed": "nonsense", "tech": {"edition": "x"}}')
+    (tmp_path / "editions.json").write_text('{"feed": "nonsense", "tech": {"edition": "x"}, "news": {"2026-11-10T07:00:00+00:00": "bad"}}')
     book = EditionBook(tmp_path / "editions.json")
-    assert book.read_done_at("feed", at(7)) is None
+    assert book.read_done_at("feed", at(7)) is None and book.reads["news"] == {}
     (tmp_path / "list.json").write_text("[1, 2]")
     assert EditionBook(tmp_path / "list.json").reads == {}
-    book.reads["tech"] = {"edition": at(7).astimezone().isoformat(), "done_at": "yesterday"}
+    book.reads["tech"] = {at(7).astimezone().isoformat(): {"done_at": "yesterday"}}
     assert book.read_done_at("tech", at(7)) is None
+
+
+def test_a_file_from_before_per_edition_entries_is_read(tmp_path):
+    seven = at(7).astimezone().isoformat()
+    old = {"feed": {"edition": seven, "done_at": at(6, 50).isoformat(), "early_for": seven, "early": at(9).isoformat()}}
+    (tmp_path / "editions.json").write_text(json.dumps(old))
+    book = EditionBook(tmp_path / "editions.json")
+    assert book.read_done_at("feed", at(7)) == at(6, 50) and book.opened_early_at("feed", at(7)) == at(9)
+
+
+def test_two_editions_a_day_are_read_once_each_and_never_thrash(tmp_path):
+    """Reading for 18:00 must not make the 7:00 read due again, and the 7:00 cutoff must stay put."""
+    book, spec, lead = EditionBook(tmp_path / "editions.json"), TimeSpec(editions=["07:00", "18:00"]), timedelta(minutes=20)
+    book.done("feed", at(7), at(6, 50))
+    reads = 0
+    for minute in range(40, 60):
+        now = at(17, minute)
+        if (due := book.due("feed", spec, now, lead)) is not None:
+            reads += 1
+            book.done("feed", due, now)
+    assert reads == 1
+    assert book.current("feed", spec, at(17, 59)).cutoff == at(7)
+    assert book.current("feed", spec, at(18, 5)).cutoff == at(18)
+
+
+def test_old_edition_entries_are_dropped(tmp_path):
+    book = EditionBook(tmp_path / "editions.json")
+    book.done("feed", at(7, days=-5), at(6, 50, days=-5))
+    book.done("feed", at(7), at(6, 50))
+    assert list(EditionBook(tmp_path / "editions.json").reads["feed"]) == [at(7).astimezone().isoformat()]
 
 
 # Journeys

@@ -125,7 +125,7 @@ def test_the_rules_compiler_declares_judgments_from_plain_words(client, paths):
     compiled = client.app.state.brain.compiler.compiled("events")
     assert [judgment.name for judgment in compiled.judgments] == ["event", "price"]
     assert [rule.when.field for rule in compiled.rules] == ["judged:event", "judged:price"]
-    assert compiled.rules[1].when.value == 3000
+    assert compiled.rules[1].when.value == "3000"
 
 
 def test_a_compile_that_breaks_keeps_the_previous_judgments(client, paths, services):
@@ -390,3 +390,26 @@ def test_a_brain_restarted_on_old_state_rejudges_once(paths, services, settings)
         assert len(view_texts(client, "events")) == 2
     finally:
         brain.http.close()
+
+
+@pytest.mark.parametrize(("value", "stored"), [(False, "no"), (True, "yes"), (2800, "2800"), (2800.0, "2800"), (12.5, "12.5"), ([True, 3], ["yes", "3"]), ("No", "No")])
+def test_rule_values_are_kept_the_way_answers_are_stored(value, stored):
+    assert Condition(field="judged:event", op="eq", value=value).value == stored
+
+
+def test_a_model_writing_booleans_and_numbers_still_matches_the_answers():
+    no_event = Condition(field="judged:event", op="eq", value=False)
+    rent = Condition(field="judged:price", op="eq", value=2800)
+    item = make_item("1", "Flat", {"judged:event": "no", "judged:price": "2800"})
+    assert matches(no_event, item, NOW) and matches(rent, item, NOW)
+
+
+def test_a_question_another_view_asks_differently_is_warned_about(client, paths, services):
+    (paths.views / "a.md").write_text(f"# A\n\n## Sources\n* Page: {FACEBOOK}\n\n## Rules\n* Only events and birthdays.\n")
+    other = {"rules": [{"when": {"field": "judged:event", "op": "eq", "value": "no"}, "do": "hide"}], "judgments": [{"name": "event", "question": "Is this a concert?"}], "summary": ""}
+    services.queue_model_reply("compile_rules", json.dumps(other))
+    (paths.views / "z.md").write_text(f"# Z\n\n## Sources\n* Page: {FACEBOOK}\n\n## Rules\n* Concerts only.\n")
+    client.app.state.brain.compiler.compiled("z")
+    warnings = wait_until_refreshed(client, "z")["warnings"]
+    assert any(warning.startswith('The question "event" is answered as another view asks it') for warning in warnings)
+    assert not any("answered as another view" in warning for warning in wait_until_refreshed(client, "a")["warnings"])

@@ -523,7 +523,7 @@ describe("ReaderPool items read in full", () => {
     expect(await make_pool(new ItemPage(true)).read_content("https://a.example/1", false)).toEqual({ status: "failed", error: "tab crashed" })
     const busy = make_pool(new ItemPage(true))
     for (let read = 0; read < 50; read++) await busy.read_content("https://a.example/1", false)
-    expect(await busy.read_content("https://a.example/1", false)).toEqual({ status: "failed", error: "today's budget for reading items in full is used" })
+    expect(await busy.read_content("https://a.example/1", false)).toEqual({ status: "failed", error: "today's budget for reading items in full is used", budget: true })
   })
 })
 
@@ -566,5 +566,31 @@ describe("ReaderPool resting after a check", () => {
     await pass_time(2_100)
     expect((await walled).status).toBe("challenge")
     expect(await pool.read_text(WATCHED, false)).toEqual({ status: "skipped" })
+  })
+})
+
+describe("ReaderPool after the review", () => {
+  it("offers a batch the brain did not take again, and never calls a page complete over it", async () => {
+    const page = new NewestFirst(6)
+    const pool = make_pool(page)
+    const failing = vi.fn(async () => {
+      throw new Error("brain restarting")
+    })
+    expect((await pool.fill(LIST, 30, failing, true, true)).status).toBe("failed")
+    const later = new Delivered()
+    const outcome = await pool.fill(LIST, 30, later.take, true, true)
+    expect(outcome.status).toBe("ended")
+    expect(later.ids).toHaveLength(6)
+  })
+
+  it("reads an article in full for a summary, not the short card text", async () => {
+    vi.useFakeTimers()
+    const page = new ItemPage()
+    const run = vi.spyOn(page, "run")
+    const pool = make_pool(page)
+    const reading = pool.read_content("https://a.example/1", false)
+    await pass_time(2_100)
+    await reading
+    expect(run).toHaveBeenCalledWith("tab1", "readability", { max_text: 30_000 })
   })
 })

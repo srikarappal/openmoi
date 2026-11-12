@@ -197,12 +197,13 @@ def rank(
     limit: int = PAGE_SIZE,
     order: Order = "recency",
     circles: Circles = NO_CIRCLES,
+    seen: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[list[ViewItem], bool]:
     """A page of view items with reasons, plus whether more remain beyond it.
 
     Order "recency" scores by a 24 h half life; order "page" keeps the given order. Boosts add on top of either.
     Excluded ids (already shown or seen) use up daily limits first: what you already read that day counts before
-    anything newer competes for what is left.
+    anything newer competes for what is left. Seen ids, still shown, stay their story's copy.
     """
     scored: list[Scored] = []
     for position, item in enumerate(items):
@@ -212,7 +213,7 @@ def rank(
         base = 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS) if order == "recency" else 1 - position / (len(items) + 1)
         scored.append((base + sum(rule.weight for rule in boosts), item, boosts))
     scored.sort(key=itemgetter(0), reverse=True)
-    scored, also = best_copy_per_story(scored, exclude_ids)
+    scored, also = best_copy_per_story(scored, set(exclude_ids) | set(seen))
     already = [entry for entry in scored if entry[1].item_id in exclude_ids]
     candidates = [entry for entry in scored if entry[1].item_id not in exclude_ids]
     remaining = [entry for entry in apply_limits([*already, *candidates], rules, now, circles) if entry[1].item_id not in exclude_ids]

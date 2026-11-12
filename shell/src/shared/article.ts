@@ -25,6 +25,8 @@ const MAX_BLOCKS = 400
 const MIN_ARTICLE_CHARS = 800
 const MIN_ARTICLE_SHARE = 0.4
 const MAX_TEXT = 2000
+// Read in full for a summary or a note, an article may be this long.
+export const MAX_FULL_TEXT = 30_000
 
 function clean(text: string | null | undefined): string {
   return (text ?? "").replace(/\s+/g, " ").trim()
@@ -58,7 +60,7 @@ export function article_blocks(root: ParentNode, page_url: string): Block[] {
 }
 
 // An article record when the page is mostly one long article, otherwise null so Mine treats it as a listing.
-export function read_article(doc: Document, page_url: string): RawRecord | null {
+export function read_article(doc: Document, page_url: string, max_text = MAX_TEXT): RawRecord | null {
   if (!isProbablyReaderable(doc)) return null
   const article = new Readability(doc.cloneNode(true) as Document).parse()
   const text = clean(article?.textContent)
@@ -70,7 +72,7 @@ export function read_article(doc: Document, page_url: string): RawRecord | null 
     url: page_url,
     kind: "article",
     title: clean(article.title) || doc.title,
-    text: text.slice(0, MAX_TEXT),
+    text: text.slice(0, Math.min(max_text, MAX_FULL_TEXT)),
     author_name: clean(article.byline),
     image_url: blocks.find((block) => block.type === "img")?.src ?? "",
     "extra.blocks": JSON.stringify(blocks),

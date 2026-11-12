@@ -21,7 +21,14 @@ function make_scheduler(answers: Array<ViewSchedule[] | Error>, read: (view_id: 
     watches_due: vi.fn(async (): Promise<PageSource[]> => []),
     content_wanted: vi.fn(async (): Promise<ContentWanted[]> => []),
   }
-  const hooks = { read: vi.fn(read), watch: vi.fn(async (_source: PageSource) => {}), summarize: vi.fn(async (_wanted: ContentWanted) => {}), edition_out: vi.fn(), failed: vi.fn() }
+  const hooks = {
+    read: vi.fn(read),
+    watch: vi.fn(async (_source: PageSource) => {}),
+    summarize: vi.fn(async (_wanted: ContentWanted) => {}),
+    edition_out: vi.fn(),
+    read_done: vi.fn(),
+    failed: vi.fn(),
+  }
   const scheduler = new Scheduler(brain as unknown as BrainClient, hooks, 1_000)
   return { scheduler, brain, hooks }
 }
@@ -176,5 +183,33 @@ describe("Scheduler summaries", () => {
     await scheduler.tick()
     await scheduler.idle()
     expect(hooks.failed).toHaveBeenCalledWith("Summaries could not be made: brain restarting")
+  })
+})
+
+describe("Scheduler after the review", () => {
+  const SEVEN = "2026-11-10T07:00:00Z"
+
+  it("announces an edition the Mac slept through only once its late read is done, then shows it again", async () => {
+    const late = { view_id: "feed", title: "Feed", edition: SEVEN, next_edition: null, read_for: SEVEN, visit_minutes: null }
+    const read = { ...late, read_for: null }
+    const { scheduler, hooks, brain } = make_scheduler([[{ ...late, edition: "2026-11-09T18:00:00Z", read_for: null }], [late], [read]])
+    await scheduler.tick()
+    await scheduler.tick()
+    expect(hooks.edition_out).not.toHaveBeenCalled()
+    await scheduler.idle()
+    expect(brain.schedule_done).toHaveBeenCalledWith("feed", SEVEN)
+    expect(hooks.read_done).toHaveBeenCalledWith("feed")
+    await scheduler.tick()
+    expect(hooks.edition_out).toHaveBeenCalledWith(read)
+  })
+
+  it("keeps summarizing while a view named summaries has a read due", async () => {
+    const held = new HeldRead()
+    const { scheduler, brain, hooks } = make_scheduler([[{ view_id: "summaries", title: "S", edition: null, next_edition: null, read_for: SEVEN, visit_minutes: null }]], held.run.bind(held))
+    brain.content_wanted.mockResolvedValue([{ item_id: "a1", url: "https://a.example/1", video: false }])
+    await scheduler.tick()
+    await vi.waitFor(() => expect(hooks.summarize).toHaveBeenCalledTimes(1))
+    held.release()
+    await scheduler.idle()
   })
 })

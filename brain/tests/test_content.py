@@ -3,8 +3,11 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from conftest import wait_until_refreshed
+from conftest import TOKEN, wait_until_refreshed
+from fastapi.testclient import TestClient
 
+from moi_brain.api import create_app
+from moi_brain.brain import Brain
 from moi_brain.compile import Condition, Rule, usable_rules
 from moi_brain.content import ContentSummary, Stretch, caption_allowed, is_video, summary_extra, transcript_text
 from moi_brain.edits import SYSTEM_PROMPT
@@ -140,3 +143,29 @@ def test_a_summarize_rule_for_videos_leaves_articles_alone(client, paths):
     reading_view(paths, "* Summarize videos.")
     ingest(client, [article(1)])
     assert client.get("/content/wanted").json() == []
+
+
+
+class FixedClock:
+    def __init__(self, moment: datetime):
+        self.moment = moment
+
+    def __call__(self) -> datetime:
+        return self.moment
+
+
+def test_a_failed_summary_is_tried_again_a_day_later(paths, settings, services):
+    clock = FixedClock(NOW)
+    brain = Brain(paths, settings, youtube_base=services.base_url, clock=clock)
+    client = TestClient(create_app(brain, TOKEN), headers={"x-moi-token": TOKEN})
+    try:
+        reading_view(paths, "* Summarize everything.")
+        [item_id] = ingest(client, [article(1)])
+        assert client.post("/content", json={"item_id": item_id, "purpose": "summary", "text": ""}).json()["status"] == "empty"
+        assert client.get("/content/wanted").json() == []
+        clock.moment = NOW + timedelta(hours=25)
+        assert [entry["item_id"] for entry in client.get("/content/wanted").json()] == [item_id]
+        brain.store.update_extra(item_id, {"summary_failed_at": "long ago"})
+        assert [entry["item_id"] for entry in client.get("/content/wanted").json()] == [item_id]
+    finally:
+        brain.http.close()

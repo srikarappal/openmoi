@@ -71,7 +71,7 @@ export function run_page_op(op: PageOp, args: Record<string, unknown>): unknown 
     case "skeleton":
       return skeleton(document.body)
     case "readability":
-      return read_article(document, location.href)
+      return read_article(document, location.href, Number(args.max_text) || undefined)
     case "text":
       return page_text()
     case "transcript":

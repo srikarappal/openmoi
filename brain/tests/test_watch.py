@@ -47,6 +47,8 @@ def test_a_watched_page_is_a_source_of_its_view_once():
 
 def test_noise_is_not_a_change():
     assert watch_lines("  Slots:   none \n\nUpdated 3 minutes ago\nChecked just now by the system\n") == ["Slots: none", "Updated", "Checked by the system"]
+    noisy = "Posted an hour ago\nEdited 2 hr. ago\n5h\n12:40\n9:05 pm\nOpened a minute ago\nPrice 5h deal\n3 weeks ago"
+    assert watch_lines(noisy) == ["Posted", "Edited", "Opened", "Price 5h deal"]
     assert watch_lines("a\n" * 20_000) == ["a"] * 10_000
     assert changed_lines(["a", "b", "c"], ["a", "c", "d", "e"]) == (["d", "e"], ["b"])
 
@@ -90,7 +92,7 @@ def test_watch_for_me_until_a_slot_opens(timed, paths, clock):
     clock.moment += timedelta(minutes=61)
     found = report(timed, "Appointments\nSlot available on December 12")
     assert found["changed"] is True
-    assert found["alert"] == {"view_id": "visa", "title": "Visa slots changed", "text": "Added: Slot available on December 12 Removed: No slots this week"}
+    assert found["alert"] == {"view_id": "visa", "title": "Visa slots changed", "text": "Added: Slot available on December 12 Removed: No slots this week", "checked": True}
     page = wait_until_refreshed(timed, "visa")
     assert [entry["item"]["text"] for entry in page["items"]] == ["Added: Slot available on December 12 Removed: No slots this week"]
     assert all(source.purpose == "items" for source in timed.app.state.brain.passive_sources())
@@ -112,3 +114,13 @@ def test_a_page_nobody_watches_anymore_never_alerts(timed):
 
 def test_a_watched_page_too_long_is_refused(timed):
     assert timed.post("/watches/report", json={"url": VISA, "text": "x" * 100_001}).status_code == 422
+
+
+def test_a_change_the_model_could_not_judge_alerts_as_unchecked(timed, paths, services):
+    (paths.views / "school.md").write_text("# School\n\n## Sources\n* Watch: https://school.example/news\n\n## Rules\n* Only events and birthdays.\n")
+    timed.post("/watches/report", json={"url": "https://school.example/news", "title": "School news", "text": "Nothing new"})
+    timed.app.state.brain.compiler.compiled("school")
+    for _ in range(3):
+        services.queue_model_reply("tag", None)
+    alert = timed.post("/watches/report", json={"url": "https://school.example/news", "title": "School news", "text": "Lunch menu updated"}).json()["alert"]
+    assert alert["checked"] is False and alert["view_id"] == "school"

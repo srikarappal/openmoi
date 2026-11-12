@@ -660,3 +660,24 @@ describe("Shell imports", () => {
     expect(imported).toHaveBeenCalledWith("x".repeat(200), "# AI")
   })
 })
+
+describe("Shell after the review", () => {
+  it("ends a visit that ran out while you were in a web tab at the stop screen when you come back", async () => {
+    const { shell, window } = await started({ schedule: vi.fn(async () => [view_schedule({ visit_minutes: 1 })]) })
+    await command(window, { type: "choose_view", view_id: "feed" })
+    await command(window, { type: "open_tab", url: "https://a.example/" })
+    await wait(60)
+    expect(state_of(shell).stop).toBeNull()
+    await command(window, { type: "open_view", view_id: "feed" })
+    expect(state_of(shell).stop?.view_id).toBe("feed")
+  })
+
+  it("shows an open view again when its edition read is done or a new edition comes out", async () => {
+    const SIX = "2026-11-10T18:00:00Z"
+    const answers = [[view_schedule({ edition: SEVEN })], [view_schedule({ edition: SIX })]]
+    const { shell } = await started({ schedule: vi.fn(async () => (answers.length > 1 ? answers.shift() : answers[0])) })
+    const after_edit = vi.spyOn(shell.views, "after_edit").mockResolvedValue()
+    await shell.scheduler.tick()
+    expect(after_edit).toHaveBeenCalledWith("feed")
+  })
+})

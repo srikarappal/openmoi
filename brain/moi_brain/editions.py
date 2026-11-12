@@ -18,6 +18,7 @@ LEAD = timedelta(minutes=20)
 LOCAL_LEAD = timedelta(minutes=60)
 # An edition whose read never happened (the Mac was asleep) is still read this long after it was due.
 LATE_READ = timedelta(hours=12)
+KEEP_EDITIONS = timedelta(days=3)
 
 
 class Edition(BaseModel):
@@ -47,51 +48,64 @@ def next_edition(spec: TimeSpec, now: datetime) -> datetime | None:
     return next((moment for moment in edition_moments(spec, now) if moment > now), None)
 
 
+def moment_of(value: object) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def editions_of(entry: object) -> dict[str, dict[str, str]]:
+    """A view's entries per edition; a file from before kept one entry per view, which is read into this shape."""
+    if not isinstance(entry, dict):
+        return {}
+    if "edition" in entry or "early_for" in entry:
+        found: dict[str, dict[str, str]] = {}
+        if isinstance(entry.get("edition"), str) and isinstance(entry.get("done_at"), str):
+            found.setdefault(entry["edition"], {})["done_at"] = entry["done_at"]
+        if isinstance(entry.get("early_for"), str) and isinstance(entry.get("early"), str):
+            found.setdefault(entry["early_for"], {})["early"] = entry["early"]
+        return found
+    return {key: value for key, value in entry.items() if isinstance(value, dict)}
+
+
 class EditionBook:
-    """When each view last finished reading for an edition, kept in .moi/editions.json."""
+    """Per view and per edition, when its read finished and when you opened it early, kept in .moi/editions.json.
+    Entries older than a few days are dropped."""
 
     def __init__(self, path: Path):
         self.path = path
         self.lock = threading.Lock()
         stored = read_json(path, {})
-        self.reads: dict[str, dict[str, str]] = stored if isinstance(stored, dict) else {}
+        self.reads: dict[str, dict[str, dict[str, str]]] = {view_id: editions_of(entry) for view_id, entry in stored.items()} if isinstance(stored, dict) else {}
+
+    def moment(self, view_id: str, edition_at: datetime, key: str) -> datetime | None:
+        with self.lock:
+            entry = self.reads.get(view_id, {}).get(edition_at.astimezone().isoformat(), {})
+        return moment_of(entry.get(key))
+
+    def note(self, view_id: str, edition_at: datetime, key: str, now: datetime) -> None:
+        with self.lock:
+            editions = self.reads.setdefault(view_id, {})
+            editions.setdefault(edition_at.astimezone().isoformat(), {})[key] = now.isoformat()
+            oldest = now - KEEP_EDITIONS
+            self.reads[view_id] = {name: entry for name, entry in editions.items() if (moment_of(name) or now) >= oldest}
+            snapshot = {view: dict(entries) for view, entries in self.reads.items()}
+        write_atomic(self.path, json.dumps(snapshot, indent=2))
 
     def read_done_at(self, view_id: str, edition_at: datetime) -> datetime | None:
         """When the read for this edition finished, if it did."""
-        with self.lock:
-            entry = self.reads.get(view_id)
-        if not isinstance(entry, dict) or entry.get("edition") != edition_at.isoformat():
-            return None
-        try:
-            return datetime.fromisoformat(entry["done_at"])
-        except (KeyError, TypeError, ValueError):
-            return None
+        return self.moment(view_id, edition_at, "done_at")
 
     def done(self, view_id: str, edition_at: datetime, now: datetime) -> None:
-        with self.lock:
-            entry = self.reads.get(view_id)
-            early = {key: value for key, value in entry.items() if key.startswith("early")} if isinstance(entry, dict) else {}
-            self.reads[view_id] = {"edition": edition_at.astimezone().isoformat(), "done_at": now.isoformat(), **early}
-            snapshot = dict(self.reads)
-        write_atomic(self.path, json.dumps(snapshot, indent=2))
+        self.note(view_id, edition_at, "done_at", now)
 
     def opened_early_at(self, view_id: str, edition_at: datetime) -> datetime | None:
-        with self.lock:
-            entry = self.reads.get(view_id)
-        early = entry.get("early") if isinstance(entry, dict) and entry.get("early_for") == edition_at.isoformat() else None
-        try:
-            return datetime.fromisoformat(early) if isinstance(early, str) else None
-        except ValueError:
-            return None
+        return self.moment(view_id, edition_at, "early")
 
     def open_early(self, view_id: str, edition_at: datetime, now: datetime) -> None:
         """You chose to see what arrived since this edition came out, without waiting for the next one."""
-        with self.lock:
-            entry = self.reads.get(view_id)
-            entry = dict(entry) if isinstance(entry, dict) else {}
-            self.reads[view_id] = {**entry, "early_for": edition_at.astimezone().isoformat(), "early": now.isoformat()}
-            snapshot = dict(self.reads)
-        write_atomic(self.path, json.dumps(snapshot, indent=2))
+        self.note(view_id, edition_at, "early", now)
 
     def current(self, view_id: str, spec: TimeSpec, now: datetime) -> Edition | None:
         """The edition on show now; one read late includes everything that read found, one you opened early what came since."""

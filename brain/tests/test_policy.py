@@ -75,3 +75,20 @@ def test_x_itself_can_be_turned_off(client):
     client.app.state.brain.policies = PolicyFile(sites={"x.com": SitePolicy(status="paused")})
     assert [source["source_id"] for source in client.post("/refresh", json={"view_id": "feed"}).json()["page_sources"]] == []
     assert "x.com is paused by the site policy, so openMoi does not read it." in wait_until_refreshed(client)["warnings"]
+
+
+def test_summaries_notes_watches_and_following_lists_keep_to_the_site_policy(client, paths):
+    client.app.state.brain.policies = POLICY
+    (paths.views / "fb.md").write_text(
+        "# FB\n\n## Sources\n* Page: https://www.facebook.com/events\n* Watch: https://www.facebook.com/events/42\n"
+        "* Following: https://www.facebook.com/me/friends\n* RSS: https://news.example/rss\n\n## Rules\n* Summarize everything.\n* Take notes on what I open.\n"
+    )
+    records = [{"native_id": "p1", "url": "https://www.facebook.com/maya/posts/1", "text": "Party"}]
+    [fb_item] = [item["item_id"] for item in client.post("/ingest", json={"source_id": "page:facebook.com/events", "records": records}).json()["items"]]
+    [news_item] = [item["item_id"] for item in client.post("/ingest", json={"source_id": "rss:news", "records": [{"native_id": "n1", "url": "https://news.example/1", "title": "News"}]}).json()["items"]]
+    assert [entry["item_id"] for entry in client.get("/content/wanted").json()] == [news_item]
+    opened = client.post("/events", json={"events": [{"view_id": "fb", "item_id": fb_item, "event_kind": "open"}, {"view_id": "fb", "item_id": news_item, "event_kind": "open"}]}).json()
+    assert opened["notes"] == [news_item]
+    sources = {source["purpose"]: source for source in client.post("/refresh", json={"view_id": "fb"}).json()["page_sources"]}
+    assert (sources["watch"]["mode"], sources["watch"]["budget"]["daily_steps"]) == ("assist", 60)
+    assert (sources["follows"]["mode"], sources["follows"]["budget"]["daily_steps"]) == ("assist", 60)
