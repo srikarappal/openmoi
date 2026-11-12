@@ -91,7 +91,7 @@ test("a saved spec that stopped matching is regenerated and saved as the next ve
     expect(text).toContain("$24.99")
     expect(text).toContain("Banker's lamp with green glass shade")
     const request = JSON.parse((await world.model_calls("extractor")).at(-1)?.payload.messages[1].content ?? "{}")
-    expect(request.last_error).toBe("the saved spec v1 found 0 items with a title and url")
+    expect(request.last_error).toBe("the saved spec v1 found no items")
     expect(harness.files_in(".moi/extractors").filter((name) => name.endsWith(".v2.json"))).toHaveLength(1)
   } finally {
     await harness.close()

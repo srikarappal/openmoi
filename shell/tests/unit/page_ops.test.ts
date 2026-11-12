@@ -18,11 +18,13 @@ const LISTING_SPEC: ExtractorSpec = {
 
 function load(name: string): void {
   const page = new DOMParser().parseFromString(readFileSync(path.join(PAGES, name), "utf-8"), "text/html")
+  document.head.innerHTML = page.head.innerHTML
   document.title = page.title
   document.body.innerHTML = page.body.innerHTML
 }
 
 beforeEach(() => {
+  document.head.innerHTML = ""
   document.title = ""
   document.body.innerHTML = ""
 })
@@ -93,5 +95,15 @@ describe("the transcript page operation", () => {
   it("matches braces outside strings only", () => {
     expect(json_object_at('x = {"a": "}{", "b": {"c": "\\"}"}} tail', 4)).toBe('{"a": "}{", "b": {"c": "\\"}"}}')
     expect(json_object_at("{ open", 0)).toBeNull()
+  })
+})
+
+describe("the structured page operation", () => {
+  it("says what kind of page it is, the items its data names and the feeds it offers", () => {
+    load("structured.html")
+    const page = run_page_op("structured", {}) as { page_type: string; records: Array<{ url: string }>; feeds: unknown[] }
+    expect(page.page_type).toBe("listing")
+    expect(page.records.map((record) => new URL(record.url).pathname)).toEqual(["/p/1", "/p/2", "/p/3", "/guide", "/posts/11", "/posts/12", "/posts/13"])
+    expect(page.feeds).toHaveLength(1)
   })
 })

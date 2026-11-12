@@ -1,0 +1,16 @@
+{
+  "domain": "amazon.com",
+  "path_pattern": "/s*",
+  "page_type": "search",
+  "version": 1,
+  "item_root": "[data-component-type='s-search-result'][data-asin]:not([data-asin=''])",
+  "native_id": {"select": ":scope", "take": "attr:data-asin"},
+  "fields": {
+    "title": {"select": "h2 span, h2", "take": "text"},
+    "url": {"select": "[data-cy='title-recipe'] a, h2 a, a.s-no-outline", "take": "attr:href", "transform": "absolute_url"},
+    "image_url": {"select": "img.s-image", "take": "attr:src", "optional": true},
+    "extra.price_text": {"select": ".a-price .a-offscreen", "take": "text", "optional": true},
+    "extra.rating_text": {"select": ".a-icon-alt", "take": "text", "optional": true}
+  },
+  "pagination": {"kind": "none", "step_px": 900}
+}

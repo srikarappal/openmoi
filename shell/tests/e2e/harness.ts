@@ -199,7 +199,7 @@ export class Harness {
   }
 }
 
-// Polls probe until predicate holds; returns the last value so assertions can show it.
+// Polls probe until predicate holds and returns that value; a wait that runs out fails with the last value it saw.
 export async function eventually<T>(probe: () => Promise<T>, predicate: (value: T) => boolean, timeout_ms = 45_000): Promise<T> {
   const deadline = Date.now() + timeout_ms
   let value = await probe()
@@ -207,6 +207,8 @@ export async function eventually<T>(probe: () => Promise<T>, predicate: (value: 
     await sleep(250)
     value = await probe()
   }
+  // A wait that ran out is a failure, never a silent pass for whatever comes after it.
+  if (!predicate(value)) throw new Error(`gave up after ${timeout_ms} ms; last value: ${JSON.stringify(value)?.slice(0, 800)}`)
   return value
 }
 

@@ -1,0 +1,9 @@
+{
+  "url": "https://www.amazon.com/s?k=desk+lamp",
+  "spec": "amazon_search.json",
+  "records": [
+    {"native_id": "B0CX1LAMP", "title": "Desk Lamp with USB Charging Port", "url": "https://www.amazon.com/Desk-Lamp-USB/dp/B0CX1LAMP/ref=sr_1_1?keywords=desk+lamp", "image_url": "https://m.media-amazon.com/images/I/71lamp.jpg", "extra.price_text": "$24.99", "extra.rating_text": "4.6 out of 5 stars"},
+    {"native_id": "B0FLOOR01", "title": "Floor Lamp, Dimmable", "url": "https://www.amazon.com/Floor-Lamp/dp/B0FLOOR01/ref=sr_1_2", "image_url": "https://m.media-amazon.com/images/I/61floor.jpg", "extra.price_text": "$89.00", "extra.rating_text": "4.2 out of 5 stars"},
+    {"native_id": "B0CLIP002", "title": "Clip On Book Light", "url": "https://www.amazon.com/Clip-Lamp/dp/B0CLIP002/ref=sr_1_3"}
+  ]
+}

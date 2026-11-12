@@ -24,6 +24,7 @@ from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
 from moi_brain.extractors import ExtractorSpec, ExtractorStore
 from moi_brain.files import read_json, write_atomic
+from moi_brain.health import HealthBook, OracleReply, RunReport, Verdict, oracle_prompt
 from moi_brain.feeds import YOUTUBE_BASE, FeedError, FeedFetcher
 from moi_brain.items import (
     HANDLE,
@@ -256,6 +257,7 @@ class Brain:
         self.editor = Editor(paths, self.gateway)
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors)
         self.policies = load_policy(paths.site_policy)
+        self.health = HealthBook(paths.extractor_health)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
         self.relay = RelayHub(paths.relay_trust, self.queue_relay_event, self.relay_config)
         self.relay_events: deque[MineRequest] = deque(maxlen=MAX_RELAY_EVENTS)
@@ -317,6 +319,28 @@ class Brain:
             if judgment.name in shared and shared[judgment.name] != judgment
         ]
 
+    def best_spec(self, url: str) -> ExtractorSpec | None:
+        """The newest spec for a page that is not failing its health check, else the newest one."""
+        versions = self.extractors.versions(url)
+        healthy = [spec for spec in versions if self.health.health(spec.domain, spec.path_pattern, spec.version).status != "failing"]
+        return (healthy or versions or [None])[0]
+
+    def previous_specs(self, url: str, version: int) -> list[ExtractorSpec]:
+        """Earlier versions of a page's spec, newest first, at most two: the first fallback when a spec drifts."""
+        return [spec for spec in self.extractors.versions(url) if spec.version < version][:2]
+
+    def report_extractor(self, report: RunReport) -> Verdict:
+        """One run of a spec, judged. A new spec's first run also goes to the model, which says whether its items are
+        the page's main items; a model that cannot be asked leaves that check out."""
+        oracle_problem = ""
+        if report.samples and self.health.is_new(report):
+            try:
+                answer = self.gateway.complete_json("fast", "oracle", oracle_prompt(report.domain, report.path_pattern, report.samples), True, OracleReply)
+                oracle_problem = "" if answer.main_items else f"the items look like {answer.why.strip() or 'something other than the page items'}"
+            except LlmError:
+                oracle_problem = ""
+        return self.health.record(report, oracle_problem)
+
     def watch_source(self, url: str) -> PageSource:
         return PageSource(source_id=watch_source_id(url), page_type="watch", start_url=url, spec=None, budget=self.budget_for(url), purpose="watch", mode=policy_for(self.policies, url).mode)
 
@@ -357,7 +381,7 @@ class Brain:
                         source_id=page_source_id(page),
                         page_type="listing",
                         start_url=page,
-                        spec=self.extractors.for_url(page),
+                        spec=self.best_spec(page),
                         budget=self.budget_for(page),
                         chronological=page in source.ordered,
                         mode=source.modes.get(page, policy.mode),
@@ -371,7 +395,7 @@ class Brain:
                     continue
                 read_at = self.store.list_read_at(page)
                 if read_at is None or self.clock() - read_at >= FOLLOWS_EVERY:
-                    spec = self.extractors.for_url(page)
+                    spec = self.best_spec(page)
                     found.append(
                         PageSource(
                             source_id=page_source_id(page),

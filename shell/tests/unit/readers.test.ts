@@ -79,8 +79,17 @@ async function pass_time(total_ms: number): Promise<void> {
   for (let passed = 0; passed < total_ms; passed += 100) await vi.advanceTimersByTimeAsync(100)
 }
 
+// A brain whose health checks pass and that has no earlier spec versions, unless a test says otherwise.
+function healthy_brain(brain: Partial<BrainClient>): BrainClient {
+  return {
+    report_extractor: vi.fn(async () => ({ healthy: true, status: "active", problem: "" })),
+    previous_extractors: vi.fn(async () => []),
+    ...brain,
+  } as unknown as BrainClient
+}
+
 function make_pool(feed: PageDriver, brain: Partial<BrainClient> = {}, clock: () => number = Date.now, random: () => number = () => 0) {
-  return new ReaderPool(() => feed, brain as BrainClient, undefined, clock, random)
+  return new ReaderPool(() => feed, healthy_brain(brain), undefined, clock, random)
 }
 
 afterEach(() => {
@@ -592,5 +601,24 @@ describe("ReaderPool after the review", () => {
     await pass_time(2_100)
     await reading
     expect(run).toHaveBeenCalledWith("tab1", "readability", { max_text: 30_000 })
+  })
+})
+
+describe("ReaderPool drift", () => {
+  it("gives a drifted spec up for a new one written from the page, without being told again", async () => {
+    vi.useFakeTimers()
+    const page = new FakeFeed()
+    const drifted = { ...SPEC, version: 4, domain: "feed.example.com", path_pattern: "/" } as ExtractorSpec
+    const fresh = { ...SPEC, version: 5 } as ExtractorSpec
+    const brain = {
+      report_extractor: vi.fn(async (report: { version: number }) => (report.version === 4 ? { healthy: false, status: "failing", problem: "found 2 items where it usually finds 20" } : { healthy: true, status: "candidate", problem: "" })),
+      generate_extractor: vi.fn(async () => fresh),
+      accept_extractor: vi.fn(async (spec: ExtractorSpec) => spec),
+    }
+    const pool = make_pool(page, brain as unknown as Partial<BrainClient>)
+    const filling = pool.fill(source(undefined, { spec: drifted }), 5, new Delivered().take, true)
+    await pass_time(6_000)
+    expect((await filling).status).toBe("read")
+    expect(brain.generate_extractor).toHaveBeenCalledWith("https://feed.example.com/", '<main><article class="post">{t:9}</article></main>', "the saved spec v4 found 2 items where it usually finds 20")
   })
 })

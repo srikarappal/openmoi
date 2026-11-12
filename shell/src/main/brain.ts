@@ -25,6 +25,8 @@ import type {
   MomentKind,
   WatchReport,
   ContentWanted,
+  HealthVerdict,
+  RunReport,
 } from "../shared/types"
 
 const START_TIMEOUT_MS = 60_000
@@ -180,6 +182,14 @@ export class BrainClient {
 
   async accept_lens(view_id: string, kind: LensKind, html: string): Promise<number> {
     return (await this.request<{ version: number }>("POST", "/lens/accept", { view_id, kind, html })).version
+  }
+
+  previous_extractors(url: string, version: number): Promise<ExtractorSpec[]> {
+    return this.request("GET", `/extractor/previous?url=${encodeURIComponent(url)}&version=${version}`)
+  }
+
+  report_extractor(report: RunReport): Promise<HealthVerdict> {
+    return this.request("POST", "/extractor/health", report)
   }
 
   async find_extractor(url: string): Promise<ExtractorSpec | null> {

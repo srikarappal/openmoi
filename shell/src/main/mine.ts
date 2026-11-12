@@ -1,7 +1,7 @@
 // Mine: your own version of any page, in openMoi or in your Chrome. Articles go through reader mode;
 // listings through a saved or generated extractor. The page itself is only read, never changed or closed.
 import { site_domain } from "../shared/address"
-import type { Item, LensToHost, RawRecord, ViewItem } from "../shared/types"
+import type { Item, LensToHost, RawRecord, StructuredPage, ViewItem } from "../shared/types"
 import type { BrainClient } from "./brain"
 import { explain } from "./chat"
 import type { PageDriver } from "./drivers"
@@ -84,11 +84,15 @@ export class MineController {
     page?.target.driver.close(page.target.handle).catch(ignore)
   }
 
+  // Reader mode for an article; a product page by its own structured data; any other page by its spec, falling back
+  // to the items its structured data names before a new spec is written.
   private async read_page(target: MineTarget): Promise<{ kind: PageKind; records: RawRecord[] } | null> {
     try {
       const article = await target.driver.run<RawRecord | null>(target.handle, "readability")
       if (article) return { kind: "article", records: [article] }
-      const records = await this.listing_records(target)
+      const page = await target.driver.run<StructuredPage | null>(target.handle, "structured")
+      if (page?.page_type === "product" && page.records.length) return { kind: "listing", records: page.records.slice(0, 1) }
+      const records = await this.listing_records(target, page?.records ?? [])
       return records ? { kind: "listing", records } : null
     } catch (error) {
       this.hooks.notify(`Could not read this page: ${explain(error)}`)
@@ -96,8 +100,8 @@ export class MineController {
     }
   }
 
-  private async listing_records(target: MineTarget): Promise<RawRecord[] | null> {
-    const found = await find_listing_spec(this.brain, target.driver, target.handle, target.url, await this.brain.find_extractor(target.url))
+  private async listing_records(target: MineTarget, structured: RawRecord[]): Promise<RawRecord[] | null> {
+    const found = await find_listing_spec(this.brain, target.driver, target.handle, target.url, await this.brain.find_extractor(target.url), null, structured)
     if ("records" in found) return found.records
     this.hooks.notify(`Could not make a Mine view of this page: ${found.problem}`)
     return null

@@ -186,6 +186,10 @@ class Paths:
         return self.state / "mirror.json"
 
     @property
+    def extractor_health(self) -> Path:
+        return self.state / "extractor_health.json"
+
+    @property
     def relay_trust(self) -> Path:
         return self.state / "relay_trusted.json"
 

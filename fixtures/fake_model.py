@@ -215,8 +215,19 @@ FOLLOWS_SPEC = {
     "fields": {"title": {"select": ".name", "take": "text"}, "url": {"select": "a", "take": "attr:href", "transform": "absolute_url"}},
     "pagination": {"kind": "scroll", "step_px": 900},
 }
+DRIFT_SPECS = {
+    name: {"item_root": f"div.{name}", "fields": {"title": {"select": "h3", "take": "text"}, "url": {"select": "a", "take": "attr:href", "transform": "absolute_url"}}}
+    for name in ("story-a", "story-b")
+}
 # Like a real model, the fake one only sees the page's skeleton (and its site), so it recognizes pages by their markup.
-SPECS_BY_MARKER = {'class="athing"': LISTING_SPEC, "s-search-result": SHOP_SPEC, 'class="stream-entry"': ENDLESS_SPEC, 'class="account"': FOLLOWS_SPEC}
+SPECS_BY_MARKER = {
+    'class="athing"': LISTING_SPEC,
+    "s-search-result": SHOP_SPEC,
+    'class="stream-entry"': ENDLESS_SPEC,
+    'class="account"': FOLLOWS_SPEC,
+    'class="story-a"': DRIFT_SPECS["story-a"],
+    'class="story-b"': DRIFT_SPECS["story-b"],
+}
 
 
 def lens(payload: dict[str, Any], base_url: str) -> str:
@@ -245,6 +256,17 @@ def summarize(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"summary": f"Summary of {request['title']}.", "key_points": [line[:40] for line in lines[:3]], "worth_watching": watching})
 
 
+NAVIGATION = {"home", "about", "contact", "privacy", "terms", "help", "log in", "sign up"}
+
+
+def oracle(payload: dict[str, Any], base_url: str) -> str:
+    """Records whose titles are mostly site navigation are not the page's items."""
+    titles = [record["title"].strip().lower() for record in request_of(payload)["records"]]
+    navigation = sum(title in NAVIGATION for title in titles)
+    main = navigation * 2 < len(titles)
+    return json.dumps({"main_items": main, "why": "" if main else "menu links"})
+
+
 def update(payload: dict[str, Any], base_url: str) -> str:
     """A new copy is an update when it says so ("update", "confirmed", "now"); anything else is a retelling."""
     new = request_of(payload)["new"]
@@ -253,7 +275,7 @@ def update(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"update": changed, "what_changed": new["title"] if changed else ""})
 
 
-HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "extractor": extractor, "update": update, "summarize": summarize}
+HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "extractor": extractor, "update": update, "summarize": summarize, "oracle": oracle}
 
 
 def model_reply(task: str, payload: dict[str, Any], base_url: str) -> str:

@@ -1,0 +1,9 @@
+{
+  "url": "https://www.facebook.com/",
+  "spec": "facebook_feed.json",
+  "records": [
+    {"native_id": "pfbid02abcDEF", "url": "https://www.facebook.com/maya.kumar/posts/pfbid02abcDEF?__cft__[0]=AZW&__tn__=%2CO%2CP-R", "author_name": "Maya Kumar", "author_handle": "maya.kumar", "text": "Birthday party on Saturday at the park, everyone welcome!", "image_url": "https://scontent-sjc3-1.xx.fbcdn.net/v/t39/photo1.jpg"},
+    {"native_id": "901", "url": "https://www.facebook.com/groups/42/permalink.php?story_fbid=901&id=42", "author_name": "Neighborhood Group", "text": "Lost cat near 5th street, please share."},
+    {"native_id": "556677", "url": "https://www.facebook.com/cityparks/videos/556677/", "author_name": "City Parks", "author_handle": "cityparks", "text": "Watch the new playground open."}
+  ]
+}

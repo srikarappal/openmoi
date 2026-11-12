@@ -115,6 +115,8 @@ function make_mine(page: Record<string, unknown>, brain_fields: Record<string, u
     find_extractor: vi.fn(async () => null),
     generate_extractor: vi.fn(async () => ({ item_root: "li.story" })),
     accept_extractor: vi.fn(async (spec: unknown) => spec),
+    report_extractor: vi.fn(async () => ({ healthy: true, status: "candidate", problem: "" })),
+    previous_extractors: vi.fn(async () => []),
     ingest: vi.fn(async (): Promise<IngestResult> => ({ items: [], view_items: [{ item: { item_id: "s1", url: "https://news.example.com/1" } as never, reasons: [] }], lens_stale: false, layout_hash: "h0" })),
     lens: vi.fn(async () => "<p>lens</p>"),
     events: vi.fn(async () => ({ recorded: 1 })),
@@ -209,5 +211,63 @@ describe("MineController", () => {
     expect(driver.close).toHaveBeenCalledWith("contents:5")
     expect(mine.view_for("tab:1")).toBeUndefined()
     expect(chrome_mine_key(3)).toBe("chrome:3")
+  })
+})
+
+describe("Mine with structured data and health checks", () => {
+  const SPEC_V2 = { domain: "news.example.com", path_pattern: "/", version: 2, item_root: "li.gone" }
+  const SPEC_V1 = { domain: "news.example.com", path_pattern: "/", version: 1, item_root: "li.story" }
+
+  it("shows a product page by its own structured data, without any spec", async () => {
+    const product = { url: "https://shop.example/p/1", title: "Desk lamp", kind: "product", "extra.price_text": "USD 24.99" }
+    const { mine, brain, target } = make_mine({ structured: { page_type: "product", records: [product], feeds: [] } })
+    await mine.enable(target)
+    expect(brain.ingest).toHaveBeenCalledWith("site:news.example.com", [product], target.url, "site_news.example.com", "listing")
+    expect(brain.find_extractor).not.toHaveBeenCalled()
+  })
+
+  it("falls back from a drifted spec to its earlier version, reporting each run", async () => {
+    const { mine, brain, target } = make_mine(
+      { "li.story": records(5), "li.gone": [] },
+      {
+        find_extractor: vi.fn(async () => SPEC_V2),
+        previous_extractors: vi.fn(async () => [SPEC_V1]),
+        report_extractor: vi.fn(async (report: { version: number }) => (report.version === 2 ? { healthy: false, status: "failing", problem: "found no items" } : { healthy: true, status: "active", problem: "" })),
+      },
+    )
+    await mine.enable(target)
+    expect(brain.previous_extractors).toHaveBeenCalledWith(target.url, 2)
+    expect(brain.generate_extractor).not.toHaveBeenCalled()
+    expect((brain.report_extractor.mock.calls as unknown as Array<[{ count: number }]>).map((call) => call[0].count)).toEqual([0, 5])
+  })
+
+  it("uses the items a page's structured data names before writing a new spec", async () => {
+    const listed = records(4)
+    const { mine, brain, target } = make_mine({ structured: { page_type: "listing", records: listed, feeds: [] } })
+    await mine.enable(target)
+    expect(brain.generate_extractor).not.toHaveBeenCalled()
+    expect(brain.ingest).toHaveBeenCalledWith("site:news.example.com", listed, target.url, "site_news.example.com", "listing")
+  })
+
+  it("writes a new spec when the old ones and the structured data fail, telling the model why, and rejects one the oracle doubts", async () => {
+    const { mine, brain, target, hooks } = make_mine(
+      { "li.story": records(5), "li.gone": [] },
+      {
+        find_extractor: vi.fn(async () => SPEC_V2),
+        report_extractor: vi.fn(async (report: { version: number }) => ({ healthy: report.version !== 2, status: "candidate", problem: report.version === 2 ? "found no items" : "" })),
+        accept_extractor: vi.fn(async (spec: object) => ({ ...spec, version: 3 })),
+      },
+    )
+    await mine.enable(target)
+    expect(brain.generate_extractor).toHaveBeenCalledWith(target.url, null, "the saved spec v2 found no items")
+    expect(hooks.notify).not.toHaveBeenCalled()
+    const doubted = make_mine(
+      { "li.story": records(5) },
+      { report_extractor: vi.fn(async () => ({ healthy: false, status: "failing", problem: "the items look like menu links" })) },
+    )
+    await doubted.mine.enable(doubted.target)
+    expect(doubted.brain.generate_extractor).toHaveBeenCalledTimes(2)
+    expect(doubted.brain.generate_extractor).toHaveBeenLastCalledWith(doubted.target.url, null, "the new spec the items look like menu links")
+    expect(doubted.hooks.notify).toHaveBeenCalledWith("Could not make a Mine view of this page: the new spec the items look like menu links")
   })
 })

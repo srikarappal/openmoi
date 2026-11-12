@@ -232,3 +232,29 @@ test("a page marked assist is never read by a reader tab and asks for Mine once"
     await harness.close()
   }
 })
+
+test("a site that changes its markup is read again with a new spec well within two minutes", async () => {
+  test.setTimeout(240_000)
+  const feed = `# Feed\n\n## Sources\n* Page: ${world.base_url}/drifting?site=${Date.now()}\n`
+  const harness = await Harness.launch(world, { views: { feed } })
+  try {
+    await eventually(
+      () => harness.lens_text(),
+      (text) => text.includes("from the story-a design"),
+      60_000,
+    )
+    const started = Date.now()
+    await harness.chrome.locator("button.action", { hasText: "Refresh" }).click()
+    const repaired = await eventually(
+      () => harness.lens_text(),
+      (text) => text.includes("from the story-b design"),
+      120_000,
+    )
+    expect(repaired).toContain("from the story-b design")
+    expect(Date.now() - started).toBeLessThan(120_000)
+    const health = JSON.parse(harness.file(".moi/extractor_health.json"))
+    expect(Object.values(health).some((entry) => (entry as { status: string }).status === "failing")).toBe(true)
+  } finally {
+    await harness.close()
+  }
+})

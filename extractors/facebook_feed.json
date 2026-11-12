@@ -1,0 +1,17 @@
+{
+  "domain": "facebook.com",
+  "path_pattern": "/*",
+  "page_type": "feed",
+  "version": 1,
+  "start_url": "https://www.facebook.com/",
+  "item_root": "[role='feed'] [aria-posinset] [role='article']:not([aria-label])",
+  "native_id": {"select": "a[href*='/posts/'], a[href*='/permalink.php'], a[href*='story_fbid'], a[href*='/videos/']", "take": "attr:href", "transform": "regex:(?:/posts/|story_fbid=|/videos/)([\\w]+)"},
+  "fields": {
+    "url": {"select": "a[href*='/posts/'], a[href*='/permalink.php'], a[href*='story_fbid'], a[href*='/videos/']", "take": "attr:href", "transform": "absolute_url"},
+    "author_name": {"select": "h2 strong span, h3 strong span, h2 strong, h3 strong", "take": "text", "optional": true},
+    "author_handle": {"select": "h2 a[href], h3 a[href]", "take": "attr:href", "transform": "regex:facebook\\.com/(?!groups/)([\\w.]+)", "optional": true},
+    "text": {"select": "[data-ad-preview='message'], [data-ad-comet-preview='message']", "take": "text", "optional": true},
+    "image_url": {"select": "img[src*='fbcdn']", "take": "attr:src", "optional": true}
+  },
+  "pagination": {"kind": "scroll", "step_px": 1200}
+}

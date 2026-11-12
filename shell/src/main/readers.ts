@@ -9,7 +9,7 @@ import { MAX_FULL_TEXT } from "../shared/article"
 import type { ExtractorSpec, ItemContent, PageSource, PageText, RawRecord, TranscriptSource } from "../shared/types"
 import type { BrainClient } from "./brain"
 import type { DriverKind, PageDriver } from "./drivers"
-import { find_listing_spec } from "./listing_spec"
+import { find_listing_spec, run_report, type SpecResult } from "./listing_spec"
 
 const AUTO_INTERVAL_MS = 10 * 60 * 1000
 const IDLE_MS = 10 * 60 * 1000
@@ -67,6 +67,13 @@ type Opened = { tab: ReaderTab; first: RawRecord[] } | { challenge: string }
 function ignore(): void {}
 
 class ItemsNotFound extends Error {}
+
+// A spec a reader can scroll with, or the reason none was found (final: trying again in Chrome cannot help).
+function found_spec(found: SpecResult, source: PageSource): { spec: ExtractorSpec; records: RawRecord[] } {
+  if ("problem" in found) throw new ItemsNotFound(`could not find the items on ${source.start_url}: ${found.problem}`)
+  if (!found.spec) throw new ItemsNotFound(`could not find the items on ${source.start_url}`)
+  return { spec: found.spec, records: found.records }
+}
 
 function day_of(moment: number): string {
   return new Date(moment).toDateString()
@@ -222,23 +229,26 @@ export class ReaderPool {
   }
 
   // Waits for the page to render its first items; null means a sign in wall or check is in the way.
-  // A page without a saved spec gets one made from its skeleton once its content had a moment to load.
+  // A page without a saved spec gets one made from its skeleton once its content had a moment to load. A saved spec
+  // whose health check fails (the site changed its markup) gives way to its earlier versions, then to a new spec.
   private async first_records(driver: PageDriver, handle: string, source: PageSource): Promise<{ spec: ExtractorSpec; records: RawRecord[] } | null> {
     if (!source.spec) {
       await sleep(SPEC_SETTLE_MS)
       if (await driver.run<boolean>(handle, "challenge")) return null
-      const found = await find_listing_spec(this.brain, driver, handle, source.start_url, null)
-      if ("problem" in found) throw new ItemsNotFound(`could not find the items on ${source.start_url}: ${found.problem}`)
-      return found
+      return found_spec(await find_listing_spec(this.brain, driver, handle, source.start_url, null), source)
     }
     const deadline = this.clock() + FIRST_ITEMS_TIMEOUT_MS
+    let records: RawRecord[] = []
     for (;;) {
-      const records = await driver.run<RawRecord[]>(handle, "extract", { spec: source.spec })
-      if (records.length) return { spec: source.spec, records }
+      records = await driver.run<RawRecord[]>(handle, "extract", { spec: source.spec })
+      if (records.length) break
       if (await driver.run<boolean>(handle, "challenge")) return null
-      if (this.clock() >= deadline) return { spec: source.spec, records }
+      if (this.clock() >= deadline) break
       await sleep(POLL_MS)
     }
+    const verdict = await this.brain.report_extractor(run_report(source.spec, records))
+    if (verdict.healthy) return { spec: source.spec, records }
+    return found_spec(await find_listing_spec(this.brain, driver, handle, source.start_url, null, { spec: source.spec, problem: verdict.problem }), source)
   }
 
   // New records go to the brain; those it says it had stored before count as read before this tab opened.

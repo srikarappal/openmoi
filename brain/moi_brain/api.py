@@ -16,6 +16,7 @@ from moi_brain.compile import BadInput, ViewInfo
 from moi_brain.config import ModelChange, ModelInfo
 from moi_brain.edits import EditScope, Proposal, StaleProposal
 from moi_brain.extractors import ExtractorSpec
+from moi_brain.health import RunReport, Verdict
 from moi_brain.items import Event, Item, ViewItem
 from moi_brain.llm import LlmError, PrivacyBlocked
 from moi_brain.rank import PAGE_SIZE
@@ -335,7 +336,17 @@ def accept_lens(body: LensAcceptRequest, brain: BrainDep) -> dict[str, int]:
 
 @router.get("/extractor")
 def find_extractor(url: str, brain: BrainDep) -> SpecResponse:
-    return SpecResponse(spec=brain.extractors.for_url(url))
+    return SpecResponse(spec=brain.best_spec(url))
+
+
+@router.get("/extractor/previous")
+def previous_extractors(url: str, version: int, brain: BrainDep) -> list[ExtractorSpec]:
+    return brain.previous_specs(url, version)
+
+
+@router.post("/extractor/health")
+def extractor_health(report: RunReport, brain: BrainDep) -> Verdict:
+    return brain.report_extractor(report)
 
 
 @router.post("/extractor/generate")

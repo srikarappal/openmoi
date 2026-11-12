@@ -1,9 +1,13 @@
 // Operations that run inside a web page: the same code in openMoi's own tabs (Electron preload) and in your Chrome (extension).
+import { isProbablyReaderable } from "@mozilla/readability"
 import { read_article } from "./article"
+import { classify_page } from "./classify"
+import { json_records } from "./json_items"
+import { read_structured, structured_records } from "./structured"
 import { looks_like_challenge } from "./challenge"
 import { extract_records } from "./extract"
 import { skeleton } from "./skeleton"
-import type { ExtractorSpec, PageOp } from "./types"
+import type { ExtractorSpec, PageOp, RawRecord, StructuredPage } from "./types"
 
 const DEFAULT_SCROLL_PX = 900
 const MAX_PAGE_TEXT = 20_000
@@ -57,6 +61,14 @@ function page_text(): { title: string; text: string } {
   return { title: document.title, text: text.slice(0, MAX_PAGE_TEXT) }
 }
 
+// Rung 2 for the page in front of us: its kind and the records its structured data and hydration state name, each link once.
+function structured_page(): StructuredPage {
+  const structured = read_structured(document, location.href)
+  const records: RawRecord[] = [...structured_records(structured, location.href), ...structured.hydration.flatMap((value) => json_records(value, location.href))]
+  const unique = [...new Map(records.map((record) => [record.url, record])).values()]
+  return { page_type: classify_page(document, location.href, structured, isProbablyReaderable(document)), records: unique, feeds: structured.feeds }
+}
+
 export function run_page_op(op: PageOp, args: Record<string, unknown>): unknown {
   switch (op) {
     case "info":
@@ -76,6 +88,8 @@ export function run_page_op(op: PageOp, args: Record<string, unknown>): unknown 
       return page_text()
     case "transcript":
       return transcript_source()
+    case "structured":
+      return structured_page()
     default:
       throw new Error(`unknown page op ${op}`)
   }

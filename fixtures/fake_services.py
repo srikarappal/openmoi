@@ -164,6 +164,8 @@ class Handler(BaseHTTPRequestHandler):
             self.etag_feed(base)
         elif parts.path == "/watched":
             self.watched_page(parts.query)
+        elif parts.path == "/drifting":
+            self.drifting_page(parts.query)
         elif parts.path == "/api/timedtext":
             self.reply(200, "application/json", json.dumps(CAPTIONS))
         elif parts.path in ROUTES:
@@ -175,6 +177,13 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, "text/html", article_page(parts.path))
         else:
             self.reply(404, "text/plain", "not found")
+
+    def drifting_page(self, key: str) -> None:
+        """A site that redesigns between looks: story-a markup at first, story-b markup from the second look on."""
+        looks = self.server.services.count_look(f"drift:{key}")
+        name = "story-a" if looks == 1 else "story-b"
+        stories = "".join(f'<div class="{name}"><h3>Story {index} from the {name} design</h3><a href="/drifted/{name}/{index}">read</a></div>' for index in range(6))
+        self.reply(200, "text/html", f"<html><head><title>Drifting news</title></head><body><main>{stories}</main></body></html>")
 
     def watched_page(self, key: str) -> None:
         """A page someone watches: no slots at the first look, a slot from the second look on (counted per query)."""

@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"><title>Lamps | Shop</title>
+<meta property="og:type" content="website"><meta property="og:title" content="Lamps"><meta property="og:title" content="Second title ignored">
+<link rel="alternate" type="application/rss+xml" title="New lamps" href="/feeds/lamps.xml">
+<link rel="alternate" type="text/html" href="/other">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "ItemList", "itemListElement": [
+  {"@type": "ListItem", "position": 1, "item": {"@type": "Product", "name": "Desk lamp", "url": "/p/1", "image": ["https://img.example/1.jpg"], "description": "A warm lamp", "offers": {"@type": "Offer", "price": "24.99", "priceCurrency": "USD"}, "aggregateRating": {"ratingValue": "4.6", "bestRating": "5"}}},
+  {"@type": "ListItem", "position": 2, "item": {"@type": "Product", "name": "Floor lamp", "url": "/p/2", "offers": [{"price": 89, "priceCurrency": "USD"}]}},
+  {"@type": "ListItem", "position": 3, "url": "/p/3", "name": "Reading lamp"},
+  {"@type": "ListItem", "position": 4, "item": {"@type": "Product", "name": "No link"}}
+]}
+</script>
+<script type="application/ld+json">{ broken json </script>
+</head>
+<body>
+<div itemscope itemtype="https://schema.org/Article">
+  <h2 itemprop="headline name">Lamp buying guide</h2>
+  <a itemprop="url" href="/guide">read</a>
+  <time itemprop="datePublished" datetime="2026-11-01T09:00:00Z">Nov 1</time>
+  <div itemprop="author" itemscope itemtype="https://schema.org/Person"><span itemprop="name">Ana</span></div>
+</div>
+<div itemscope itemtype="https://schema.org/Product"><span itemprop="name">Desk lamp</span><a itemprop="url" href="/p/1">again</a></div>
+<script id="__NEXT_DATA__" type="application/json">{"props": {"pageProps": {"posts": [
+  {"id": 11, "title": "Post one", "permalink": "/posts/11", "author": {"name": "Ana", "username": "ana"}, "created_at": "2026-11-02T10:00:00Z"},
+  {"id": 12, "title": "Post two", "permalink": "/posts/12", "author": "Ben", "excerpt": "Short"},
+  {"id": 13, "title": "Post three", "permalink": "/posts/13", "thumbnail": {"url": "https://img.example/13.jpg"}},
+  {"id": 14, "title": "No link here"}
+]}}}</script>
+</body>
+</html>

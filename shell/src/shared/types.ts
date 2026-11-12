@@ -185,7 +185,30 @@ export type LensToHost =
   | { type: "seen"; item_ids: string[] }
   | { type: "less_like_this"; item_id: string }
 
-export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability" | "text" | "transcript"
+export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability" | "text" | "transcript" | "structured"
+
+// What a page says about itself (rung 2): its kind, the items its structured data names and the feeds it offers.
+export interface StructuredPage {
+  page_type: "video" | "product" | "search" | "profile" | "thread" | "article" | "feed" | "listing"
+  records: RawRecord[]
+  feeds: Array<{ title: string; url: string }>
+}
+
+// One run of a spec for its health check: how many records, how many lacked each field, a few samples.
+export interface RunReport {
+  domain: string
+  path_pattern: string
+  version: number
+  count: number
+  missing: Record<string, number>
+  samples: Array<{ title: string; url: string }>
+}
+
+export interface HealthVerdict {
+  healthy: boolean
+  status: "candidate" | "active" | "failing"
+  problem: string
+}
 
 // What a video page says about its captions, read by the "transcript" page operation; the brain fetches the captions.
 export interface TranscriptSource {

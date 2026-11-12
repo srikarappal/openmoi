@@ -99,6 +99,10 @@ class ExtractorStore:
     def for_url(self, url: str) -> ExtractorSpec | None:
         return newest([spec for spec in self.specs() if spec_matches(spec, url)])
 
+    def versions(self, url: str) -> list[ExtractorSpec]:
+        """Every spec for this page, newest first."""
+        return sorted((spec for spec in self.specs() if spec_matches(spec, url)), key=attrgetter("version"), reverse=True)
+
     def save(self, spec: ExtractorSpec) -> ExtractorSpec:
         """Store a spec as the next version for its domain and path pattern."""
         same_key = [known for known in self.specs() if (known.domain, known.path_pattern) == (spec.domain, spec.path_pattern)]
