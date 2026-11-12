@@ -100,6 +100,8 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .confirm_sheet { margin: 6px 8px; padding: 10px 12px; border: 2px solid var(--accent, #3a5bd9); border-radius: 10px; display: grid; gap: 6px; }
 .confirm_title { font-weight: 700; font-size: 13.5px; }
 .confirm_target { font-size: 12.5px; color: var(--muted, #6b6b70); }
+.confirm_url { font-size: 11.5px; color: var(--muted, #6b6b70); overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+.confirm_account { font-size: 11.5px; color: var(--muted, #6b6b70); }
 .confirm_text { margin: 0; padding: 6px 8px; border-left: 3px solid var(--accent, #3a5bd9); white-space: pre-wrap; font-size: 13px; }
 .confirm_note { font-size: 11.5px; color: var(--muted, #6b6b70); }
 .confirm_actions { display: flex; gap: 6px; }

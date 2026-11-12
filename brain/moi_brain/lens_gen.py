@@ -28,6 +28,11 @@ moi.more(cursor)                       ask for the next page when cursor is not 
 moi.seen(item_ids)                     report items that were visible for at least one second
 moi.less_like_this(item_id)            the person wants fewer items like this one
 moi.play(item_id)                      play a YouTube video in the host's player above the lens (on a click only)
+moi.save(item_id) / moi.unsave(item_id) keep the item in Read later, or take it out (on a click only)
+moi.act(item_id, action, text)         ask openMoi to do one of item.available_actions on the item's site (like, follow,
+                                       reply with text); call it from the click on a button whose data-action is that
+                                       action, inside the item's data-item-id element: the host checks your click landed
+                                       on exactly that control and ignores the call otherwise
 Each entry of items is {"item": <Item>, "reasons": ["boost: author maya", "recent", "from x"]}; cursor is a string or null."""
 SYSTEM_PROMPT = """You write lenses for openMoi, a personal feed reader: one self contained HTML document that renders items the way the person described.
 Rules:

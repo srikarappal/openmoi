@@ -451,6 +451,8 @@ function ConfirmSheet({ state }: { state: ShellState }) {
         {decision.label} on {decision.site}, as you
       </div>
       <div className="confirm_target">{decision.title}</div>
+      <div className="confirm_url">{decision.url}</div>
+      <div className="confirm_account">With your account on {decision.site}, signed in in openMoi.</div>
       {decision.text && <blockquote className="confirm_text">{decision.text}</blockquote>}
       <div className="confirm_note">openMoi does this in a tab on the real page, where you can watch it.</div>
       <div className="confirm_actions">

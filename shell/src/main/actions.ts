@@ -18,6 +18,8 @@ export interface Point {
 
 // A real page an action runs on: scripts read it, clicks and typing are real input.
 export interface ActionPage {
+  // The address the page is at now, after any redirect.
+  url(): string
   run<T>(script: string): Promise<T>
   click(point: Point): void
   type(text: string): Promise<void>
@@ -26,6 +28,10 @@ export interface ActionPage {
 // A tab's page as an action sees it: its own scripts read it; clicks and typing arrive as real input.
 export class TabPage implements ActionPage {
   constructor(private readonly contents: WebContents) {}
+
+  url(): string {
+    return this.contents.getURL()
+  }
 
   run<T>(script: string): Promise<T> {
     return this.contents.executeJavaScript(script)
@@ -65,20 +71,53 @@ export interface Outcome {
   detail: string
 }
 
-function point_script(selector: string): string {
-  return `(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return null; node.scrollIntoView({ block: "center" }); const box = node.getBoundingClientRect(); return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) } })()`
+// Scripts the executor runs on the page, each a function of one JSON argument, so what it asks is plain to read.
+const FIND_SCRIPT = `(args) => {
+  const roots = args.within ? [...document.querySelectorAll(args.within)] : [document]
+  if (roots.length !== 1) return { count: 0, roots: roots.length }
+  const found = [...roots[0].querySelectorAll(args.select)]
+  if (found.length !== 1) return { count: found.length, roots: 1 }
+  found[0].scrollIntoView({ block: "center" })
+  const box = found[0].getBoundingClientRect()
+  return { count: 1, roots: 1, x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) }
+}`
+const TEXT_SCRIPT = `(args) => { const node = document.querySelector(args.select); return node ? node.textContent : null }`
+const FOCUS_SCRIPT = `(args) => { document.querySelector(args.select)?.focus(); return true }`
+// Sent means your words are on the page and no longer only in the box you wrote them in.
+const SENT_SCRIPT = `(args) => { const box = document.querySelector(args.input); return document.body.innerText.includes(args.text) && !(box && box.innerText.includes(args.text)) }`
+
+export interface Found {
+  count: number
+  roots: number
+  x?: number
+  y?: number
 }
 
-function text_script(selector: string): string {
-  return `(() => { const node = document.querySelector(${JSON.stringify(selector)}); return node ? node.textContent : null })()`
+function call(script: string, args: Record<string, unknown>): string {
+  return `(${script})(${JSON.stringify(args)})`
 }
 
-// Where an element is once the page shows it, or null when it never does.
-export async function wait_for(page: ActionPage, selector: string, timeout_ms = FIND_TIMEOUT_MS): Promise<Point | null> {
+function host_of(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "")
+  } catch {
+    return ""
+  }
+}
+
+async function find(page: ActionPage, within: string | null, select: string): Promise<Found> {
+  return (await page.run<Found | null>(call(FIND_SCRIPT, { within, select })).catch(() => null)) ?? { count: 0, roots: 0 }
+}
+
+// The one control the selector names inside the item's own part of the page, once the page shows it; or why not.
+export async function wait_for(page: ActionPage, within: string | null, select: string, timeout_ms = FIND_TIMEOUT_MS): Promise<Point | string> {
   const deadline = Date.now() + timeout_ms
   for (;;) {
-    const point = await page.run<Point | null>(point_script(selector)).catch(() => null)
-    if (point || Date.now() > deadline) return point
+    const found = await find(page, within, select)
+    if (found.roots > 1) return "the page holds more than one such item, so openMoi cannot tell which is yours"
+    if (found.count > 1) return "more than one control matched"
+    if (found.count === 1 && found.x !== undefined && found.y !== undefined) return { x: found.x, y: found.y }
+    if (Date.now() > deadline) return "it was not on the page"
     await sleep(POLL_MS)
   }
 }
@@ -92,41 +131,52 @@ async function until(check: () => Promise<boolean>, timeout_ms: number): Promise
   }
 }
 
-// How the page shows the action worked: the anchor's active state, a text that changed, or your words on the page.
+// How the page shows the action worked: the anchor's active state in the item's own part of the page, a text that
+// changed, or your words on the page and out of the box you wrote them in.
 async function verified(page: ActionPage, anchor: ActionAnchor, text: string, before: string | null): Promise<Outcome> {
   if (anchor.active_state) {
-    const shown = await until(async () => (await page.run<Point | null>(point_script(anchor.active_state ?? ""))) !== null, VERIFY_TIMEOUT_MS)
+    const shown = await until(async () => (await find(page, anchor.within, anchor.active_state ?? "")).count >= 1, VERIFY_TIMEOUT_MS)
     return shown ? { ok: true, detail: "the page shows it" } : { ok: false, detail: "the page did not show it worked" }
   }
   if (anchor.changed) {
-    const moved = await until(async () => (await page.run<string | null>(text_script(anchor.changed ?? ""))) !== before, VERIFY_TIMEOUT_MS)
+    const moved = await until(async () => (await page.run<string | null>(call(TEXT_SCRIPT, { select: anchor.changed }))) !== before, VERIFY_TIMEOUT_MS)
     return moved ? { ok: true, detail: "the page changed" } : { ok: false, detail: "the page did not change" }
   }
-  if (text) {
-    const written = await until(async () => (await page.run<string>("document.body.innerText")).includes(text), VERIFY_TIMEOUT_MS)
-    return written ? { ok: true, detail: "your words are on the page" } : { ok: false, detail: "your words did not appear" }
+  if (text && anchor.input) {
+    const sent = await until(() => page.run<boolean>(call(SENT_SCRIPT, { input: anchor.input, text })), VERIFY_TIMEOUT_MS)
+    return sent ? { ok: true, detail: "your words are on the page" } : { ok: false, detail: "your words were not sent" }
   }
   return { ok: true, detail: "done; the page gives no sign to check" }
 }
 
-// Runs an allowed action on its page: the control, then for a reply the box and the send button, then the check.
+// Runs an allowed action on its item's page: only on the site the gate allowed, only on the one control in the item's
+// own part of the page, not when the page shows it done already; then for a reply the box and the send button; then
+// the check.
 export async function perform(page: ActionPage, decision: ActionDecision): Promise<Outcome> {
   const anchor = decision.anchor
   if (!anchor) return { ok: false, detail: "no control to use" }
-  const before = anchor.changed ? await page.run<string | null>(text_script(anchor.changed)).catch(() => null) : null
-  const control = await wait_for(page, anchor.select)
-  if (!control) return { ok: false, detail: `the ${decision.label} button was not on the page` }
+  const landed = host_of(page.url())
+  if (landed !== decision.site) return { ok: false, detail: `the page went to ${landed || "an unknown address"}, not ${decision.site}` }
+  if (anchor.active_state && (await find(page, anchor.within, anchor.active_state)).count >= 1) return { ok: false, detail: "the page shows it done already" }
+  let before: string | null = null
+  if (anchor.changed) {
+    const counter = await wait_for(page, null, anchor.changed)
+    if (typeof counter === "string") return { ok: false, detail: `what shows it worked: ${counter}` }
+    before = await page.run<string | null>(call(TEXT_SCRIPT, { select: anchor.changed }))
+  }
+  const control = await wait_for(page, anchor.within, anchor.select)
+  if (typeof control === "string") return { ok: false, detail: `the ${decision.label} button: ${control}` }
   page.click(control)
   if (decision.text && anchor.input) {
-    const box = await wait_for(page, anchor.input)
-    if (!box) return { ok: false, detail: "the box to write in did not open" }
+    const box = await wait_for(page, null, anchor.input)
+    if (typeof box === "string") return { ok: false, detail: `the box to write in: ${box}` }
     page.click(box)
     // A box with nothing in it may have no height for a click to land on; it is focused for the typing either way.
-    await page.run(`document.querySelector(${JSON.stringify(anchor.input)})?.focus()`)
+    await page.run(call(FOCUS_SCRIPT, { select: anchor.input }))
     await page.type(decision.text)
     if (anchor.submit) {
-      const send = await wait_for(page, anchor.submit)
-      if (!send) return { ok: false, detail: "the send button was not there" }
+      const send = await wait_for(page, null, anchor.submit)
+      if (typeof send === "string") return { ok: false, detail: `the send button: ${send}` }
       page.click(send)
     }
   }
@@ -154,12 +204,22 @@ export class ActionController {
       return
     }
     if (decision.confirm) {
-      if (this.pending) await this.brain.action_result(this.pending.request_id, "declined", "another action came to the confirm sheet")
+      // The sheet never changes under you: while one is open, a new request is refused, not put in its place.
+      if (this.pending) {
+        await this.brain.action_result(decision.request_id, "declined", "a confirm sheet was already open")
+        this.hooks.notify("Finish the action waiting for your confirm first.")
+        return
+      }
       this.pending = decision
       this.hooks.changed()
       return
     }
     if (decision.undo_seconds > 0) {
+      const same = [...this.waiting.values()].find((waiting) => waiting.decision.url === decision.url && waiting.decision.action === decision.action)
+      if (same) {
+        await this.brain.action_result(decision.request_id, "declined", "the same action already waits for its undo time")
+        return
+      }
       const timer = setTimeout(() => this.run_waiting(decision.request_id), decision.undo_seconds * 1000)
       this.waiting.set(decision.request_id, { decision, timer })
       this.hooks.notify(`${decision.label} in ${decision.undo_seconds} s: ${decision.title}`, undefined, { label: "Undo", command: { type: "undo_action", request_id: decision.request_id } }, tag_of(decision))

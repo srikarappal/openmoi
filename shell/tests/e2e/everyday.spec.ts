@@ -423,19 +423,21 @@ test("questions about what you read are answered with links, and the address bar
   }
 })
 
+// The post a status page is about, as on X: not the replies under it, which have their own buttons.
+const FOCAL = "article[tabindex='-1']"
 const ACT_SPECS = (host: string) => ({
   "policy/sites.json": JSON.stringify({ policy_version: 1, sites: { [host]: { status: "active", mode: "pilot", daily_steps: 200, writes: { like: true, follow: true, reply: true, add_to_cart: true } } } }),
   "extractors/act_post.json": JSON.stringify({
     domain: host,
     path_pattern: "/pages/act_post*",
     page_type: "item",
-    item_root: "article",
+    item_root: "article[tabindex='-1']",
     fields: { text: { select: "[data-testid='tweetText']", take: "text" } },
     action_anchors: {
-      like: { select: "[data-testid='like']", active_state: "[data-testid='unlike']" },
-      unlike: { select: "[data-testid='unlike']", active_state: "[data-testid='like']" },
-      follow: { select: "[data-testid='follow']", active_state: "[data-testid='unfollow']" },
-      reply: { select: "[data-testid='reply']", input: "[data-testid='tweetTextarea']", submit: "[data-testid='tweetButton']" },
+      like: { within: FOCAL, select: "[data-testid='like']", active_state: "[data-testid='unlike']" },
+      unlike: { within: FOCAL, select: "[data-testid='unlike']", active_state: "[data-testid='like']" },
+      follow: { within: FOCAL, select: "[data-testid='follow']", active_state: "[data-testid='unfollow']" },
+      reply: { within: FOCAL, select: "[data-testid='reply']", input: "[data-testid='tweetTextarea']", submit: "[data-testid='tweetButton']" },
     },
   }),
   "extractors/act_product.json": JSON.stringify({
@@ -468,6 +470,7 @@ test("actions go through the gate: a like waits for undo, a reply and a cart wai
     await harness.click_lens(`${post}.querySelector(".act[data-action='like']")`)
     await expect(harness.chrome.locator(".notice", { hasText: "Like done on" })).toBeVisible({ timeout: 20_000 })
     expect((await world.hits("/acted?what=like")).length).toBe(1)
+    expect(await world.hits("/acted?what=like_other")).toEqual([])
     await harness.chrome.locator("button.tab.view", { hasText: "Feed" }).click()
     await expect(harness.chrome.locator("button.tab.view.active")).toHaveText("Feed")
     await eventually(
@@ -480,6 +483,7 @@ test("actions go through the gate: a like waits for undo, a reply and a cart wai
     await harness.click_lens(`${post}.querySelector(".send_reply")`)
     await expect(harness.chrome.locator(".confirm_text")).toHaveText("See you Saturday!")
     await expect(harness.chrome.locator(".confirm_title")).toContainText("Reply on")
+    await expect(harness.chrome.locator(".confirm_url")).toContainText("/pages/act_post")
     expect(await world.hits("/acted?what=reply")).toEqual([])
     await harness.chrome.locator(".confirm_actions .confirm").click()
     await expect(harness.chrome.locator(".notice", { hasText: "Reply done on" })).toBeVisible({ timeout: 20_000 })
@@ -517,6 +521,40 @@ test("no click, no action: a lens or the injected words in a post cannot act", a
     expect((await world.hits("/acted")).length).toBe(acted_before)
     expect(await harness.brain("/actions/log")).toEqual([])
     await expect(harness.chrome.locator(".confirm_sheet")).toHaveCount(0)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("a lens cannot turn your click on one control into an action: it counts only on that item's own control for it", async () => {
+  const feed = `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/acts.xml\n`
+  const harness = await Harness.launch(world, { views: { feed }, assets: ACT_SPECS(new URL(world.base_url).hostname) })
+  try {
+    await loaded(harness, "our bakery opens Saturday")
+    const post = `[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("bakery opens"))`
+    const product = `[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("desk lamp"))`
+    const acted_before = (await world.hits("/acted")).length
+    // The lens's own listeners turn every press into a like on the post and a cart add on the product.
+    await harness.in_lenses(
+      `(() => { const hijack = () => { for (const node of document.querySelectorAll("[data-item-id]")) { moi.act(node.dataset.itemId, "like", ""); moi.act(node.dataset.itemId, "add_to_cart", "") } }; ` +
+        `document.addEventListener("mousedown", hijack, true); document.addEventListener("keydown", hijack, true); return 1 })()`,
+    )
+    await harness.click_lens(`${post}.querySelector(".save")`)
+    await eventually(
+      () => harness.last_lens_text(),
+      (text) => text.includes("Saved"),
+    )
+    await harness.chrome.waitForTimeout(900)
+    // Your click on the product's Add to cart still counts for that, and only that.
+    await harness.click_lens(`${product}.querySelector(".act[data-action='add_to_cart']")`)
+    await expect(harness.chrome.locator(".confirm_title")).toContainText("Add to cart on")
+    await harness.chrome.locator(".confirm_actions .decline").click()
+    await harness.chrome.waitForTimeout(1_500)
+    await expect(harness.chrome.locator(".notice", { hasText: "Like in 5 s" })).toHaveCount(0)
+    await expect(harness.chrome.locator(".confirm_sheet")).toHaveCount(0)
+    expect((await world.hits("/acted")).length).toBe(acted_before)
+    const log = await harness.brain<Array<{ kind: string; action?: string; item_id?: string }>>("/actions/log")
+    expect(log.filter((entry) => entry.kind === "request").map((entry) => entry.action)).toEqual(["add_to_cart"])
   } finally {
     await harness.close()
   }

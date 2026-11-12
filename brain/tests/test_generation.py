@@ -46,6 +46,7 @@ def test_lens_messages_hold_layout_schema_api_and_example_only():
     assert payload["kind"] == "listing"
     assert payload["last_error"] == "items missing"
     assert "moi.ready()" in payload["helper_api"]
+    assert "moi.act(item_id, action, text)" in payload["helper_api"] and "data-action" in payload["helper_api"]
     assert payload["item_schema"]["title"] == "ViewItem"
     assert payload["example_lens"] == DEFAULT_LENS
     assert "data-item-id" in system["content"]

@@ -281,6 +281,8 @@ export interface Answer {
 }
 
 export interface ActionAnchor {
+  // The item's own part of its page (the post itself, not a reply under it); actions look only inside it.
+  within: string | null
   select: string
   active_state: string | null
   changed: string | null

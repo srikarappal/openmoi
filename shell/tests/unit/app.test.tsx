@@ -365,6 +365,8 @@ describe("the confirm sheet", () => {
     await show({ confirm: pending })
     expect(texts(".confirm_title")).toEqual(["Reply on x.com, as you"])
     expect(texts(".confirm_target")).toEqual(["Bakery opens"])
+    expect(texts(".confirm_url")).toEqual(["https://x.com/maya/status/1"])
+    expect(texts(".confirm_account")).toEqual(["With your account on x.com, signed in in openMoi."])
     expect(texts(".confirm_text")).toEqual(["See you Saturday"])
     await click(query(".confirm_actions .confirm"))
     expect(last_sent()).toEqual({ type: "confirm_action", request_id: "r1" })

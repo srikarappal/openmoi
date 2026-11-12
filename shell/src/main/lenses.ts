@@ -18,6 +18,43 @@ const PER_LENS_MS: Partial<Record<LensToHost["type"], number>> = { less_like_thi
 // that lens, as the main process saw it. A lens script can fire its own events but cannot fake these.
 export const GESTURE_WINDOW_MS = 1_000
 const REAL_INPUT = new Set(["mouseDown", "mouseUp", "keyDown", "rawKeyDown", "touchStart", "touchEnd", "gestureTap"])
+const POINTER_INPUT = new Set(["mouseDown", "mouseUp", "touchStart", "touchEnd", "gestureTap"])
+// Keys that press a focused button.
+const ACTIVATION_KEYS = new Set(["Enter", " ", "Space"])
+// A script world of the host's own, where the lens's code cannot reach: it reads which control your click landed on.
+const HOST_WORLD = 4242
+
+// The control a click landed on and the item card it belongs to, as the host reads the page.
+interface Control {
+  action: string | null
+  item_id: string | null
+}
+
+// Your last click or key press on a lens: where it landed, so an action can be checked against its own control.
+interface Gesture {
+  at: number
+  pointer: boolean
+  x: number
+  y: number
+  key: string
+  // Read once per gesture, however many calls a lens makes.
+  control: Promise<Control | null> | null
+  used: boolean
+}
+
+// A release, the tap a touch becomes and the key down after a raw key down carry on the gesture before them: one
+// press is one gesture, good for one action.
+function continues(input_type: string, key: string, previous: Gesture | undefined, now: number): boolean {
+  if (!previous || now - previous.at >= GESTURE_WINDOW_MS) return false
+  if (input_type === "mouseUp" || input_type === "touchEnd" || input_type === "gestureTap") return previous.pointer
+  return input_type === "keyDown" && !previous.pointer && previous.key === key
+}
+
+// The control under the click (or focused, for a key press) and the item card it belongs to.
+function control_script(gesture: Gesture): string {
+  const target = gesture.pointer ? `document.elementFromPoint(${gesture.x}, ${gesture.y})` : "document.activeElement"
+  return `(() => { const node = ${target}; const control = node && node.closest("[data-action]"); const card = node && node.closest("[data-item-id]"); return { action: control ? control.getAttribute("data-action") : null, item_id: card ? card.getAttribute("data-item-id") : null } })()`
+}
 const NEEDS_GESTURE = new Set<LensToHost["type"]>(["open", "play", "less_like_this", "save", "unsave", "highlight", "act"])
 
 export class LensContext {
@@ -67,6 +104,7 @@ export class LensManager {
   private readonly by_contents = new Map<number, LensContext>()
   private readonly last_action = new Map<string, number>()
   private readonly last_input = new Map<number, number>()
+  private readonly gestures = new Map<number, Gesture>()
 
   constructor(
     private readonly host: ViewHost,
@@ -84,9 +122,26 @@ export class LensManager {
       if (context.ready) return
       context.ready = true
       this.events.on_ready(context)
+    } else if (message.type === "act") {
+      this.on_control(context, message).catch(ignore)
     } else if (this.by_gesture(contents_id, message) && this.in_time(context, message)) {
       this.events.on_event(context, message)
     }
+  }
+
+  // An action on a site counts only when your own click (or Enter or Space) was on that item's control for that
+  // action, as the host reads the page in its own script world; each click counts for one action at most. Calls for
+  // anything else are ignored without using up your click, so a lens firing its own calls cannot spoil yours.
+  private async on_control(context: LensContext, message: Extract<LensToHost, { type: "act" }>): Promise<void> {
+    const contents = context.view.webContents
+    const gesture = this.gestures.get(contents.id)
+    if (!gesture || gesture.used || Date.now() - gesture.at > GESTURE_WINDOW_MS) return
+    if (!gesture.pointer && !ACTIVATION_KEYS.has(gesture.key)) return
+    gesture.control ??= (contents.executeJavaScriptInIsolatedWorld(HOST_WORLD, [{ code: control_script(gesture) }]) as Promise<Control | null>).catch(() => null)
+    const found = await gesture.control
+    if (gesture.used || found?.action !== message.action || found.item_id !== message.item_id) return
+    gesture.used = true
+    if (this.in_time(context, message)) this.events.on_event(context, message)
   }
 
   private by_gesture(contents_id: number, message: LensToHost): boolean {
@@ -122,7 +177,15 @@ export class LensManager {
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     const contents_id = view.webContents.id
     view.webContents.on("input-event", (_event, input) => {
-      if (REAL_INPUT.has(input.type)) this.last_input.set(contents_id, Date.now())
+      if (!REAL_INPUT.has(input.type)) return
+      this.last_input.set(contents_id, Date.now())
+      const place = input as unknown as { x?: number; y?: number; key?: string }
+      const previous = this.gestures.get(contents_id)
+      if (previous && continues(input.type, place.key ?? "", previous, Date.now())) {
+        previous.at = Date.now()
+        return
+      }
+      this.gestures.set(contents_id, { at: Date.now(), pointer: POINTER_INPUT.has(input.type), x: place.x ?? 0, y: place.y ?? 0, key: place.key ?? "", control: null, used: false })
     })
     const context = new LensContext(key, view_id, view)
     this.contexts.set(key, context)
@@ -145,6 +208,7 @@ export class LensManager {
     this.contexts.delete(key)
     this.by_contents.delete(context.view.webContents.id)
     this.last_input.delete(context.view.webContents.id)
+    this.gestures.delete(context.view.webContents.id)
     forget_lens(context.view.webContents.id)
     this.host.detach(context.view)
     context.view.webContents.close()

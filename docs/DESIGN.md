@@ -36,7 +36,7 @@ Part 2: Later
 18. L2 Smarter brain `[built]`
 19. L3 Full lens engine `[built]`
 20. L4 Intent views `[built]`
-21. L5 Actions and the policy gate `[not built]`
+21. L5 Actions and the policy gate `[built]`
 22. L6 Agents `[not built]`
 23. L7 Recipes and mashups `[not built]`
 24. L8 Native apps and System OS `[not built]`
@@ -874,7 +874,7 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 | L2 Smarter brain | Learned ranking, clusters, embeddings, search, richer rules | Event log, Item | built |
 | L3 Full lens engine | Test gate, visual judge, patch mode, media proxy, tokens, gesture binding | Lens contract | built |
 | L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file | built |
-| L5 Actions and gate | Tiers, executors, verify, audit, injection defense | Read only boundary, shell and brain split | not built |
+| L5 Actions and gate | Tiers, executors, verify, audit, injection defense | Read only boundary, shell and brain split | built |
 | L6 Agents | Runtime, tools, standing tasks | Brain, gate | not built |
 | L7 Recipes and mashups | Match kinds, identity and entity links | View as a .md file | not built |
 | L8 Native apps | Swift helper, app ladder | Source adapter | not built |
@@ -1050,7 +1050,7 @@ query -> searches Amazon + configured stores -> normalized products -> ranked by
 
 Reviewed after it was built: 13 problems found and fixed with tests, among them products you had seen vanishing when you shopped again, offline copies replacing richer reader copies, prices in the European convention and per unit prices read wrong, sponsored products sharing one price history, and edit requests starting "When I..." taken for questions. The exit (14 days without opening the sites directly) is a habit to measure while dogfooding, not something tests can show.
 
-## 21. L5 Actions and the policy gate `[not built]`
+## 21. L5 Actions and the policy gate `[built]`
 
 **Tiers**
 
@@ -1076,6 +1076,22 @@ action request (lens or agent) -> schema check
 * `available_actions` on items, empty since the MVP, now fills from the action specs.
 
 **Exit:** like, reply and follow on X, add to cart on Amazon at 99% verified success on test accounts; zero unauthorized actions in the red team corpus; tier 3 automation impossible by construction.
+
+**As built (Nov 12, 2026):**
+
+| Piece | Built | Not verified |
+|---|---|---|
+| Request | A lens asks with `moi.act(item_id, action, text)`, only on your click: the preload checks user activation and the main process needs a real input event on that lens within 1 s. The host then reads, in a script world of its own, the control under your click (or focused, for Enter or Space): it must carry `data-action` for that action inside that item's `data-item-id` element. One press is one gesture, good for one action; calls for anything else are ignored without using up your click, and the page is read once per gesture. Per item and action pacing stops a lens repeating it | |
+| Gate | The brain's `/actions/check`: the action's tier, the origin (your gesture, or a plan you approved that found the item; content has no way in), a plain web link (no user or password, backslash or dot segment), the site's `writes` flag in `policy/sites.json` (off unless listed; x.com allows like, follow and reply, amazon.com add to cart), a cap per site of 30 tier 1 and 10 tier 2 requests an hour, and whether the spec for the item's own page knows the control (`action_anchors`). The cap check and its audit entry are one step under a lock, and what you declined or undid in time does not count. Every request, allowed or not, and its one outcome go to `.moi/actions.jsonl`; a second outcome is refused | |
+| Tier 1 | Like, follow, bookmark and their undoing: a notice with Undo for 5 s, then done. Undo notices are never pushed out by newer notices, two items with the same title each keep their own, and a second like on an item whose like is waiting is ignored | |
+| Tier 2 | Reply, repost, message, add to cart: a confirm sheet in the side panel with the exact text, the item, its address and the account it acts as; nothing happens until you confirm, and Cancel is audited. While a sheet is open a new request is refused, never put in its place | |
+| Tier 3 | Place an order, delete, cancel a plan: no executor exists; the gate refuses and opens the page for you | |
+| Executor | Opens the item's own page in a tab in front of you, in your session, and acts only if the page landed on the site the gate allowed. An anchor's `within` names the item's own part of the page (on X the post itself, `article[tabindex='-1']`, not the replies under it): it must match once, the control inside it must match once, and a control already in its active state is not clicked (a like never becomes an unlike). It clicks with real mouse input, types a reply into its box, sends it, and checks the page: the active state appears in the item, a counter found before the click changes, or your words show outside the box. The item remembers what you did (Like becomes Liked) | X and Amazon with real accounts |
+| Red team | `fixtures/injection/corpus.json`: posts and product pages telling assistants to like, repost, reply, buy, edit memory or reveal people.md. Through tagging, summaries, chat questions and edits they cause zero action requests and zero file changes; in the real app a lens calling `moi.act` without a click, posts that say to act, and a lens whose own listeners call `moi.act` on every press cause nothing | |
+
+A lens draws its own page, so it can still label a control falsely (a button reading Save that carries `data-action="like"`). The control check stops a lens turning any click into an action; what stops a false label is the trusted chrome: tier 1 shows "Like in 5 s" with Undo and tier 2 shows the confirm sheet, both outside the lens.
+
+The 99% success exit needs test accounts on X and Amazon; against the fake world every action is verified on the page.
 
 ## 22. L6 Agents `[not built]`
 

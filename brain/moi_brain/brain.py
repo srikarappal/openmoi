@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from moi_brain.compile import VIEW_ID, BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
 from moi_brain.agents import AgentKind, AgentRun, AgentRunner, ComposerReply, ItemSummary, PlanDraft, PlanStep, composer_messages, load_runs, plan_expiry, planner_messages, summary_messages
-from moi_brain.actions import KINDS, RATE_CAPS, RATE_WINDOW, UNDO_SECONDS, ActionDecision, ActionKind, ActionRequest, ActionResult, AuditLog, new_request_id, policy_flag, state_key
+from moi_brain.actions import KINDS, RATE_CAPS, RATE_WINDOW, UNDO_SECONDS, ActionAnchor, ActionDecision, ActionKind, ActionRequest, ActionResult, AuditLog, new_request_id, plain_url, policy_flag, state_key
 from moi_brain.answers import MAX_SOURCES, Answer, AnswerReply, answer_prompt, cited
 from moi_brain.collections import READ_LATER, collection_name, collection_title, export_json, export_markdown, is_collection_name
 from moi_brain.content import ContentSummary, caption_allowed, is_video, offline_blocks, summary_extra, summary_prompt, transcript_text
@@ -799,11 +799,20 @@ class Brain:
         now = self.clock()
         site = page_domain(item.url)
         text = request.text.strip()
-        reason = self.action_refusal(request, kind, site, text, now)
-        spec = self.best_spec(item.url) if reason is None else None
+        spec = self.best_spec(item.url) if plain_url(item.url) else None
         anchor = spec.action_anchors.get(request.action) if spec else None
-        if reason is None and anchor is None:
-            reason = f"openMoi does not know where to {kind.label.lower()} on {site} yet."
+        # The check and its audit entry are one step, so two requests at once cannot both pass a rate cap with one
+        # place left.
+        with self.audit.lock:
+            reason = self.action_refusal(request, kind, item.url, text, now)
+            if reason is None and anchor is None:
+                reason = f"openMoi does not know where to {kind.label.lower()} on {site} yet."
+            decision = self.audited_decision(request, kind, item, text, reason, anchor, now)
+        return decision
+
+    def audited_decision(self, request: ActionRequest, kind: ActionKind, item: Item, text: str, reason: str | None, anchor: ActionAnchor | None, now: datetime) -> ActionDecision:
+        """The gate's answer for a request, written to the audit log."""
+        site = page_domain(item.url)
         allowed = reason is None
         decision = ActionDecision(
             request_id=new_request_id(),
@@ -827,10 +836,13 @@ class Brain:
         })
         return decision
 
-    def action_refusal(self, request: ActionRequest, kind: ActionKind, site: str, text: str, now: datetime) -> str | None:
+    def action_refusal(self, request: ActionRequest, kind: ActionKind, url: str, text: str, now: datetime) -> str | None:
         """Why the gate refuses a request, or None when it may go on."""
+        site = page_domain(url)
         if kind.tier == 3:
             return f"openMoi never does this for you. The page is open: {kind.label.lower()} there yourself if you want to."
+        if not plain_url(url):
+            return "openMoi acts only through a plain web link, and this item's link is not one."
         if request.origin == "plan":
             run = self.agent_runs.get(request.plan_id or "")
             if run is None or run.status not in ("running", "paused", "done"):
@@ -856,10 +868,13 @@ class Brain:
     def action_result(self, result: ActionResult) -> Item | None:
         """What became of an allowed request: done (the page shows it worked), failed, undone in time, or declined
         at the confirm sheet. A done action is remembered on its item; the item comes back for the lens."""
-        request = self.audit.request(result.request_id)
-        if request is None or not request.get("allowed"):
-            raise BadInput("No allowed action has that id.")
-        self.audit.append({"kind": "result", "at": self.clock().astimezone(UTC).isoformat(), "request_id": result.request_id, "outcome": result.outcome, "detail": result.detail})
+        with self.audit.lock:
+            request = self.audit.request(result.request_id)
+            if request is None or not request.get("allowed"):
+                raise BadInput("No allowed action has that id.")
+            if self.audit.outcome(result.request_id) is not None:
+                raise BadInput("That action has its outcome already.")
+            self.audit.append({"kind": "result", "at": self.clock().astimezone(UTC).isoformat(), "request_id": result.request_id, "outcome": result.outcome, "detail": result.detail})
         item_id, action = str(request["item_id"]), str(request["action"])
         if result.outcome == "done":
             self.store.update_extra(item_id, {state_key(action): "no" if action.startswith("un") and policy_flag(action) != action else "yes"})

@@ -32,8 +32,18 @@ export class FakeWebContents extends EventEmitter {
   }
 
   // A real click on this web contents, as the main process sees input.
-  press(): void {
-    this.emit("input-event", {}, { type: "mouseDown" })
+  press(x = 0, y = 0): void {
+    this.emit("input-event", {}, { type: "mouseDown", x, y })
+  }
+
+  // Scripts run in a world of their own, and what they answer: a value, or a function of the script.
+  isolated: Array<{ world: number; code: string }> = []
+  isolated_answer: unknown = null
+
+  async executeJavaScriptInIsolatedWorld(world: number, scripts: Array<{ code: string }>): Promise<unknown> {
+    for (const script of scripts) this.isolated.push({ world, code: script.code })
+    const answer = this.isolated_answer
+    return typeof answer === "function" ? (answer as (code: string) => unknown)(scripts[0]?.code ?? "") : answer
   }
 
   // Like Electron, the address changes as the load starts; a failure comes a moment later.

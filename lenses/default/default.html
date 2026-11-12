@@ -211,12 +211,14 @@
 
   function reply_tools(item) {
     const tools = element("span", "reply_tools")
+    // Only the send button asks for the reply, so only it carries data-action: the host counts a reply only from a
+    // click on it.
     const open = element("button", "act", "Reply")
-    open.dataset.action = "reply"
     const box = element("textarea", "reply_box")
     box.setAttribute("aria-label", "Your reply")
     box.hidden = true
     const sendit = element("button", "send_reply", "Send reply")
+    sendit.dataset.action = "reply"
     sendit.hidden = true
     open.addEventListener("click", (event) => {
       event.stopPropagation()

@@ -1,6 +1,7 @@
 """Actions and the policy gate: tiers, origins, write flags, rate caps, anchors, the audit log and the red team corpus."""
 
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -8,7 +9,14 @@ from conftest import TOKEN
 from fastapi.testclient import TestClient
 from helpers import FixedClock
 
-from moi_brain.actions import KINDS, RATE_CAPS, policy_flag, state_key
+from moi_brain.actions import (
+    KINDS,
+    RATE_CAPS,
+    ActionRequest,
+    plain_url,
+    policy_flag,
+    state_key,
+)
 from moi_brain.api import create_app
 from moi_brain.brain import Brain
 from moi_brain.config import REPO_DIR
@@ -52,7 +60,7 @@ def test_a_like_by_your_click_is_allowed_with_its_control_and_five_seconds_to_un
     item_id = stored(client, "x", POST)
     decision = check(client, item_id, "like")
     assert decision["allowed"] is True and decision["tier"] == 1 and decision["confirm"] is False and decision["undo_seconds"] == 5
-    assert decision["anchor"] == {"select": "[data-testid='like']", "active_state": "[data-testid='unlike']", "changed": None, "input": None, "submit": None}
+    assert decision["anchor"] == {"within": "article[tabindex='-1']", "select": "[data-testid='like']", "active_state": "[data-testid='unlike']", "changed": None, "input": None, "submit": None}
     assert (decision["site"], decision["url"], decision["title"]) == ("x.com", POST["url"], "Our bakery opens Saturday")
     [entry] = client.get("/actions/log").json()
     assert entry["kind"] == "request" and entry["request_id"] == decision["request_id"] and entry["origin"] == "gesture" and entry["allowed"] is True
@@ -117,6 +125,74 @@ def test_the_rate_cap_counts_allowed_requests_per_site_and_tier_in_the_last_hour
     assert check(client, item_id, "reply", "hi")["allowed"]
     clock.moment += timedelta(minutes=61)
     assert check(client, item_id, "like")["allowed"]
+
+
+def test_what_you_declined_or_undid_in_time_does_not_count_toward_the_cap(gate):
+    _, client = gate
+    item_id = stored(client, "x", POST)
+    for index in range(RATE_CAPS[1] * 2):
+        decision = check(client, item_id, "like")
+        assert decision["allowed"], index
+        client.post("/actions/result", json={"request_id": decision["request_id"], "outcome": "undone" if index % 2 else "declined"})
+    for _ in range(RATE_CAPS[1]):
+        decision = check(client, item_id, "like")
+        client.post("/actions/result", json={"request_id": decision["request_id"], "outcome": "failed", "detail": "the page did not show it worked"})
+    assert check(client, item_id, "like")["reason"].startswith("That makes more than")
+
+
+def test_two_requests_at_once_cannot_both_take_the_last_place_under_the_cap(gate):
+    brain, client = gate
+    item_id = stored(client, "x", POST)
+    for _ in range(RATE_CAPS[2] - 1):
+        assert check(client, item_id, "reply", "hi")["allowed"]
+    answers = []
+    start = threading.Barrier(8)
+
+    def ask() -> None:
+        start.wait()
+        answers.append(brain.check_action(ActionRequest(item_id=item_id, action="reply", text="hi")).allowed)
+
+    threads = [threading.Thread(target=ask) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(answers) == [False] * 7 + [True]
+
+
+def test_an_action_has_one_outcome(gate):
+    _, client = gate
+    like = check(client, stored(client, "x", POST), "like")
+    assert client.post("/actions/result", json={"request_id": like["request_id"], "outcome": "undone"}).status_code == 200
+    for outcome in ("done", "undone", "failed"):
+        answer = client.post("/actions/result", json={"request_id": like["request_id"], "outcome": outcome})
+        assert answer.status_code == 400 and "outcome already" in answer.text
+    assert [entry["kind"] for entry in client.get("/actions/log").json()] == ["request", "result"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example@x.com/maya/status/1",
+        "https://x.com:pw@x.com/maya/status/1",
+        "https://x.com/maya/../../evil/status/1",
+        "https://x.com/maya/%2e%2e/evil/status/1",
+        "https://x.com/maya/./status/1",
+        "https://x.com\\@evil.example/status/1",
+        "https://x.com/maya%5c..%5cevil/status/1",
+    ],
+)
+def test_the_gate_acts_only_through_a_plain_web_link(gate, url):
+    _, client = gate
+    assert not plain_url(url)
+    decision = check(client, stored(client, "x", {**POST, "native_id": url[-30:], "url": url}), "like")
+    assert decision["allowed"] is False and decision["anchor"] is None
+    assert decision["reason"] == "openMoi acts only through a plain web link, and this item's link is not one."
+
+
+def test_plain_links_pass():
+    assert plain_url("https://x.com/maya/status/1001") and plain_url("http://127.0.0.1:8080/pages/act_post.html?a=1#b")
+    assert not plain_url("javascript:alert(1)") and not plain_url("file:///etc/passwd") and not plain_url("https:///nohost")
 
 
 def test_outcomes_are_audited_and_what_you_did_is_remembered_on_the_item(gate):

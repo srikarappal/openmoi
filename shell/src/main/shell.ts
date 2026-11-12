@@ -447,9 +447,15 @@ export class Shell implements ViewHost {
     this.activate({ kind: "tab", tab_id: this.tabs.open(url).tab_id })
   }
 
+  // A tagged notice stands for one thing (an action's undo, an edition) and replaces its own earlier one; an untagged
+  // one is not repeated. The oldest go first, but never an Undo: it is your only way to stop an action in time.
   notify(text: string, url?: string, action?: Notice["action"], tag?: string): void {
-    if (this.notices.some((notice) => notice.text === text)) return
-    this.notices = [...this.notices, { notice_id: this.next_notice_id++, text, url, action, tag }].slice(-MAX_NOTICES)
+    const kept = tag ? this.notices.filter((notice) => notice.tag !== tag) : this.notices
+    if (!tag && kept.some((notice) => notice.text === text)) return
+    const notices = [...kept, { notice_id: this.next_notice_id++, text, url, action, tag }]
+    const spare = notices.filter((notice) => notice.action?.command.type !== "undo_action")
+    const evicted = new Set(spare.slice(0, Math.max(0, notices.length - MAX_NOTICES)))
+    this.notices = notices.filter((notice) => !evicted.has(notice))
     this.push_state()
   }
 

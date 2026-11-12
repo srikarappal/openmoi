@@ -142,6 +142,18 @@ describe("Shell window", () => {
 })
 
 describe("Shell notices", () => {
+  it("keeps every Undo, even for two items with the same title, and lets a tagged notice replace its own", async () => {
+    const { shell } = await started()
+    for (const id of ["u1", "u2"]) shell.notify("Like in 5 s: Same title", undefined, { label: "Undo", command: { type: "undo_action", request_id: id } }, `action:${id}`)
+    for (let index = 0; index < 7; index++) shell.notify(`later ${index}`)
+    const notices = state_of(shell).notices
+    expect(notices.filter((notice) => notice.action?.label === "Undo").map((notice) => notice.tag)).toEqual(["action:u1", "action:u2"])
+    expect(notices.map((notice) => notice.text).slice(2)).toEqual(["later 3", "later 4", "later 5", "later 6"])
+    shell.notify("Edition at 7:00", undefined, undefined, "edition:feed")
+    shell.notify("Edition at 8:00", undefined, undefined, "edition:feed")
+    expect(state_of(shell).notices.filter((notice) => notice.tag === "edition:feed").map((notice) => notice.text)).toEqual(["Edition at 8:00"])
+  })
+
   it("shows each text once, keeps the latest six and lets you dismiss or open them", async () => {
     const { shell, window } = await started()
     shell.notify("same")

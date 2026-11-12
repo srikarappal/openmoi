@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
+from urllib.parse import unquote, urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -61,6 +62,9 @@ class ActionAnchor(BaseModel):
     worked, and for a reply the box to write in and the button that sends it."""
 
     select: str = Field(min_length=1, max_length=300)
+    # The item's own part of its page (the post itself, not the post it replies to or the replies under it): the
+    # control and its active state are looked for only inside it, and it must be there exactly once.
+    within: str | None = Field(default=None, max_length=300)
     # Shows once the action worked (the Like button becomes Unlike).
     active_state: str | None = Field(default=None, max_length=300)
     # Or: an element whose text changes when the action worked (the cart count).
@@ -103,37 +107,68 @@ class ActionResult(BaseModel):
 
 
 class AuditLog:
-    """Every action request with its decision, and every outcome, one JSON line each."""
+    """Every action request with its decision, and every outcome, one JSON line each. The file is read once and kept
+    in memory after; the lock lets a check and the entry it leads to be one step (hold it around both)."""
 
     def __init__(self, path: Path):
         self.path = path
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self.cache: list[dict[str, object]] | None = None
+
+    def loaded(self) -> list[dict[str, object]]:
+        with self.lock:
+            if self.cache is None:
+                self.cache = []
+                for line in read_text(self.path).splitlines():
+                    try:
+                        self.cache.append(json.loads(line))
+                    except ValueError:
+                        continue
+            return self.cache
 
     def append(self, entry: dict[str, object]) -> None:
         with self.lock:
+            entries = self.loaded()
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry) + "\n")
+            entries.append(entry)
 
     def entries(self) -> list[dict[str, object]]:
-        lines = []
-        for line in read_text(self.path).splitlines():
-            try:
-                lines.append(json.loads(line))
-            except ValueError:
-                continue
-        return lines
+        with self.lock:
+            return list(self.loaded())
 
     def recent_requests(self, site: str, tier: int, since: datetime) -> int:
-        """Allowed requests of a tier to a site since a moment, done or still waiting: what the rate cap counts."""
-        return sum(
-            1
-            for entry in self.entries()
-            if entry.get("kind") == "request" and entry.get("allowed") and entry.get("site") == site and entry.get("tier") == tier and str(entry.get("at", "")) >= since.isoformat()
-        )
+        """Allowed requests of a tier to a site since a moment that reached the site or still may: what the rate cap
+        counts. One you declined or undid in time never did."""
+        with self.lock:
+            entries = self.loaded()
+            withdrawn = {entry.get("request_id") for entry in entries if entry.get("kind") == "result" and entry.get("outcome") in ("declined", "undone")}
+            return sum(
+                1
+                for entry in entries
+                if entry.get("kind") == "request" and entry.get("allowed") and entry.get("site") == site and entry.get("tier") == tier
+                and str(entry.get("at", "")) >= since.isoformat() and entry.get("request_id") not in withdrawn
+            )
 
     def request(self, request_id: str) -> dict[str, object] | None:
-        return next((entry for entry in reversed(self.entries()) if entry.get("kind") == "request" and entry.get("request_id") == request_id), None)
+        with self.lock:
+            return next((entry for entry in reversed(self.loaded()) if entry.get("kind") == "request" and entry.get("request_id") == request_id), None)
+
+    def outcome(self, request_id: str) -> str | None:
+        with self.lock:
+            return next((str(entry.get("outcome")) for entry in self.loaded() if entry.get("kind") == "result" and entry.get("request_id") == request_id), None)
+
+
+def plain_url(url: str) -> bool:
+    """A link an action may open: web, with no user or password in it, no backslash and no dot segment (plain or
+    percent encoded) in its path, so the site it names is the site that opens."""
+    try:
+        parts = urlsplit(url)
+        segments = [unquote(segment) for segment in parts.path.split("/")]
+        return parts.scheme in ("http", "https") and bool(parts.hostname) and parts.username is None and parts.password is None and "\\" not in unquote(url) and not any(segment in (".", "..") for segment in segments)
+    except ValueError:
+        return False
 
 
 def new_request_id() -> str:

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ViewHost } from "../../src/main/host"
 import type { ViewItem } from "../../src/shared/types"
-import { FakeSession, FakeWebContentsView, ipc_event, ipcMain, reset_electron, session } from "./fake_electron"
+import { FakeSession, FakeWebContents, FakeWebContentsView, ipc_event, ipcMain, reset_electron, session } from "./fake_electron"
 
 vi.mock("electron", async () => await import("./fake_electron"))
 
@@ -37,6 +37,11 @@ function view_item(item_id: string, image_url: string | null = null): ViewItem {
 // A real click on a lens, as the main process sees input.
 function press(contents: unknown): void {
   ;(contents as { press(): void }).press()
+}
+
+// Lets the host's async checks (the control under a click) finish.
+async function flush(): Promise<void> {
+  for (let round = 0; round < 5; round++) await Promise.resolve()
 }
 
 function lens_event(contents: unknown, message: unknown): void {
@@ -251,12 +256,112 @@ describe("LensManager pacing for actions", () => {
     const lenses = new LensManager(host as never, events)
     const context = await lenses.open("view:feed", "feed", "<p>lens</p>")
     const now = vi.spyOn(Date, "now").mockReturnValue(20_000)
-    const contents = context.view.webContents
+    const contents = context.view.webContents as unknown as FakeWebContents
     for (const [item_id, action, at] of [["a", "reply", 20_000], ["b", "add_to_cart", 20_200], ["b", "add_to_cart", 20_400], ["b", "like", 20_600], ["c", "save", 20_610]] as const) {
       now.mockReturnValue(at)
+      contents.isolated_answer = { action, item_id }
       press(contents)
       lens_event(contents, at === 20_610 ? { type: "save", item_id, collection: "read_later" } : { type: "act", item_id, action, text: "" })
+      await flush()
     }
     expect(events.on_event.mock.calls.map((call) => `${call[1].type} ${call[1].item_id} ${call[1].action ?? ""}`.trim())).toEqual(["act a reply", "act b add_to_cart", "act b like", "save c"])
+  })
+})
+
+describe("LensManager actions bound to their own control", () => {
+  async function acting() {
+    const events = { on_ready: vi.fn(), on_event: vi.fn() }
+    const lenses = new LensManager(new FakeHost(), events)
+    const context = await lenses.open("view:feed", "feed", "<p>lens</p>")
+    const contents = context.view.webContents as unknown as FakeWebContents
+    contents.isolated_answer = { action: "like", item_id: "a" }
+    vi.spyOn(Date, "now").mockReturnValue(30_000)
+    const acted = () => events.on_event.mock.calls.map((call) => `${call[1].action} ${call[1].item_id}`)
+    return { contents, acted }
+  }
+
+  afterEach(() => vi.restoreAllMocks())
+
+  it("counts an action only when your click landed on that item's control for it, read in the host's own world", async () => {
+    const { contents, acted } = await acting()
+    contents.press(40, 60)
+    lens_event(contents, { type: "act", item_id: "a", action: "like", text: "" })
+    await flush()
+    expect(acted()).toEqual(["like a"])
+    expect(contents.isolated).toHaveLength(1)
+    expect(contents.isolated[0].world).not.toBe(0)
+    expect(contents.isolated[0].code).toContain("document.elementFromPoint(40, 60)")
+    expect(contents.isolated[0].code).toContain('closest("[data-action]")')
+    for (const answer of [{ action: "save", item_id: "b" }, { action: "like", item_id: "b" }, { action: null, item_id: null }, null]) {
+      vi.mocked(Date.now).mockReturnValue(30_000 + 1_000 * contents.isolated.length)
+      contents.isolated_answer = answer
+      contents.press(40, 60)
+      lens_event(contents, { type: "act", item_id: "b", action: "follow", text: "" })
+      await flush()
+    }
+    expect(acted()).toEqual(["like a"])
+  })
+
+  it("lets one click count for one action at most, its release and all", async () => {
+    const { contents, acted } = await acting()
+    contents.press(40, 60)
+    contents.emit("input-event", {}, { type: "mouseUp", x: 40, y: 60 })
+    lens_event(contents, { type: "act", item_id: "a", action: "like", text: "" })
+    lens_event(contents, { type: "act", item_id: "a", action: "like", text: "" })
+    contents.isolated_answer = { action: "follow", item_id: "c" }
+    lens_event(contents, { type: "act", item_id: "c", action: "follow", text: "" })
+    await flush()
+    expect(acted()).toEqual(["like a"])
+    expect(contents.isolated).toHaveLength(1)
+  })
+
+  it("ignores a lens's own calls for other controls without using up your click, reading the page once", async () => {
+    const { contents, acted } = await acting()
+    contents.press(40, 60)
+    for (let index = 0; index < 20; index++) lens_event(contents, { type: "act", item_id: `x${index}`, action: "like", text: "" })
+    lens_event(contents, { type: "act", item_id: "a", action: "follow", text: "" })
+    lens_event(contents, { type: "act", item_id: "a", action: "like", text: "" })
+    await flush()
+    expect(acted()).toEqual(["like a"])
+    expect(contents.isolated).toHaveLength(1)
+  })
+
+  it("counts no action when the page cannot be read", async () => {
+    const { contents, acted } = await acting()
+    contents.isolated_answer = () => {
+      throw new Error("frame gone")
+    }
+    contents.press(40, 60)
+    lens_event(contents, { type: "act", item_id: "a", action: "like", text: "" })
+    await flush()
+    expect(acted()).toEqual([])
+  })
+
+  it("counts no action without a click, or after the click is a second old", async () => {
+    const { contents, acted } = await acting()
+    lens_event(contents, { type: "act", item_id: "a", action: "like", text: "" })
+    contents.press(40, 60)
+    vi.mocked(Date.now).mockReturnValue(30_000 + GESTURE_WINDOW_MS + 1)
+    lens_event(contents, { type: "act", item_id: "a", action: "like", text: "" })
+    await flush()
+    expect(acted()).toEqual([])
+    expect(contents.isolated).toEqual([])
+  })
+
+  it("takes Enter or Space on the focused control, one press once, and no other key", async () => {
+    const { contents, acted } = await acting()
+    contents.emit("input-event", {}, { type: "rawKeyDown", key: "a" })
+    lens_event(contents, { type: "act", item_id: "a", action: "like", text: "" })
+    await flush()
+    expect(acted()).toEqual([])
+    vi.mocked(Date.now).mockReturnValue(31_000)
+    contents.emit("input-event", {}, { type: "rawKeyDown", key: "Enter" })
+    contents.emit("input-event", {}, { type: "keyDown", key: "Enter" })
+    lens_event(contents, { type: "act", item_id: "a", action: "like", text: "" })
+    contents.isolated_answer = { action: "follow", item_id: "c" }
+    lens_event(contents, { type: "act", item_id: "c", action: "follow", text: "" })
+    await flush()
+    expect(acted()).toEqual(["like a"])
+    expect(contents.isolated.map((script) => script.code.includes("document.activeElement"))).toEqual([true])
   })
 })

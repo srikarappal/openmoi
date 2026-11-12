@@ -19,22 +19,27 @@
   },
   "action_anchors": {
     "like": {
+      "within": "article[tabindex='-1']",
       "select": "[data-testid='like']",
       "active_state": "[data-testid='unlike']"
     },
     "unlike": {
+      "within": "article[tabindex='-1']",
       "select": "[data-testid='unlike']",
       "active_state": "[data-testid='like']"
     },
     "follow": {
+      "within": "article[tabindex='-1']",
       "select": "[data-testid$='-follow'], [data-testid='follow']",
       "active_state": "[data-testid$='-unfollow'], [data-testid='unfollow']"
     },
     "repost": {
+      "within": "article[tabindex='-1']",
       "select": "[data-testid='retweet']",
       "active_state": "[data-testid='unretweet']"
     },
     "reply": {
+      "within": "article[tabindex='-1']",
       "select": "[data-testid='reply']",
       "input": "[data-testid='tweetTextarea_0'], [data-testid='tweetTextarea']",
       "submit": "[data-testid='tweetButton']"
