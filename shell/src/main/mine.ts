@@ -34,7 +34,8 @@ export interface MineHooks {
   less_like_this(view_id: string, item: Item): void
   // Plays a video in the host's player; false when it is not one it can play.
   play(item: Item): boolean
-  act(item: Item, action: string, text: string): Promise<void>
+  // Saves, actions and highlights, handled the same as in a view's lens; false for anything else.
+  item_event(item: Item, message: LensToHost): Promise<boolean>
 }
 
 function ignore(): void {}
@@ -132,8 +133,8 @@ export class MineController {
     } else if (message.type === "play") {
       await this.brain.events([{ view_id: page.view_id, item_id: item.item_id, event_kind: "open" }])
       if (!this.hooks.play(item)) this.hooks.open_original(context.key, item.url)
-    } else if (message.type === "act") {
-      await this.hooks.act(item, message.action, message.text)
+    } else if (await this.hooks.item_event(item, message)) {
+      return
     } else if (message.type === "less_like_this") {
       this.hooks.less_like_this(page.view_id, item)
     }

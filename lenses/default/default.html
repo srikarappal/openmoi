@@ -184,6 +184,8 @@
   }
 
   const SAVE_LABELS = { read_later: "Read later", watch_later: "Watch later" }
+  // The longest passage or note kept; anything longer is kept up to here.
+  const MAX_KEPT = 1000
   const ACT_LABELS = { like: "Like", follow: "Follow", repost: "Repost", bookmark: "Bookmark", add_to_cart: "Add to cart" }
   const DONE_LABELS = { like: "Liked", follow: "Following", bookmark: "Bookmarked" }
 
@@ -307,7 +309,7 @@
         status.textContent = "Select some text first."
         return
       }
-      moi.highlight(item.item_id, quote, "")
+      moi.highlight(item.item_id, quote.slice(0, MAX_KEPT), "")
       status.textContent = "Highlighted."
     })
     const note = element("textarea", "note")
@@ -317,7 +319,7 @@
     keep.addEventListener("click", (event) => {
       event.stopPropagation()
       if (!note.value.trim()) return
-      moi.highlight(item.item_id, "", note.value.trim())
+      moi.highlight(item.item_id, "", note.value.trim().slice(0, MAX_KEPT))
       note.value = ""
       status.textContent = "Note kept."
     })
@@ -335,8 +337,9 @@
     return node
   }
 
+  // Only a page shown through Mine reads as a whole article; a saved article with its offline copy stays a card.
   function is_reader(items) {
-    return items.length === 1 && items[0].item.kind === "article" && items[0].item.extra.blocks
+    return items.length === 1 && items[0].item.kind === "article" && items[0].item.extra.blocks && items[0].item.source_id.startsWith("site:")
   }
 
   function is_grid(items) {

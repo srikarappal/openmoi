@@ -3,16 +3,18 @@ history kept from the prices you actually saw, so a card can say when this is th
 
 import re
 from datetime import datetime
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, unquote, urlparse
 
 from pydantic import BaseModel, Field
 
 from moi_brain.compile import QUERY_SLOT
 from moi_brain.items import Item
 
-PRICE = re.compile(r"(?P<symbol>[$€£¥₹])\s?(?P<amount>\d[\d,]*(?:\.\d{1,2})?)|(?P<plain>\d[\d,]*(?:\.\d{1,2})?)\s?(?P<code>USD|EUR|GBP|INR|JPY)\b")
+PRICE = re.compile(r"(?P<symbol>[$€£¥₹])\s?(?P<amount>\d[\d.,]*\d|\d)|(?P<plain>\d[\d.,]*\d|\d)\s?(?P<code>USD|EUR|GBP|INR|JPY)\b")
+# A price for one unit ("$0.54/count", "€2 per kg") is not the product's price.
+PER_UNIT = re.compile(r"^\s*(?:/|per\b)", re.IGNORECASE)
 CODES = {"USD": "$", "EUR": "€", "GBP": "£", "INR": "₹", "JPY": "¥"}
-ASIN_PATH = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
+ASIN_PATH = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?![A-Z0-9])")
 MAX_QUERY = 200
 
 
@@ -30,14 +32,31 @@ class ShopState(BaseModel):
     queries: dict[str, str] = Field(default_factory=dict)
 
 
+def plain_amount(written: str) -> float | None:
+    """A written amount as a number, in either convention: "1,299.00" and "1.299,00" are both 1299, "24,99" is 24.99
+    and "1.299" is 1299 (three digits after one kind of separator group thousands; one or two are cents)."""
+    separators = [position for position, character in enumerate(written) if character in ".,"]
+    if not separators:
+        return float(written)
+    last = separators[-1]
+    decimals = len(written) - last - 1
+    if decimals == 3 and len({written[position] for position in separators}) == 1:
+        return float(written.replace(".", "").replace(",", ""))
+    if decimals in (1, 2):
+        return float(f"{written[:last].replace('.', '').replace(',', '')}.{written[last + 1 :]}")
+    return None
+
+
 def parse_price(text: str) -> Price | None:
-    """The first price in a text such as "$1,299.00" or "24.99 EUR"; None when there is none."""
-    match = PRICE.search(text or "")
-    if not match:
-        return None
-    amount = match.group("amount") or match.group("plain")
-    symbol = match.group("symbol") or CODES[match.group("code")]
-    return Price(amount=float(amount.replace(",", "")), symbol=symbol)
+    """The first price in a text such as "$1,299.00", "€ 24,99" or "24.99 EUR", skipping prices per unit; None when
+    there is none."""
+    for match in PRICE.finditer(text or ""):
+        if PER_UNIT.match(text[match.end() :]):
+            continue
+        amount = plain_amount(match.group("amount") or match.group("plain"))
+        if amount is not None:
+            return Price(amount=amount, symbol=match.group("symbol") or CODES[match.group("code")])
+    return None
 
 
 def search_urls(stores: list[str], query: str) -> list[str]:
@@ -53,17 +72,20 @@ def shop_source_id(url: str) -> str:
 
 
 def product_key(item: Item) -> str:
-    """One product however a store links it: an Amazon product by its ASIN, anything else by its address without the
-    query and fragment."""
+    """One product in one store however the store links it: an Amazon product by its store and ASIN (found inside a
+    sponsored link too), anything else by its address without the query and fragment."""
     parsed = urlparse(item.url)
-    asin = ASIN_PATH.search(parsed.path)
+    host = (parsed.hostname or "").removeprefix("www.")
+    asin = ASIN_PATH.search(unquote(unquote(item.url)))
     if asin:
-        return f"asin:{asin.group(1)}"
-    return f"{parsed.netloc}{parsed.path}".lower()
+        return f"asin:{host}:{asin.group(1)}"
+    return f"{host}{parsed.path}".lower()
 
 
-def price_note(current: Price, history: list[tuple[float, datetime]]) -> str:
-    """What the prices you saw before say about this one: the lowest you saw and when, or that this is the lowest."""
+def price_note(current: Price, history: list[tuple[float, str, datetime]]) -> str:
+    """What the prices you saw before, in the same currency, say about this one: the lowest you saw and when, or that
+    this is the lowest."""
+    history = [(amount, seen_at) for amount, symbol, seen_at in history if symbol == current.symbol]
     days = {seen_at.date() for _, seen_at in history}
     if len(days) < 2:
         return ""

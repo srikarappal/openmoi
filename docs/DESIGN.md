@@ -35,7 +35,7 @@ Part 2: Later
 17. L1 Robust reading `[built]`
 18. L2 Smarter brain `[built]`
 19. L3 Full lens engine `[built]`
-20. L4 Intent views `[not built]`
+20. L4 Intent views `[built]`
 21. L5 Actions and the policy gate `[not built]`
 22. L6 Agents `[not built]`
 23. L7 Recipes and mashups `[not built]`
@@ -873,7 +873,7 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 | L1 Robust reading | Facebook, Amazon, rung 2, assist mode, health monitor, packs, site policy | Source adapter | built |
 | L2 Smarter brain | Learned ranking, clusters, embeddings, search, richer rules | Event log, Item | built |
 | L3 Full lens engine | Test gate, visual judge, patch mode, media proxy, tokens, gesture binding | Lens contract | built |
-| L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file | not built |
+| L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file | built |
 | L5 Actions and gate | Tiers, executors, verify, audit, injection defense | Read only boundary, shell and brain split | not built |
 | L6 Agents | Runtime, tools, standing tasks | Brain, gate | not built |
 | L7 Recipes and mashups | Match kinds, identity and entity links | View as a .md file | not built |
@@ -1018,7 +1018,7 @@ request -> spec -> code
 
 Reviewed after it was built: 10 problems found and fixed with tests, among them the media proxy reaching private addresses and an image token reload channel. Exit checks: a lens switch takes about 4 ms from the click to the view being marked active (which happens after the lens is in front); the 55 escape lenses stay contained; a generated lens goes live through every gate, visual judge included, in about 2.3 s with the fake model. Lenses stay plain JavaScript; Preact and htm were not needed.
 
-## 20. L4 Intent views `[not built]`
+## 20. L4 Intent views `[built]`
 
 **Adds**
 
@@ -1035,6 +1035,20 @@ query -> searches Amazon + configured stores -> normalized products -> ranked by
 * Omnibox that searches your reality first; collections; export to Markdown or JSON.
 
 **Exit:** 14 consecutive days reading through openMoi instead of opening x.com, youtube.com or news sites directly.
+
+**As built (Nov 12, 2026):**
+
+| Piece | Built | Not verified |
+|---|---|---|
+| Collections | Read later and Watch later on every card (Watch later for videos), or any list a lens names; a saved item never expires until you take it out. `* Collection: read later` in Sources makes a view of them, newest saved first, rules still applied; the first save offers to make that tab. `/collections` lists them | |
+| Read | An article or link saved to Read later gets an offline copy, read in the background like a summary (no model), unless it already has a reader copy, so "Read here" opens it right in its card. Selecting a passage and Highlight, or a note of your own, goes to `memory/highlights.md` and the journal. `/newview read` starts from its template (Read later, summarized) | |
+| Watch | YouTube items rank by your model like any item; Watch later; Play here in the host player (L3). `/newview watch` starts from its template (your subscriptions and Watch later, no shorts) | |
+| Shop | `/shop <words>` searches every store a view names (`* Shop: amazon`, or any address with `{query}`), in a new Shop view from its template when none has stores; store pages are read like page sources (an extractor made from the page's skeleton, never its text), products rank by your model, and every price you see is kept per product and store (an Amazon product by its ASIN, also through sponsored links), in its currency, so a card says "Lowest you saw: $24.99 on Nov 12" or "The lowest you have seen since". Opening a product opens it on the store | Live Amazon search pages |
+| Chat Q&A | `/ask`, or a question (ending in a question mark) about what you read, saw or saved, is answered by the fast model only from your items (search) and journal, with numbered citations that open the originals; no matching item means no model call | |
+| Omnibox | What you type in the address bar lists your views and items that match (one per link) in the side panel before the web; Enter still searches the web | |
+| Export | `/export [md|json] [collection]`: this view, or a collection, as a file in `exports/` of your openMoi folder | |
+
+Reviewed after it was built: 13 problems found and fixed with tests, among them products you had seen vanishing when you shopped again, offline copies replacing richer reader copies, prices in the European convention and per unit prices read wrong, sponsored products sharing one price history, and edit requests starting "When I..." taken for questions. The exit (14 days without opening the sites directly) is a habit to measure while dogfooding, not something tests can show.
 
 ## 21. L5 Actions and the policy gate `[not built]`
 

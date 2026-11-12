@@ -41,7 +41,7 @@ function article_item(): ViewItem {
     { type: "quote", text: "A quoted line." },
     { type: "li", text: "A list item." },
   ]
-  return synthetic_item("article0", { kind: "article", title: "A synthetic article", author_name: "Jordan", extra: { blocks: JSON.stringify(blocks) } })
+  return synthetic_item("article0", { kind: "article", source_id: "site:news.example.com", title: "A synthetic article", author_name: "Jordan", extra: { blocks: JSON.stringify(blocks) } })
 }
 
 export function synthetic_view_items(kind: LensKind, count = SMOKE_ITEMS): ViewItem[] {
@@ -90,7 +90,7 @@ function rtl_article(): ViewItem {
     { type: "p", text: "فقرة من نص المقال. ".repeat(12) },
     { type: "li", text: "عنصر في قائمة" },
   ]
-  return synthetic_item("article_rtl", { kind: "article", title: "مقال تجريبي", author_name: "مريم", extra: { blocks: JSON.stringify(blocks) } })
+  return synthetic_item("article_rtl", { kind: "article", source_id: "site:news.example.com", title: "مقال تجريبي", author_name: "مريم", extra: { blocks: JSON.stringify(blocks) } })
 }
 
 // What the test gate renders, in order: nothing, one item, 50 timed, the hard cases, then 500.

@@ -74,8 +74,9 @@ export function parse_model(words: string[]): ChatCommand {
   return { kind: "model", change: { slot, provider, model } }
 }
 
-// "What did I read about lithium?" or "which video did I watch on traffic?" asks your history, not for an edit.
-const HISTORY_QUESTION = /^(what|which|who|when|where|did)\b.*\b(i|me|my)\b.*\b(read|see|saw|seen|watch|watched|open|opened|save|saved|highlight|highlighted|mark|marked|note|noted)\b/i
+// "What did I read about lithium?" or "Have I watched anything on traffic?" asks your history; it is a question
+// (it ends with a question mark), so "When I see crypto posts, hide them" stays a request for an edit.
+const HISTORY_QUESTION = /^(what|which|who|when|where|did|do|have|had|how many|how much)\b.*\b(i|me|my)\b.*\b(read|see|saw|seen|watch|watched|open|opened|save|saved|highlight|highlighted|mark|marked|note|noted|bought|liked)\b[^?]*\?\s*$/i
 
 export function parse_chat(input: string): ChatCommand {
   const text = input.trim()

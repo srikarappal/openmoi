@@ -810,3 +810,15 @@ describe("Shell actions", () => {
     expect(state_of(shell).confirm).toEqual({ request_id: "r9" })
   })
 })
+
+describe("Shell omnibox after Enter", () => {
+  it("does not bring back results for words you already went to", async () => {
+    let finish: (value: unknown) => void = () => {}
+    const { shell, window } = await started({ search: vi.fn(() => new Promise((resolve) => (finish = resolve))) })
+    const pending = command(window, { type: "omnibox", text: "lithium" })
+    await command(window, { type: "navigate", url: "lithium" })
+    finish([{ item: { item_id: "i", title: "Lithium", text: null, url: "https://a.example/1", source_id: "rss:a", published_at: null, fetched_at: "2026-11-10T00:00:00Z" }, score: 1 }])
+    await pending
+    expect(state_of(shell).omnibox).toBeNull()
+  })
+})

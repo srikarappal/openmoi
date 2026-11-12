@@ -1,6 +1,7 @@
 """Memory growth: the journal is searched by your words once it is too long to read whole, and finished months are
 rolled into one summary file each, so prompts stay small however long you use openMoi. A rollup keeps every note and
-says how often you opened each site; the day files it replaces are removed only after the summary is written."""
+highlight and says how often you opened each site; the day files it replaces are removed only after the summary is
+written."""
 
 import math
 import re
@@ -62,7 +63,7 @@ def roll_up(folder: Path, before: datetime) -> list[str]:
     written = []
     for month, paths in sorted(months.items()):
         lines = [line for path in sorted(paths) for line in read_text(path).splitlines() if line.startswith("* ")]
-        notes = [line for line in lines if " note: " in line]
+        notes = [line for line in lines if " note: " in line or " highlight: " in line]
         sites = Counter(site for line in lines if " opened: " in line and (site := site_of(line)))
         summary_path = folder / f"{month}.summary.md"
         kept = [line for line in read_text(summary_path).splitlines() if line.startswith("* ")]

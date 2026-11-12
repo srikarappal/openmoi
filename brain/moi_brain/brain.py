@@ -240,6 +240,12 @@ def url_prefix(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
 
 
+def wants_offline_copy(item: Item) -> bool:
+    """An article or link saved to read later that has no copy of its own yet: a post or product is read where it
+    is, and an article read in reader mode keeps the richer copy it has."""
+    return item.kind in ("article", "link") and OFFLINE_KEY not in item.extra and "blocks" not in item.extra and not is_video(item.url)
+
+
 def recently_failed(item: Item, now: datetime, key: str = CONTENT_FAILED) -> bool:
     """An item whose full read or summary (or offline copy, by its key) failed less than a day ago."""
     try:
@@ -673,8 +679,9 @@ class Brain:
 
     def content_wanted(self, limit: int = 5) -> list[ContentWanted]:
         """Fresh unseen items a view's summarize rules want, newest first; one that failed once is not asked for again.
-        A summarize_only item is wanted even once seen: its card waits for the summary. Articles saved to Read later
-        without an offline copy come after them."""
+        A summarize_only item is wanted even once seen: its card waits for the summary; so is an item you keep in a
+        collection the view reads, however old. Articles saved to Read later without a copy of their own come after
+        them, for reading offline."""
         now = self.clock()
         circles = self.circles()
         found: dict[str, tuple[datetime, ContentWanted]] = {}
@@ -683,7 +690,8 @@ class Brain:
             rules = [rule for rule in compiled.rules if rule.do in ("summarize", "summarize_only")]
             if not rules:
                 continue
-            for item, seen_at in self.store.items_with_seen(compiled.source_ids(), now - CONTENT_WINDOW):
+            kept = [(item, None) for item, _, _ in self.store.collection_items([name for source in compiled.sources for name in source.collections])]
+            for item, seen_at in [*self.store.items_with_seen(compiled.source_ids(), now - CONTENT_WINDOW), *kept]:
                 if "summary" in item.extra or recently_failed(item, now) or item.source_id.startswith("history:") or not self.readable_in_a_tab(item.url):
                     continue
                 matching = [rule for rule in rules if applies(rule, item, now, circles)]
@@ -691,7 +699,7 @@ class Brain:
                     found[item.item_id] = (item.published_at or item.fetched_at, ContentWanted(item_id=item.item_id, url=item.url, video=is_video(item.url)))
         newest = [wanted for _, wanted in sorted(found.values(), key=itemgetter(0), reverse=True)]
         for item, _, _ in self.store.collection_items([READ_LATER]):
-            if item.item_id in found or OFFLINE_KEY in item.extra or recently_failed(item, now, OFFLINE_FAILED) or is_video(item.url) or not self.readable_in_a_tab(item.url):
+            if item.item_id in found or not wants_offline_copy(item) or recently_failed(item, now, OFFLINE_FAILED) or not self.readable_in_a_tab(item.url):
                 continue
             newest.append(ContentWanted(item_id=item.item_id, url=item.url, video=False, purpose="offline"))
         return newest[:limit]
@@ -704,6 +712,8 @@ class Brain:
         if item is None:
             raise BadInput("That item is gone.")
         if purpose == "offline":
+            if not wants_offline_copy(item):
+                return "saved"
             blocks = offline_blocks(text)
             if not blocks:
                 self.store.update_extra(item_id, {OFFLINE_FAILED: self.clock().isoformat()})
@@ -1035,7 +1045,8 @@ class Brain:
             order = "page"
         kept_names = [name for source in compiled.sources for name in source.collections]
         kept_entries = self.store.collection_items(kept_names)
-        kept = {item.item_id for item, _, _ in kept_entries}
+        # What you keep, and what a store lists for what you shop for now, shows however long ago you saw it.
+        kept = {item.item_id for item, _, _ in kept_entries} | {item.item_id for item, _ in entries if item.source_id in shop_ids}
         if kept_names:
             listed = {item.item_id for item, _ in entries}
             entries += [(item, seen_at) for item, seen_at, _ in kept_entries if item.item_id not in listed]

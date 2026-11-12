@@ -48,7 +48,7 @@ test("/search finds what you were shown and its link opens in a tab", async () =
     await loaded(harness, "New laptop chip")
     await harness.chat("/search battery laptop")
     const reply = harness.chrome.locator(".message.moi").last()
-    await expect(reply).toContainText('match "battery laptop", best first:')
+    await expect(reply).toContainText(/match(es)? "battery laptop", best first:/)
     await expect(reply.locator("a").first()).toContainText("/articles/tech1")
     await reply.locator("a").first().click()
     await expect(harness.chrome.locator(".tab.web.active .tab_title")).toHaveCount(1)

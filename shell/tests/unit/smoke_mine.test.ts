@@ -182,7 +182,7 @@ function make_mine(page: Record<string, unknown>, brain_fields: Record<string, u
     events: vi.fn(async () => ({ recorded: 1 })),
     ...brain_fields,
   }
-  const hooks = { notify: vi.fn(), open_original: vi.fn(), lens_stale: vi.fn(), less_like_this: vi.fn(), play: vi.fn((_item: { url: string }) => false), act: vi.fn(async () => {}) }
+  const hooks = { notify: vi.fn(), open_original: vi.fn(), lens_stale: vi.fn(), less_like_this: vi.fn(), play: vi.fn((_item: { url: string }) => false), item_event: vi.fn(async (_item: unknown, message: { type: string }) => message.type === "save") }
   const mine = new MineController(brain as unknown as BrainClient, lenses as unknown as LensManager, hooks)
   const target = { key: tab_mine_key(1), driver: driver as unknown as PageDriver, handle: "contents:5", url: "https://news.example.com/?p=2" }
   return { mine, brain, lenses, hooks, driver, target, context }
@@ -260,6 +260,9 @@ describe("MineController", () => {
     expect(hooks.open_original).toHaveBeenCalledTimes(1)
     await mine.on_event(context as unknown as LensContext, { type: "play", item_id: "s1" })
     expect(hooks.open_original).toHaveBeenCalledTimes(2)
+    await mine.on_event(context as unknown as LensContext, { type: "save", item_id: "s1", collection: "read_later" })
+    expect(hooks.item_event).toHaveBeenLastCalledWith(item, { type: "save", item_id: "s1", collection: "read_later" })
+    expect(hooks.less_like_this).toHaveBeenCalledTimes(1)
   })
 
   it("ranks again after a site edit, reloads after a new look and lets go of the page when turned off", async () => {

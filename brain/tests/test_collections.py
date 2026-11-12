@@ -142,3 +142,49 @@ def test_a_tab_for_a_collection_reads_it(paths, settings, services):
     assert client.get("/collections").json()[0]["views"] == ["watch_later"]
     assert client.post("/collections/view", json={"name": "watch later"}).status_code == 400
     assert client.post("/collections/view", json={"name": "!!"}).status_code == 400
+
+
+def test_only_articles_without_a_copy_of_their_own_get_an_offline_copy(paths, settings, services):
+    clock = FixedClock(NOW)
+    client = make_client(paths, settings, services, clock)
+    rich_blocks = json.dumps([{"type": "h", "text": "Heading"}, {"type": "img", "src": "https://a.example/i.png"}])
+    article = {**record("1", "Long read"), "kind": "article"}
+    rich = {**record("2", "Read in reader mode"), "kind": "article", "extra.blocks": rich_blocks}
+    post = {**record("3", "A post"), "kind": "post"}
+    product = {**record("4", "A lamp"), "kind": "product"}
+    ids = ingest(client, [article, rich, post, product])
+    for item_id in ids:
+        client.post("/collections", json={"name": "read later", "item_id": item_id})
+    assert [entry["item_id"] for entry in client.get("/content/wanted").json()] == [ids[0]]
+    kept = client.post("/content", json={"item_id": ids[1], "purpose": "offline", "text": "flat text"}).json()
+    assert kept["status"] == "saved" and json.loads(kept["item"]["extra"]["blocks"]) == json.loads(rich_blocks)
+
+
+def test_a_read_view_summarizes_what_you_saved_however_old_and_seen(paths, settings, services):
+    clock = FixedClock(NOW)
+    client = make_client(paths, settings, services, clock)
+    (paths.views / "read.md").write_text("# Read\n\n## Sources\n* Collection: read later\n\n## Rules\n* Summarize everything.\n")
+    [item_id] = ingest(client, [{**record("1", "Long read", hours=200), "kind": "article"}])
+    client.post("/collections", json={"name": "read later", "item_id": item_id})
+    client.post("/events", json={"events": [{"view_id": "read", "item_id": item_id, "event_kind": "seen"}]})
+    clock.moment += timedelta(days=5)
+    wanted = client.get("/content/wanted").json()
+    assert [(entry["item_id"], entry["purpose"]) for entry in wanted] == [(item_id, "summary")]
+
+
+def test_highlights_survive_the_monthly_roll_up(paths, settings, services):
+    clock = FixedClock(NOW - timedelta(days=60))
+    client = make_client(paths, settings, services, clock)
+    [item_id] = ingest(client, [record("1", "Lithium recycling scales up")])
+    client.post("/highlight", json={"item_id": item_id, "quote": "Plants recover 95% of the metal."})
+    clock.moment = NOW
+    brain = client.app.state.brain
+    assert brain.roll_up_journal()
+    assert matching_lines(paths.journal, "what did I mark about recovery of metal?")[0].endswith("(https://blog.example/posts/1)")
+
+
+def test_an_export_cannot_make_links_or_headings_of_its_own():
+    item = normalize("rss:a", {"native_id": "1", "url": "https://a.example/x (1)", "title": "Prize](https://phish.example/login) [claim", "text": "## [Fake](https://evil)"}, NOW)
+    text = export_markdown("T", [(item, NOW)], NOW)
+    assert "## [Prize\\]\\(https://phish.example/login\\) \\[claim](https://a.example/x%20%281%29)" in text
+    assert "\\#\\# \\[Fake\\]\\(https://evil\\)" in text

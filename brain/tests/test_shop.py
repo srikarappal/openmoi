@@ -41,14 +41,14 @@ def test_search_addresses_and_product_keys():
     assert search_urls([STORE], "   ") == []
     amazon = normalize("page:a", {"native_id": "1", "url": "https://www.amazon.com/Lamp-Thing/dp/B0001ABCDE/ref=sr_1?x=1", "title": "Lamp"}, NOW)
     other = normalize("page:b", {"native_id": "2", "url": "https://Shop.example/p/lamp?utm=1#top", "title": "Lamp"}, NOW)
-    assert product_key(amazon) == "asin:B0001ABCDE" and product_key(other) == "shop.example/p/lamp"
+    assert product_key(amazon) == "asin:amazon.com:B0001ABCDE" and product_key(other) == "shop.example/p/lamp"
     assert shop_source_id("https://www.shop.example/search/?q=desk+lamp") == "shop:shop.example/search?q=desk+lamp"
 
 
 def test_a_price_note_needs_prices_from_more_than_one_day():
     day = timedelta(days=1)
-    assert price_note(Price(amount=30, symbol="$"), [(30.0, NOW)]) == ""
-    history = [(39.0, NOW - 3 * day), (24.99, NOW - 2 * day), (30.0, NOW)]
+    assert price_note(Price(amount=30, symbol="$"), [(30.0, "$", NOW)]) == ""
+    history = [(39.0, "$", NOW - 3 * day), (24.99, "$", NOW - 2 * day), (30.0, "$", NOW)]
     assert price_note(Price(amount=30, symbol="$"), history) == "Lowest you saw: $24.99 on Nov 10"
     assert price_note(Price(amount=24.0, symbol="$"), history) == "The lowest you have seen since Nov 9"
 
@@ -60,7 +60,7 @@ def test_the_store_keeps_one_price_a_day_unless_it_changes(tmp_path):
     assert store.record_prices([("asin:B1", 22.0, "$")], NOW + timedelta(hours=3)) == 1
     assert store.record_prices([("asin:B1", 22.0, "$")], NOW + timedelta(days=1)) == 1
     history = store.price_history(["asin:B1", "asin:none"])
-    assert [amount for amount, _ in history["asin:B1"]] == [24.99, 22.0, 22.0] and "asin:none" not in history
+    assert [(amount, symbol) for amount, symbol, _ in history["asin:B1"]] == [(24.99, "$"), (22.0, "$"), (22.0, "$")] and "asin:none" not in history
     assert store.price_history([]) == {}
 
 
@@ -103,3 +103,38 @@ def test_intent_templates_start_watch_and_read_views(client, paths):
     assert "* Collection: watch later" in (paths.views / "watch.md").read_text()
     client.post("/views", json={"view_id": "notes", "title": "Notes"})
     assert (paths.views / "notes.md").read_text().startswith("# Notes\n\n## Sources\n\n")
+
+
+@pytest.mark.parametrize(
+    ("text", "amount"),
+    [("€ 24,99", 24.99), ("€1.299,00", 1299.0), ("1.299 EUR", 1299.0), ("$1,234,567.89", 1234567.89), ("$0.54/count $12.99", 12.99), ("2 per kg €3,50", 3.5), ("$5", 5.0), ("$1,2345", None)],
+)
+def test_prices_in_either_convention_and_never_per_unit(text, amount):
+    found = parse_price(text)
+    assert (found.amount if found else None) == amount
+
+
+def test_products_are_keyed_per_store_and_through_sponsored_links_and_notes_keep_to_one_currency():
+    sponsored = normalize("page:a", {"native_id": "1", "url": "https://www.amazon.com/sspa/click?ie=UTF8&url=%2FLamp%2Fdp%2FB0SPONSOR1%2Fref%3Dsr", "title": "Lamp"}, NOW)
+    other = normalize("page:a", {"native_id": "2", "url": "https://www.amazon.com/sspa/click?ie=UTF8&url=%2FTV%2Fdp%2FB0SPONSOR2%2Fref%3Dsr", "title": "TV"}, NOW)
+    british = normalize("page:b", {"native_id": "3", "url": "https://www.amazon.co.uk/Lamp/dp/B0SPONSOR1", "title": "Lamp"}, NOW)
+    assert [product_key(item) for item in (sponsored, other, british)] == ["asin:amazon.com:B0SPONSOR1", "asin:amazon.com:B0SPONSOR2", "asin:amazon.co.uk:B0SPONSOR1"]
+    day = timedelta(days=1)
+    mixed = [(9.99, "£", NOW - 2 * day), (300.0, "$", NOW - day), (310.0, "$", NOW)]
+    assert price_note(Price(amount=310, symbol="$"), mixed) == "Lowest you saw: $300.00 on Nov 11"
+
+
+def test_a_product_you_saw_shows_again_when_you_shop_again(paths, settings, services):
+    clock = FixedClock(NOW)
+    brain, client = make_client(paths, settings, services, clock)
+    (paths.views / "shop.md").write_text(f"# Shop\n\n## Sources\n* Shop: {STORE}\n")
+    client.post("/shop", json={"query": "desk lamp", "view_id": "shop"})
+    source = client.post("/refresh", json={"view_id": "shop"}).json()["page_sources"][0]
+    [lamp] = client.post("/ingest", json={"source_id": source["source_id"], "records": [product("a", "LED desk lamp", "$29.99")]}).json()["items"]
+    client.post("/events", json={"events": [{"view_id": "shop", "item_id": lamp["item_id"], "event_kind": "seen"}]})
+    clock.moment += timedelta(days=2)
+    client.post("/shop", json={"query": "desk lamp", "view_id": "shop"})
+    client.post("/ingest", json={"source_id": source["source_id"], "records": [product("a", "LED desk lamp", "$24.99")]})
+    [entry] = client.post("/view/shop", json={}).json()["items"]
+    assert entry["item"]["extra"]["price_note"] == "The lowest you have seen since Nov 12"
+    brain.http.close()

@@ -73,7 +73,7 @@ describe("default lens", () => {
 
     const article = run_lens(DEFAULT_LENS)
     const blocks = JSON.stringify([{ type: "h", text: "Heading" }, { type: "p", text: "Body text" }, { type: "img", src: "https://i/a.jpg" }, { type: "quote", text: "Said" }])
-    article.moi.render([view_item("art", { kind: "article", title: "The article", extra: { blocks } })], null)
+    article.moi.render([view_item("art", { kind: "article", source_id: "site:news.example.com", title: "The article", extra: { blocks } })], null)
     const document = article.dom.window.document
     expect(document.querySelector("article.reader h1")?.textContent).toBe("The article")
     expect(document.querySelector("article.reader h2")?.textContent).toBe("Heading")
@@ -240,5 +240,34 @@ describe("default lens actions", () => {
     ])
     moi.update([{ item: view_item("p", { available_actions: ["like", "unlike", "follow", "reply"], extra: { "acted:like": "no", "acted:follow": "yes" } }).item, reasons: [] }])
     expect(Array.from(card.querySelectorAll(".acts > .act"), (button) => button.textContent)).toEqual(["Like", "Following"])
+  })
+})
+
+describe("default lens reader mode", () => {
+  it("reads only a Mine page as a whole article; a saved article with its copy stays a card, alone or appended", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    const blocks = JSON.stringify([{ type: "p", text: "Copy." }])
+    moi.render([view_item("saved", { kind: "article", source_id: "rss:blog", title: "Saved read", extra: { blocks } })], "more")
+    const document = dom.window.document
+    expect(document.querySelector(".reader")).toBeNull()
+    expect(document.querySelectorAll(".card .save")).toHaveLength(1)
+    moi.append([view_item("more", { kind: "article", source_id: "rss:blog", title: "Another", extra: { blocks } })], null)
+    expect(document.querySelector(".reader")).toBeNull()
+    moi.render([view_item("mine", { kind: "article", source_id: "site:news.example.com", title: "A page", extra: { blocks } })], null)
+    expect(document.querySelector(".reader h1")?.textContent).toBe("A page")
+  })
+
+  it("keeps at most 1000 characters of a passage or a note", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    moi.render([view_item("a", { kind: "article", source_id: "site:news.example.com", title: "Long", extra: { blocks: JSON.stringify([{ type: "p", text: "x".repeat(6000) }]) } })], null)
+    const document = dom.window.document
+    const range = document.createRange()
+    range.selectNodeContents(document.querySelector(".reader p") as Node)
+    dom.window.getSelection()?.addRange(range)
+    ;(document.querySelector(".reading_tools .highlight") as HTMLElement).click()
+    ;(document.querySelector(".reading_tools .note") as HTMLTextAreaElement).value = "n".repeat(3000)
+    ;(document.querySelector(".reading_tools .keep_note") as HTMLElement).click()
+    const sent = moi.sent.slice(1) as Array<{ quote: string; note: string }>
+    expect([sent[0].quote.length, sent[1].note.length]).toEqual([1000, 1000])
   })
 })

@@ -226,6 +226,24 @@ export class ViewController {
   }
 
   // An item a summarize rule wants: read in full, then summarized by the brain onto its card for the next time it shows.
+  // What any lens, a view's or Mine's, may ask about one item it shows: save it, act on it or keep a passage of it.
+  // False for anything else.
+  async item_event(item: Item, message: LensToHost): Promise<boolean> {
+    if (message.type === "save" || message.type === "unsave") {
+      const saved = message.type === "save"
+      const info = await this.brain.save_item(message.collection, item.item_id, saved)
+      this.mark_saved(item.item_id, info.name, saved)
+      this.hooks.saved(info, saved)
+    } else if (message.type === "act") {
+      await this.hooks.act(item, message.action, message.text)
+    } else if (message.type === "highlight") {
+      this.hooks.echo(`Kept in memory/highlights.md: ${await this.brain.highlight(item.item_id, message.quote, message.note)}`)
+    } else {
+      return false
+    }
+    return true
+  }
+
   // An item an action changed (liked, followed) shows its new state in every lens showing it.
   item_changed(item: Item): void {
     for (const context of this.lenses.all()) {
@@ -505,15 +523,8 @@ export class ViewController {
     } else if (message.type === "play" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "open" }])
       if (!this.hooks.play(item)) this.hooks.open_original(item.url)
-    } else if ((message.type === "save" || message.type === "unsave") && item) {
-      const saved = message.type === "save"
-      const info = await this.brain.save_item(message.collection, item.item_id, saved)
-      this.mark_saved(item.item_id, info.name, saved)
-      this.hooks.saved(info, saved)
-    } else if (message.type === "act" && item) {
-      await this.hooks.act(item, message.action, message.text)
-    } else if (message.type === "highlight" && item) {
-      this.hooks.echo(`Kept in memory/highlights.md: ${await this.brain.highlight(item.item_id, message.quote, message.note)}`)
+    } else if (item && (await this.item_event(item, message))) {
+      return
     } else if (message.type === "less_like_this" && item) {
       await this.brain.events([{ view_id: context.view_id, item_id: item.item_id, event_kind: "less_like_this" }])
       this.hooks.less_like_this(context.view_id, item)

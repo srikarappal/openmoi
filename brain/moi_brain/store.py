@@ -439,15 +439,16 @@ class Store:
                 kept += 1
         return kept
 
-    def price_history(self, keys: list[str]) -> dict[str, list[tuple[float, datetime]]]:
+    def price_history(self, keys: list[str]) -> dict[str, list[tuple[float, str, datetime]]]:
+        """Each product's prices as you saw them: amount, currency symbol and when."""
         if not keys:
             return {}
         marks = ", ".join("?" for _ in keys)
         with self.lock:
-            rows = self.connection.execute(f"SELECT product_key, amount, seen_at FROM prices WHERE product_key IN ({marks}) ORDER BY seen_at", keys).fetchall()
-        found: dict[str, list[tuple[float, datetime]]] = {}
-        for key, amount, seen_at in rows:
-            found.setdefault(key, []).append((amount, datetime.fromisoformat(seen_at)))
+            rows = self.connection.execute(f"SELECT product_key, amount, symbol, seen_at FROM prices WHERE product_key IN ({marks}) ORDER BY seen_at", keys).fetchall()
+        found: dict[str, list[tuple[float, str, datetime]]] = {}
+        for key, amount, symbol, seen_at in rows:
+            found.setdefault(key, []).append((amount, symbol, datetime.fromisoformat(seen_at)))
         return found
 
     def add_moment(self, view_id: str, kind: str, now: datetime) -> None:

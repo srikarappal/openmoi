@@ -193,7 +193,7 @@ export class Shell implements ViewHost {
       lens_stale: (view_id, kind, layout_hash) => this.lens_gen.ensure(view_id, kind, layout_hash),
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
       play: (item) => this.player.play(item),
-      act: (item, action, text) => this.actions.request(item, action, text),
+      item_event: (item, message) => this.views.item_event(item, message),
     })
     this.scheduler = new Scheduler(
       brain,
@@ -730,6 +730,7 @@ export class Shell implements ViewHost {
       }
       case "navigate": {
         this.omnibox = null
+        this.omnibox_ticket += 1
         const tab = this.active_tab()
         if (tab) this.open_in_tab(tab.tab_id, command.url)
         else this.open_tab(command.url)
