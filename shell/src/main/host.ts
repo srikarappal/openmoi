@@ -4,6 +4,8 @@ import type { WebContentsView } from "electron"
 export interface ViewHost {
   readonly page_preload: string
   readonly lens_preload: string
+  // The shared design tokens every lens gets before its own styles.
+  readonly lens_tokens: string
   attach(view: WebContentsView): void
   attach_behind(view: WebContentsView): void
   detach(view: WebContentsView): void

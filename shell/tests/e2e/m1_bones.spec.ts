@@ -45,10 +45,11 @@ test("feed merges X, YouTube and RSS, opens originals and records events", async
     )
     expect(seen.store.events.seen).toBeGreaterThan(0)
 
-    const clicked = await harness.in_lenses<string>(
-      `(() => { const card = [...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("New laptop chip")); card.click(); return card.dataset.itemId })()`,
-    )
-    expect(clicked[0]).toMatch(/^[0-9a-f]{32}$/)
+    const unclicked = await harness.in_lenses<number>(`(() => { moi.open(document.querySelector("[data-item-id]").dataset.itemId); return 1 })()`)
+    expect(unclicked).toEqual([1])
+    await expect(harness.chrome.locator(".tab.web")).toHaveCount(0)
+    const clicked = await harness.click_lens(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("New laptop chip"))`)
+    expect(clicked).toMatch(/^[0-9a-f]{32}$/)
     await expect(harness.chrome.locator(".tab.web.active")).toHaveCount(1)
     await expect(harness.chrome.locator(".address input")).toHaveValue(new RegExp(`${world.base_url}/articles/tech1`))
     const opened = await eventually(

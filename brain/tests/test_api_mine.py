@@ -25,7 +25,8 @@ def test_layout_makes_the_lens_stale_until_a_generated_lens_is_accepted(client, 
     html = client.post("/lens/generate", json={"view_id": "feed"}).json()["html"]
     assert html.startswith("<!doctype html>")
     assert "Look: Two column magazine, big images." in html
-    [call] = services.model_calls("lens")
+    assert services.model_calls("lens") == []
+    [call] = services.model_calls("lens_patch")
     prompt = call["payload"]["messages"][1]["content"]
     assert "New laptop chip" not in prompt
     assert json.loads(prompt)["layout"] == "Two column magazine, big images."
@@ -41,7 +42,15 @@ def test_retry_passes_the_last_error_to_the_model(client, paths, services):
     assert "Look:" not in broken
     fixed = client.post("/lens/generate", json={"view_id": "feed", "last_error": "0 of 30 items rendered"}).json()["html"]
     assert "Look: FIXABLE cards" in fixed
-    assert json.loads(services.model_calls("lens")[-1]["payload"]["messages"][1]["content"])["last_error"] == "0 of 30 items rendered"
+    assert json.loads(services.model_calls("lens_patch")[-1]["payload"]["messages"][1]["content"])["last_error"] == "0 of 30 items rendered"
+
+
+def test_a_layout_the_patch_cannot_reach_is_written_whole(client, paths, services):
+    for layout in ("REWRITE as a grid", "BADPATCH as a grid"):
+        set_layout(paths, layout)
+        html = client.post("/lens/generate", json={"view_id": "feed"}).json()["html"]
+        assert f"Look: {layout}" in html
+    assert len(services.model_calls("lens_patch")) == 2 and len(services.model_calls("lens")) == 2
 
 
 def test_rollback_after_a_generated_lens_returns_to_the_default(client, paths):

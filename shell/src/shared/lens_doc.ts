@@ -7,14 +7,16 @@ const MAX_IDS_PER_MESSAGE = 200
 const MAX_ID_LENGTH = 200
 
 // Puts the CSP before anything else in the document, right after the doctype, so it applies before any lens
-// script runs; the parser files it into head wherever the lens's own html and head tags come.
-export function wrap_lens(html: string): string {
+// script runs, then the shared design tokens, so the lens's own styles come after them; the parser files both into
+// head wherever the lens's own html and head tags come.
+export function wrap_lens(html: string, tokens = ""): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${LENS_CSP}">`
-  return `<!doctype html>${meta}${html.replace(/^\s*<!doctype[^>]*>/i, "")}`
+  const style = tokens ? `<style id="moi_tokens">${tokens.replace(/<\//g, "<\\/")}</style>` : ""
+  return `<!doctype html>${meta}${style}${html.replace(/^\s*<!doctype[^>]*>/i, "")}`
 }
 
-export function lens_data_url(html: string): string {
-  return `data:text/html;charset=utf-8;base64,${Buffer.from(wrap_lens(html), "utf-8").toString("base64")}`
+export function lens_data_url(html: string, tokens = ""): string {
+  return `data:text/html;charset=utf-8;base64,${Buffer.from(wrap_lens(html, tokens), "utf-8").toString("base64")}`
 }
 
 // The lens session only loads its own document and the https images of items it was sent; any other address

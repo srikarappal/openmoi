@@ -5,13 +5,14 @@ import { FakeSession, FakeWebContentsView, ipc_event, ipcMain, reset_electron, s
 
 vi.mock("electron", async () => await import("./fake_electron"))
 
-const { LensManager, LensContext } = await import("../../src/main/lenses")
+const { GESTURE_WINDOW_MS, LensManager, LensContext } = await import("../../src/main/lenses")
 const { TabManager } = await import("../../src/main/tabs")
 const { configure_sessions, LENS_PARTITION } = await import("../../src/main/sessions")
 
 class FakeHost implements ViewHost {
   readonly page_preload = "/dist/preload_page.js"
   readonly lens_preload = "/dist/preload_lens.js"
+  readonly lens_tokens = ":root { --text: #111 }"
   readonly attached: unknown[] = []
   readonly detached: unknown[] = []
 
@@ -30,6 +31,11 @@ class FakeHost implements ViewHost {
 
 function view_item(item_id: string, image_url: string | null = null): ViewItem {
   return { item: { item_id, url: `https://a.com/${item_id}`, image_url } as never, reasons: [] }
+}
+
+// A real click on a lens, as the main process sees input.
+function press(contents: unknown): void {
+  ;(contents as { press(): void }).press()
 }
 
 function lens_event(contents: unknown, message: unknown): void {
@@ -90,17 +96,37 @@ describe("LensManager", () => {
     expect(events.on_event.mock.calls).toEqual([[context, { type: "seen", item_ids: ["a"] }]])
   })
 
+  it("lets a lens open an item or ask for less like it only within a second of a real click on it", async () => {
+    const { events, lenses } = make_lenses()
+    const context = await lenses.open("view:feed", "feed", "<p>lens</p>")
+    const other = await lenses.open("view:other", "other", "<p>other</p>")
+    const now = vi.spyOn(Date, "now").mockReturnValue(5_000)
+    lens_event(context.view.webContents, { type: "open", item_id: "unclicked" })
+    press(other.view.webContents)
+    lens_event(context.view.webContents, { type: "open", item_id: "clicked_elsewhere" })
+    context.view.webContents.emit("input-event", {}, { type: "mouseMove" })
+    lens_event(context.view.webContents, { type: "less_like_this", item_id: "hovered" })
+    press(context.view.webContents)
+    now.mockReturnValue(5_000 + GESTURE_WINDOW_MS + 1)
+    lens_event(context.view.webContents, { type: "open", item_id: "too_late" })
+    lens_event(context.view.webContents, { type: "seen", item_ids: ["a"] })
+    expect(events.on_event.mock.calls.map((call) => call[1].type)).toEqual(["seen"])
+  })
+
   it("lets a lens open an item or ask for less like it only at the pace of clicks", async () => {
     const { events, lenses } = make_lenses()
     const context = await lenses.open("view:feed", "feed", "<p>lens</p>")
     const now = vi.spyOn(Date, "now").mockReturnValue(10_000)
+    press(context.view.webContents)
     for (let index = 0; index < 5; index++) lens_event(context.view.webContents, { type: "open", item_id: `i${index}` })
     for (let index = 0; index < 30; index++) lens_event(context.view.webContents, { type: "less_like_this", item_id: `i${index}` })
     now.mockReturnValue(10_600)
+    press(context.view.webContents)
     lens_event(context.view.webContents, { type: "less_like_this", item_id: "i0" })
     lens_event(context.view.webContents, { type: "less_like_this", item_id: "i2" })
     expect(events.on_event.mock.calls.map((call) => `${call[1].type} ${call[1].item_id}`)).toEqual(["open i0", "less_like_this i0", "less_like_this i2"])
     now.mockReturnValue(10_900)
+    press(context.view.webContents)
     lens_event(context.view.webContents, { type: "open", item_id: "i9" })
     expect(events.on_event).toHaveBeenCalledTimes(4)
   })

@@ -167,7 +167,8 @@ export function format_mirror(mirror: Mirror): string {
 }
 
 const MAX_HIT_TEXT = 80
-const LINK = /https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/g
+const LINK = /https?:\/\/[^\s<>"]+/g
+const TRAILING = /[.,;:!?'"]$/
 
 function hit_line(hit: SearchHit): string {
   const item = hit.item
@@ -186,15 +187,33 @@ export interface TextPart {
   url?: string
 }
 
+function count(text: string, character: string): number {
+  return text.split(character).length - 1
+}
+
+// A link as written in text, without the punctuation after it: "(see https://a.example/x)." ends at x, while
+// https://en.wikipedia.org/wiki/Mercury_(planet) keeps the parenthesis it opened.
+export function link_end(candidate: string): string {
+  let link = candidate
+  for (;;) {
+    if (TRAILING.test(link)) link = link.slice(0, -1)
+    else if (link.endsWith(")") && count(link, ")") > count(link, "(")) link = link.slice(0, -1)
+    else if (link.endsWith("]") && count(link, "]") > count(link, "[")) link = link.slice(0, -1)
+    else return link
+  }
+}
+
 // Chat text split around its web links, so each link can be opened with a click.
 export function linked_parts(text: string): TextPart[] {
   const parts: TextPart[] = []
   let last = 0
   for (const match of text.matchAll(LINK)) {
     const start = match.index ?? 0
+    const link = link_end(match[0])
+    if (link.length <= "https://".length) continue
     if (start > last) parts.push({ text: text.slice(last, start) })
-    parts.push({ text: match[0], url: match[0] })
-    last = start + match[0].length
+    parts.push({ text: link, url: link })
+    last = start + link.length
   }
   if (last < text.length) parts.push({ text: text.slice(last) })
   return parts

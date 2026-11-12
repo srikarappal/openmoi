@@ -86,7 +86,7 @@ test("opening an item opens it in your Chrome, not in openMoi", async () => {
       () => app.lens_text(),
       (value) => value.includes("New laptop chip"),
     )
-    await app.in_lenses(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("New laptop chip"))?.click()`)
+    await app.click_lens(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("New laptop chip"))`)
     const urls = await eventually(
       async () => chrome.urls(),
       (values) => values.some((url) => url.includes("/articles/tech1")),
@@ -112,7 +112,7 @@ test("Mine this page in Chrome shows your version in openMoi and leaves your tab
     )
     expect(text).toContain("Why SQLite is everywhere")
     await expect(app.chrome.locator(".chat_view")).toHaveText("Changes apply to 127.0.0.1")
-    await app.in_lenses(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("Ask HN"))?.click()`)
+    await app.click_lens(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("Ask HN"))`)
     const urls = await eventually(
       async () => chrome.urls(),
       (values) => values.some((url) => url.endsWith("/pages/item?id=903")),

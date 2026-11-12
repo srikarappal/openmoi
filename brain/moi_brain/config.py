@@ -62,6 +62,9 @@ class Settings(BaseModel):
     # A local embedding model (an OpenAI compatible /embeddings endpoint, such as Ollama with all-minilm); without
     # one, item vectors come from feature hashing.
     embed: Slot | None = None
+    # A model that sees images (an OpenAI compatible chat endpoint taking image_url parts) judges new lenses from a
+    # screenshot of made up items; without one, lenses pass on their tests alone.
+    vision: Slot | None = None
     # Where signed packs of specs and site policy come from; none means no pack updates.
     pack_url: str | None = Field(default=None, pattern=r"^https://")
 
@@ -209,6 +212,10 @@ class Paths:
     @property
     def default_lens(self) -> Path:
         return self.assets / "lenses" / "default" / "default.html"
+
+    @property
+    def lens_tokens(self) -> Path:
+        return self.assets / "lenses" / "tokens.css"
 
     @property
     def builtin_extractors(self) -> Path:

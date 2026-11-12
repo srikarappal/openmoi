@@ -1,7 +1,9 @@
 """Learned ranking: a small logistic model of what you open, trained online from the event log and kept in
-.moi/ranker.json. Features are ones you can read (source, author, topic, recency, media, length, rage bait, rule
-boosts), so "why this?" comes from their contributions. Until it has learned from enough events, ranking stays by
-recency and rule boosts.
+.moi/ranker.json. Features are ones you can read (source, author, topic, media, length, rage bait, rule boosts), so
+"why this?" comes from their contributions. Recency is not learned: the items you scroll past are mostly new ones, so
+a model learning it would learn that new is bad. The model's score is multiplied by the same 24 hour half life
+recency ranking uses. Until it has learned from enough events, including enough opens, ranking stays by recency and
+rule boosts.
 
     uv run python -m moi_brain.ranker evaluate     NDCG@20 of the model against recency on your own history
 """
@@ -26,6 +28,7 @@ from moi_brain.items import JUDGED_PREFIX, Item, source_family
 LEARNING_RATE = 0.2
 L2 = 1e-4
 MIN_EVENTS = 20
+MIN_OPENS = 5
 HALF_LIFE_HOURS = 24.0
 LONG_MINUTES = 5
 # How much each kind of event teaches: opening is a clear yes, less like this a clear no, scrolling past a faint no.
@@ -36,6 +39,7 @@ NDCG_AT = 20
 class RankerState(BaseModel):
     weights: dict[str, float] = Field(default_factory=dict)
     events: int = 0
+    opens: int = 0
 
 
 def age_hours(item: Item, now: datetime) -> float:
@@ -43,9 +47,13 @@ def age_hours(item: Item, now: datetime) -> float:
     return max((now - moment).total_seconds() / 3600, 0.0)
 
 
+def recency(item: Item, now: datetime) -> float:
+    return 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS)
+
+
 def features(item: Item, now: datetime, boosts: float = 0.0) -> dict[str, float]:
     """The readable facts the model weighs for one item."""
-    found = {"bias": 1.0, f"source:{item.source_id}": 1.0, f"family:{source_family(item.source_id)}": 1.0, "recency": 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS)}
+    found = {"bias": 1.0, f"source:{item.source_id}": 1.0, f"family:{source_family(item.source_id)}": 1.0}
     if item.author_handle:
         found[f"author:{item.author_handle.lower()}"] = 1.0
     for topic in item.topics:
@@ -86,7 +94,11 @@ class Ranker:
 
     @property
     def trained(self) -> bool:
-        return self.state.events >= MIN_EVENTS
+        return self.state.events >= MIN_EVENTS and self.state.opens >= MIN_OPENS
+
+    def item_score(self, item: Item, now: datetime, boosts: float = 0.0) -> float:
+        """How likely you are to open this item, discounted by its age."""
+        return self.score(features(item, now, boosts)) * recency(item, now)
 
     def score(self, found: dict[str, float]) -> float:
         with self.lock:
@@ -102,6 +114,7 @@ class Ranker:
                 for name, value in found.items():
                     weights[name] = weights.get(name, 0.0) * (1 - LEARNING_RATE * L2) + LEARNING_RATE * strength * error * value
                 self.state.events += 1
+                self.state.opens += kind == "open"
             write_atomic(self.path, self.state.model_dump_json())
 
     def reasons(self, found: dict[str, float], limit: int = 2) -> list[str]:
@@ -128,14 +141,16 @@ def ndcg(ranked_ids: list[str], relevant: set[str], at: int = NDCG_AT) -> float:
 
 
 def evaluate(days: list[tuple[datetime, list[Item], set[str]]], path: Path) -> dict[str, float]:
-    """NDCG@20 of recency and of the model, day by day: each day is ranked by a model trained on the days before it."""
+    """NDCG@20 of recency and of the model, day by day: each day is ranked by a model trained on the days before it,
+    starting from nothing (an earlier evaluation's model at `path` is replaced)."""
+    path.unlink(missing_ok=True)
     ranker = Ranker(path)
     recency_scores, model_scores = [], []
     for now, items, opened in days:
         if opened:
             by_recency = [item.item_id for item in sorted(items, key=partial(age_hours, now=now))]
             recency_scores.append(ndcg(by_recency, opened))
-            scores = {item.item_id: ranker.score(features(item, now)) for item in items}
+            scores = {item.item_id: ranker.item_score(item, now) for item in items}
             model_scores.append(ndcg(sorted(scores, key=scores.__getitem__, reverse=True), opened) if ranker.trained else recency_scores[-1])
         ranker.learn((features(item, now), "open" if item.item_id in opened else "seen") for item in items)
     recency, model = (sum(scores) / len(scores) if scores else 0.0 for scores in (recency_scores, model_scores))

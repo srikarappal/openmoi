@@ -149,6 +149,24 @@ export class Harness {
     }, script)
   }
 
+  // Clicks, with real mouse input through the main process, the element the expression finds in the first lens that
+  // has it, the way you would; returns that element's data-item-id, or null when no lens has it.
+  async click_lens(find: string): Promise<string | null> {
+    return this.app.evaluate(async ({ webContents }, expression) => {
+      const lenses = webContents.getAllWebContents().filter((contents) => contents.getURL().startsWith("data:text/html"))
+      for (const contents of lenses.sort((first, second) => first.id - second.id)) {
+        const point = await contents.executeJavaScript(
+          `(() => { const node = ${expression}; if (!node) return null; node.scrollIntoView({ block: "center" }); const box = node.getBoundingClientRect(); ` +
+            `return { x: Math.round(box.left + Math.min(box.width / 2, 24)), y: Math.round(box.top + Math.min(box.height / 2, 12)), id: node.closest("[data-item-id]")?.dataset.itemId ?? "" } })()`,
+        )
+        if (!point) continue
+        for (const type of ["mouseDown", "mouseUp"] as const) contents.sendInputEvent({ type, x: point.x, y: point.y, button: "left", clickCount: 1 })
+        return point.id as string
+      }
+      return null
+    }, find)
+  }
+
   async in_tabs<T>(script: string): Promise<T[]> {
     return this.app.evaluate(async ({ webContents }, code) => {
       const tabs = webContents.getAllWebContents().filter((contents) => /^https?:/.test(contents.getURL()) && contents.getURL().includes("/articles/"))

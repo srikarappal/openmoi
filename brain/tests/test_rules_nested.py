@@ -216,3 +216,12 @@ def test_nested_rules_and_new_actions_in_a_real_view(client, paths, services):
     assert NOBODY_KNOWN in page["warnings"]
     compiled = json.loads(next((paths.state / "compiled").glob("feed*.json")).read_text())
     assert {"any": [{"field": "source_id", "op": "eq", "value": "rss:news"}, {"field": "author_in", "op": "eq", "value": "known"}]} == compiled["rules"][0]["unless"]
+
+
+def test_groups_continue_across_pages_instead_of_starting_over():
+    items = [make_item("rss:a", "a1", 1), make_item("rss:b", "b1", 2), make_item("rss:a", "a2", 3), make_item("rss:b", "b2", 4)]
+    rules = [Rule(do="group_by", group_field="source_id")]
+    first, more = rank(items, rules, NOW, limit=2)
+    assert ids(first) == ["a1", "a2"] and more
+    second, more = rank(items, rules, NOW, exclude_ids={item.item_id for item in items[::2]}, limit=2)
+    assert ids(second) == ["b1", "b2"] and not more

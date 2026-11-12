@@ -261,6 +261,38 @@ def lens(payload: dict[str, Any], base_url: str) -> str:
     return "Here is your lens:\n```html\n" + request["example_lens"].replace("<body>", f"<body>{banner}", 1) + "\n```"
 
 
+LOOK_BANNER = re.compile(r'<div id="look"[^>]*>[^<]*</div>')
+
+
+def lens_patch(payload: dict[str, Any], base_url: str) -> str:
+    """Edits on the current lens: its banner names the new layout. REWRITE asks for a whole lens, BADPATCH sends an edit
+    that does not apply; BROKEN and FIXABLE break the lens the way the whole lens handler does."""
+    request = request_of(payload)
+    layout, current = request["layout"], request["current_lens"]
+    if "REWRITE" in layout:
+        return json.dumps({"edits": [], "rewrite": True})
+    if "BADPATCH" in layout:
+        return json.dumps({"edits": [{"find": "text that is not in the lens", "replace": "x"}]})
+    if "BROKEN" in layout or ("FIXABLE" in layout and not request["last_error"]):
+        return json.dumps({"edits": [{"find": "moi.ready()", "replace": "moi.never_ready()"}]})
+    banner = f'<div id="look" data-kind="{request["kind"]}">Look: {html.escape(layout)}</div>'
+    existing = LOOK_BANNER.search(current)
+    change = {"find": existing.group(0), "replace": banner} if existing else {"find": "<body>", "replace": f"<body>{banner}"}
+    return json.dumps({"edits": [change]})
+
+
+def judge_lens(payload: dict[str, Any], base_url: str) -> str:
+    """Sees the screenshot part and the layout; an UGLY layout never looks right."""
+    parts = payload["messages"][-1]["content"]
+    text = next(part["text"] for part in parts if part["type"] == "text")
+    image = next(part["image_url"]["url"] for part in parts if part["type"] == "image_url")
+    if not image.startswith("data:image/png;base64,"):
+        return json.dumps({"matches": False, "problem": "no screenshot"})
+    if "UGLY" in json.loads(text)["layout"]:
+        return json.dumps({"matches": False, "problem": "the cards are not in two columns"})
+    return json.dumps({"matches": True, "problem": ""})
+
+
 def extractor(payload: dict[str, Any], base_url: str) -> str:
     request = request_of(payload)
     skeleton = request["skeleton"]
@@ -296,7 +328,7 @@ def update(payload: dict[str, Any], base_url: str) -> str:
     return json.dumps({"update": changed, "what_changed": new["title"] if changed else ""})
 
 
-HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "extractor": extractor, "update": update, "summarize": summarize, "oracle": oracle}
+HANDLERS = {"echo": echo, "tag": tag, "compile_rules": compile_rules, "edit": edit, "lens": lens, "lens_patch": lens_patch, "judge_lens": judge_lens, "extractor": extractor, "update": update, "summarize": summarize, "oracle": oracle}
 
 
 def model_reply(task: str, payload: dict[str, Any], base_url: str) -> str:

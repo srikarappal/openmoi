@@ -34,3 +34,13 @@ def test_finished_months_roll_into_one_summary_with_notes_and_sites(tmp_path):
     assert "* 09:00 note: Lithium" in (tmp_path / "2026-10.summary.md").read_text()
     assert "* 08:00 note: Late file" in (tmp_path / "2026-10.summary.md").read_text()
     assert roll_up(tmp_path, NOW) == []
+
+
+def test_a_telling_word_outweighs_many_common_ones(tmp_path):
+    lines = [f"* 08:{number:02d} note: That was a piece about cities that was long. (https://cities.example/{number})" for number in range(40)]
+    day(tmp_path, "20261101.md", ["* 07:00 note: Lithium recycling: plants scale up. (https://news.example/lithium)", *lines])
+    found = matching_lines(tmp_path, "what was that piece on lithium?")
+    assert found == ["* 07:00 note: Lithium recycling: plants scale up. (https://news.example/lithium)"]
+    assert matching_lines(tmp_path, "what was that?") == []
+    both = matching_lines(tmp_path, "lithium cities")
+    assert both[0].startswith("* 07:00") and len(both) == 30

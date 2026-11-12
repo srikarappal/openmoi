@@ -87,6 +87,13 @@ def test_items_to_summarize_are_fresh_unseen_and_never_asked_for_twice(client, p
     assert old not in [entry["item_id"] for entry in wanted]
 
 
+def test_a_summary_only_item_you_saw_is_still_wanted(client, paths, services):
+    reading_view(paths, "* Only summaries of everything.")
+    [first] = ingest(client, [article(1)])
+    client.post("/events", json={"events": [{"view_id": "reading", "item_id": first, "event_kind": "seen"}]})
+    assert [entry["item_id"] for entry in client.get("/content/wanted").json()] == [first]
+
+
 def test_a_summary_and_its_worth_watching_reach_the_card(client, paths, services):
     reading_view(paths, "* Summarize everything.")
     [item_id] = ingest(client, [article(1)])

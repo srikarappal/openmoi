@@ -6,6 +6,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from moi_brain.enrich import with_judged_rage
 from moi_brain.items import JUDGED_PREFIX, Event, Item
 
 ITEM_TTL = timedelta(days=30)
@@ -250,7 +251,7 @@ class Store:
                 if row:
                     stored = Item.model_validate_json(row[0])
                     judged = {key: value for key, value in fresh.extra.items() if key.startswith(JUDGED_PREFIX)}
-                    item = stored.model_copy(update={"topics": fresh.topics, "tagged": True, "extra": {**stored.extra, **judged}})
+                    item = stored.model_copy(update={"topics": fresh.topics, "tagged": True, "extra": with_judged_rage({**stored.extra, **judged})})
                     self.connection.execute("UPDATE items SET item_json = ? WHERE item_id = ?", (item.model_dump_json(), fresh.item_id))
 
     def add_events(self, events: list[Event], now: datetime) -> None:

@@ -51,7 +51,7 @@ test("Mine turns a listing into your version, remembers the spec and never sends
     )
     expect(await world.model_calls("extractor")).toHaveLength(calls.length)
 
-    await harness.in_lenses(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("Ask HN"))?.click()`)
+    await harness.click_lens(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("Ask HN"))`)
     await expect(harness.chrome.locator("button.mine.on")).toHaveCount(0)
     await expect(harness.chrome.locator(".address input")).toHaveValue(`${world.base_url}/pages/item?id=903`)
   } finally {
@@ -145,20 +145,20 @@ test("asking for a layout builds a smoke tested lens in under a minute that stil
   }
 })
 
-test("a lens that fails the smoke test is retried once with the error, then the current look stays", async () => {
+test("a lens that fails the smoke test is retried with the error, then the current look stays", async () => {
   const harness = await Harness.launch(world)
   try {
     await eventually(
       () => harness.lens_text(),
       (value) => value.includes("New laptop chip"),
     )
-    const before = (await world.model_calls("lens")).length
+    const before = (await world.model_calls("lens_patch")).length
     harness.write("views/feed.md", harness.file("views/feed.md").replace("## Layout\n", "## Layout\nBROKEN layout\n"))
     await harness.chrome.locator("button.tab.view", { hasText: "Feed" }).click()
     await expect(harness.chrome.locator(".message.moi", { hasText: "That look did not work" })).toHaveCount(1, { timeout: 30_000 })
-    const calls = (await world.model_calls("lens")).slice(before)
+    const calls = (await world.model_calls("lens_patch")).slice(before)
     expect(calls).toHaveLength(2)
-    expect(JSON.parse(calls[1].payload.messages[1].content).last_error).toBe("30 of 30 items were not rendered with data-item-id")
+    expect(JSON.parse(calls[1].payload.messages[1].content).last_error).toContain("never_ready")
     expect(await harness.lens_text()).toContain("New laptop chip")
     expect(await harness.lens_text()).not.toContain("Look:")
 

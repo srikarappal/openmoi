@@ -33,7 +33,7 @@ Part 2: Later
 
 16. Later stages map
 17. L1 Robust reading `[built]`
-18. L2 Smarter brain `[not built]`
+18. L2 Smarter brain `[built]`
 19. L3 Full lens engine `[partly built]`
 20. L4 Intent views `[not built]`
 21. L5 Actions and the policy gate `[not built]`
@@ -691,7 +691,7 @@ The Feed file from 9.4 compiles to:
 }
 ```
 
-Flat rules with one optional `unless` cover most phrasing. Nesting waits until real rules need it (L2).
+Flat rules with one optional `unless` cover most phrasing. Nesting with `all`, `any` and `not` came with L2 (section 18).
 
 ### 11.5 Extractor spec
 
@@ -871,7 +871,7 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 | Stage | Adds | Extends bone | Status |
 |---|---|---|---|
 | L1 Robust reading | Facebook, Amazon, rung 2, assist mode, health monitor, packs, site policy | Source adapter | built |
-| L2 Smarter brain | Learned ranking, clusters, embeddings, search, richer rules | Event log, Item | not built |
+| L2 Smarter brain | Learned ranking, clusters, embeddings, search, richer rules | Event log, Item | built |
 | L3 Full lens engine | Test gate, visual judge, patch mode, media proxy, tokens, gesture binding | Lens contract | partly built |
 | L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file | not built |
 | L5 Actions and gate | Tiers, executors, verify, audit, injection defense | Read only boundary, shell and brain split | not built |
@@ -939,7 +939,7 @@ Full spec format adds action anchors and quality hints:
 
 Golden pages: Amazon search and Facebook feed at 100% field accuracy. Simulated drift (a site that changes its markup) is repaired in about 10 seconds in the real app.
 
-## 18. L2 Smarter brain `[not built]`
+## 18. L2 Smarter brain `[built]`
 
 **Adds**
 
@@ -959,6 +959,21 @@ do        := hide | boost(weight) | demote(weight) | limit(count, per) | group_b
 ```
 
 **Exit:** NDCG@20 at least 15% above MVP ranking on the team's logs; the same story from 3 sources lands in one cluster in at least 90% of labeled cases.
+
+**As built (Nov 11, 2026):**
+
+| Piece | Built | Not verified |
+|---|---|---|
+| Enrichment | At ingest, with no model, for every item including watched page changes: language (script, then common words with English spelling hints; `und` when two languages tie), reading minutes, names in Title Case plus #tags, @handles and $tickers, a 0 to 1 rage bait score; rules test `lang`, `reading_minutes` and `ragebait`; a rage bait judgment raises the score to 0.9 whenever it arrives | |
+| Learned ranking | A logistic model in `.moi/ranker.json` over source, family, author, topics, recency, media, length, rage bait and rule boosts, trained online from every open, "less like this" and seen; it takes over from recency after 20 events that include 5 opens. Recency is not learned (what scrolls past is mostly new, so a model would learn that new is bad): the model's score is multiplied by the 24 h half life. "Why this?" names the features that pushed an item up; `python -m moi_brain.ranker evaluate` scores it against recency on your own history | The team's logs |
+| Explore slot | Every tenth place goes to the best tagged item outside your top 5 topics, pulled forward and marked "explore"; every other item keeps its place and pinned items are never moved; "No exploring" in Rules turns it off | |
+| Vectors | Each new item gets a vector from the `embed` slot (any OpenAI compatible `/embeddings`, such as Ollama with nomic-embed-text) when it may see your content, else a 384 dimension hashed vector of its words and word pairs, kept by kind in a `vectors` table; and a 64 bit simhash in its extra fields | A real embedding model at volume |
+| Clusters | A new item joins a story from another source within 48 h when the titles overlap 60% or one title holds the other whole, when simhashes of the body are within 3 bits (found through four 16 bit bands, so a retitled copy is found), or when vectors are 0.88 alike; different numbers still mean different stories, and a story you have not seen never holds two items of one source (once you saw it, an outlet's follow up joins it for the update pass). `python -m moi_brain.stories evaluate <file>` scores a labeled set | |
+| Search | `GET /search` and `/search` in chat: FTS5 bm25 over title, text and author, reordered by vector closeness (60% words, 40% meaning); with an embedding model the newest 20,000 vectors are also searched by meaning, so "car" finds "automobile". Plain cosine in Python instead of `sqlite-vec`; links in chat open where originals open | |
+| Memory growth | Chat sees the last two weeks of the journal plus older lines sharing words with the request, rarer words counting more and common ones not at all; months that ended before those two weeks roll into one summary file each (notes kept, opens counted per site) on refresh | |
+| Rules | `when` and `unless` nest with `all`, `any` and `not`, at most 4 deep; new actions `demote`, `pin` (always on top), `group_by` (source, author, topic, media or language; the lens heads each group) and `summarize_only` (the card shows the summary in place of the text once it arrives, the text until then); groups are kept together across pages; a boost by a negative weight is a demote | |
+
+Reviewed after it was built: 11 bugs found and fixed with tests. Exit checks: the learned model beats recency by at least 15% NDCG@20 on a synthetic month of opens; the same story from 3 sources lands in one cluster in 19 of 20 labeled cases with hashed vectors and 20 of 20 with an embedding model (the fake model's synonyms), no story merged into another. The labeled set (`fixtures/clusters/labeled_stories.json`) is ours, not real traffic.
 
 ## 19. L3 Full lens engine `[partly built]`
 
@@ -1425,7 +1440,7 @@ Five building blocks and four smaller pieces cover all 12. Two of the gaps are g
 
 * **Missing:** `author_handle` belongs to one platform and duplicates merge only on an identical URL (11.2).
 * **People `[built]`:** `memory/people.md` already holds handles per source and L7's identity links fill it. "People you know" needs your following lists: each platform's Following page read weekly as a `Page:` source into a `follows (source_id, handle, seen_at)` table, machine state rather than memory. `Condition.field` gains `author_in` (`people` or `following`); a stranger is an author in neither. As built: a `Following:` source is read to its end within the daily budget; accounts are keyed by site (www., mobile. and twitter.com links count as one site); `known` means either circle; a rule about people with no one known yet warns instead of silently emptying the view. The rules compiler keeps a kind of item ("likes and trending notifications") as a judgment rather than hiding a whole source; checked with Nemotron 3.5, 3 of 3 runs.
-* **Duplicates `[built]`:** L2 clusters for stories (simhash, then embeddings within 48 h); L7 `same_product` extended to listings (address, price and first image). One card per cluster with "also on". As built, the first iteration is word overlap: a new item joins the cluster of the most similar item from another source in the last 48 hours when their title words overlap at least 60% (numbers count as words, and two titles carrying different numbers are different stories); two items of one source are never merged. Embeddings come with L2.
+* **Duplicates `[built]`:** L2 clusters for stories (simhash, then embeddings within 48 h); L7 `same_product` extended to listings (address, price and first image). One card per cluster with "also on". As built, the first iteration is word overlap: a new item joins the cluster of the most similar item from another source in the last 48 hours when their title words overlap at least 60% (numbers count as words, and two titles carrying different numbers are different stories); two items of one source are never merged. L2 adds simhash near copies and vector likeness (section 18).
 
 ### 34.5 Full content (9, 10, 11) `[built]`
 

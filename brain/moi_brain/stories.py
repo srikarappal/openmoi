@@ -3,7 +3,8 @@
 A new item joins the cluster of the most similar recent item from another source when their title words (numbers
 included: "iPhone 15" is not "iPhone 16") overlap enough or one title holds the other, when their simhashes say they
 are near copies (found through 16 bit bands, so retitled copies are found too), or when their vectors are at least 0.88
-alike; two items of one source are two items. A view shows each
+alike; two items of one source are two items, and a story you have not seen never holds two items of one source. A
+view shows each
 story once, from its best copy, with where else it appeared. A newer copy of a story you already saw stays hidden as a
 repeat unless the update pass finds it adds something; then it shows as an update saying what changed.
 
@@ -129,13 +130,19 @@ def story_key(item: Item) -> str:
     return item.extra.get(CLUSTER_KEY, item.item_id)
 
 
-def assign_clusters(fresh: list[Item], recent: list[Item], vectors: dict[str, list[float]] | None = None) -> list[Item]:
+def assign_clusters(fresh: list[Item], recent: list[Item], vectors: dict[str, list[float]] | None = None, seen: set[str] | None = None) -> list[Item]:
     """Fresh items, each with its simhash and, when similar enough, the cluster of its most similar recent (or earlier
-    fresh) item. Candidates share a title word or a simhash band. `vectors` holds each item's vector by item id."""
+    fresh) item. Candidates share a title word or a simhash band and come from another source. A story that already
+    holds an item of the new item's source is a candidate only once you saw it (`seen` holds the ids of recent items
+    you saw): the update pass then decides whether the new item adds something, where otherwise it would be hidden as
+    a copy unasked. `vectors` holds each item's vector by item id."""
     vectors = vectors or {}
+    seen_stories = {story_key(item) for item in recent if item.item_id in (seen or set())}
     hashes: dict[str, int] = {}
     index: dict[str, list[tuple[Item, frozenset[str]]]] = {}
+    sources: dict[str, set[str]] = {}
     for item in recent:
+        sources.setdefault(story_key(item), set()).add(item.source_id)
         words = story_words(item)
         stored = [hashes.setdefault(item.item_id, copy_hash(item))] if SIMHASH_KEY in item.extra else []
         for key in [*words, *(band for value in stored for band in band_keys(value))]:
@@ -148,7 +155,10 @@ def assign_clusters(fresh: list[Item], recent: list[Item], vectors: dict[str, li
         best, best_score = None, SAME_STORY
         if len(words) >= MIN_WORDS:
             for candidate, candidate_words in {other.item_id: (other, other_words) for key in keys for other, other_words in index.get(key, [])}.values():
+                key = story_key(candidate)
                 if len(candidate_words) < MIN_WORDS or candidate.source_id == item.source_id:
+                    continue
+                if item.source_id in sources.get(key, set()) and key not in seen_stories:
                     continue
                 if candidate.item_id not in hashes:
                     hashes[candidate.item_id] = copy_hash(candidate)
@@ -160,6 +170,7 @@ def assign_clusters(fresh: list[Item], recent: list[Item], vectors: dict[str, li
         if best is not None:
             extra[CLUSTER_KEY] = story_key(best)
         item = item.model_copy(update={"extra": extra})
+        sources.setdefault(story_key(item), set()).add(item.source_id)
         placed.append(item)
         for key in keys:
             index.setdefault(key, []).append((item, words))

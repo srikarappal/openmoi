@@ -174,5 +174,12 @@ describe("linked_parts", () => {
     expect(linked_parts("no links here")).toEqual([{ text: "no links here" }])
     expect(linked_parts("")).toEqual([])
     expect(linked_parts("javascript:alert(1) ftp://x.example")).toEqual([{ text: "javascript:alert(1) ftp://x.example" }])
+    expect(linked_parts("see https://en.wikipedia.org/wiki/Mercury_(planet).")).toEqual([
+      { text: "see " },
+      { text: "https://en.wikipedia.org/wiki/Mercury_(planet)", url: "https://en.wikipedia.org/wiki/Mercury_(planet)" },
+      { text: "." },
+    ])
+    expect(linked_parts("[https://a.example/x]")).toEqual([{ text: "[" }, { text: "https://a.example/x", url: "https://a.example/x" }, { text: "]" }])
+    expect(linked_parts("odd https://. end")).toEqual([{ text: "odd https://. end" }])
   })
 })

@@ -42,7 +42,10 @@ class ReadySignal {
 }
 
 export class SmokeTester {
-  constructor(private readonly lens_preload: string) {}
+  constructor(
+    private readonly lens_preload: string,
+    private readonly lens_tokens = "",
+  ) {}
 
   // null when the lens renders every synthetic item with data-item-id and logs no errors.
   async problem(html: string, kind: LensKind): Promise<string | null> {
@@ -57,7 +60,7 @@ export class SmokeTester {
     contents.on("render-process-gone", (_event, details) => errors.push(`the lens crashed: ${details.reason}`))
     const ready = new ReadySignal(contents.id, READY_TIMEOUT_MS)
     try {
-      await contents.loadURL(lens_data_url(html))
+      await contents.loadURL(lens_data_url(html, this.lens_tokens))
       if (!(await ready.promise)) return errors[0] ? `script error: ${errors[0]}` : "the lens never called moi.ready()"
       const items = synthetic_view_items(kind)
       allow_lens_images(contents.id, item_images(items))

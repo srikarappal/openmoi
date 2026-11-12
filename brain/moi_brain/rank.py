@@ -7,7 +7,7 @@ from typing import Literal
 
 from moi_brain.compile import AllOf, AnyOf, Condition, NotOf, Rule, When
 from moi_brain.items import JUDGED_PREFIX, Item, ViewItem, site_host, source_matches
-from moi_brain.ranker import Ranker, features
+from moi_brain.ranker import Ranker, features, recency
 from moi_brain.stories import UPDATE_KEY, story_key
 
 PAGE_SIZE = 30
@@ -15,7 +15,6 @@ PAGE_SIZE = 30
 PIN_SCORE = 1000.0
 EXPLORE_EVERY = 10
 EXTRA_FIELDS = ("lang", "reading_minutes", "ragebait")
-HALF_LIFE_HOURS = 24.0
 RECENT_HOURS = 6.0
 FIELD_LABELS = {"source_id": "source", "author_handle": "author", "author_in": "author", "media_kind": "media", "age_hours": "age", "reading_minutes": "reading time"}
 Order = Literal["recency", "page"]
@@ -240,9 +239,9 @@ def rank(
         if order == "page":
             base = 1 - position / (len(items) + 1)
         elif learned is not None and learned.trained:
-            base = learned.score(features(item, now, boost_total))
+            base = learned.item_score(item, now, boost_total)
         else:
-            base = 0.5 ** (age_hours(item, now) / HALF_LIFE_HOURS)
+            base = recency(item, now)
         pinned = PIN_SCORE if any(rule.do == "pin" for rule in moved) else 0.0
         scored.append((base + boost_total + pinned, item, moved))
     scored.sort(key=itemgetter(0), reverse=True)
@@ -254,14 +253,17 @@ def rank(
     explored: set[str] = set()
     if trained and explore:
         remaining, explored = with_explore(remaining, learned.top_topics())
+    groups = {entry[1].item_id: group_of(entry[1], rules, now, circles) for entry in remaining}
+    if any(groups.values()):
+        remaining = grouped(remaining, groups)
     page = []
     for _, item, moved in remaining[:limit]:
         plain = reasons(item, moved, now) + (learned.reasons(features(item, now)) if trained else [])
         if item.item_id in explored:
             plain.append("explore: outside your usual topics")
         summary_only = any(rule.do == "summarize_only" and applies(rule, item, now, circles) for rule in rules)
-        page.append(ViewItem(item=item, reasons=story_reasons(item, also, plain), group=group_of(item, rules, now, circles), summary_only=summary_only))
-    return grouped(page), len(remaining) > limit
+        page.append(ViewItem(item=item, reasons=story_reasons(item, also, plain), group=groups[item.item_id], summary_only=summary_only))
+    return page, len(remaining) > limit
 
 
 def group_of(item: Item, rules: list[Rule], now: datetime, circles: Circles = NO_CIRCLES) -> str | None:
@@ -278,29 +280,41 @@ def group_of(item: Item, rules: list[Rule], now: datetime, circles: Circles = NO
     return str(getattr(item, rule.group_field, None) or "other")
 
 
-def grouped(page: list[ViewItem]) -> list[ViewItem]:
-    """Items of one group together, groups in the order their best item comes, items in score order inside each."""
-    groups: dict[str | None, list[ViewItem]] = {}
-    for view_item in page:
-        groups.setdefault(view_item.group, []).append(view_item)
-    return [view_item for members in groups.values() for view_item in members]
+def grouped(entries: list[Scored], groups: dict[str, str | None]) -> list[Scored]:
+    """Every item still to show, one group's items together, before the page is cut: groups in the order their best
+    item comes, items in score order inside each, so later pages continue the last group instead of starting the
+    groups over."""
+    members: dict[str | None, list[Scored]] = {}
+    for entry in entries:
+        members.setdefault(groups[entry[1].item_id], []).append(entry)
+    return [entry for group in members.values() for entry in group]
+
+
+def is_pinned(entry: Scored) -> bool:
+    return any(rule.do == "pin" for rule in entry[2])
+
+
+def outside_topics(entry: Scored, top_topics: set[str]) -> bool:
+    """A tagged item none of whose topics is among your top ones; an item not tagged yet says nothing either way."""
+    return bool(entry[1].topics) and not top_topics & set(entry[1].topics) and not is_pinned(entry)
 
 
 def with_explore(entries: list[Scored], top_topics: set[str]) -> tuple[list[Scored], set[str]]:
-    """Every tenth place goes to the best item none of whose topics is among your top ones, so your feed is not only
-    more of the same. Returns the new order and the items placed that way."""
+    """Every tenth place goes to the best item outside your top topics, pulled forward, so your feed is not only more
+    of the same; every other item keeps its order and a pinned item is never pushed down. Returns the new order and
+    the items pulled forward that way."""
     if not top_topics:
         return entries, set()
-    outside = [entry for entry in entries if not top_topics & set(entry[1].topics)]
-    inside = [entry for entry in entries if top_topics & set(entry[1].topics)]
+    remaining = list(entries)
     ordered: list[Scored] = []
     explored: set[str] = set()
-    while inside or outside:
-        if outside and (len(ordered) % EXPLORE_EVERY == EXPLORE_EVERY - 1 or not inside):
-            entry = outside.pop(0)
-            if inside:
+    while remaining:
+        entry = remaining[0]
+        if len(ordered) % EXPLORE_EVERY == EXPLORE_EVERY - 1 and not is_pinned(entry) and not outside_topics(entry, top_topics):
+            pulled = next((candidate for candidate in remaining if outside_topics(candidate, top_topics)), None)
+            if pulled is not None:
+                entry = pulled
                 explored.add(entry[1].item_id)
-        else:
-            entry = inside.pop(0)
+        remaining.remove(entry)
         ordered.append(entry)
     return ordered, explored

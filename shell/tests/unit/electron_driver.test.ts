@@ -16,6 +16,7 @@ function make_host(): ViewHost & { behind: unknown[]; detached: unknown[] } {
   return {
     page_preload: "/dist/preload_page.js",
     lens_preload: "/dist/preload_lens.js",
+    lens_tokens: "",
     attach: vi.fn(),
     attach_behind: (view) => behind.push(view),
     detach: (view) => detached.push(view),

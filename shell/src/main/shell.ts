@@ -1,4 +1,5 @@
 // The window: chrome UI on top and on the right, one content area showing a lens or a web tab.
+import { readFileSync } from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, Notification, powerMonitor, shell as desktop, Tray, type WebContentsView } from "electron"
@@ -57,10 +58,20 @@ interface Visit {
   timer: ReturnType<typeof setTimeout>
 }
 
+// The shared design tokens; a build without them still runs, with lenses on their own styles.
+function read_tokens(file: string): string {
+  try {
+    return readFileSync(file, "utf-8")
+  } catch {
+    return ""
+  }
+}
+
 export class Shell implements ViewHost {
   readonly window: BrowserWindow
   readonly page_preload: string
   readonly lens_preload: string
+  readonly lens_tokens: string
   readonly tabs: TabManager
   readonly lenses: LensManager
   readonly readers: ReaderPool
@@ -97,6 +108,7 @@ export class Shell implements ViewHost {
   ) {
     this.page_preload = path.join(dist_dir, "preload_page.js")
     this.lens_preload = path.join(dist_dir, "preload_lens.js")
+    this.lens_tokens = read_tokens(path.join(dist_dir, "lens_tokens.css"))
     this.window = new BrowserWindow({
       width: 1280,
       height: 860,
@@ -135,7 +147,7 @@ export class Shell implements ViewHost {
       },
       changed: () => this.push_state(),
     })
-    this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload), {
+    this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload, this.lens_tokens), {
       say: (text) => this.chat.say(text),
       on_new_lens: (view_id, kind) => this.reload_lens(view_id, kind),
       track: (label, work) => this.activity.track(label, work),

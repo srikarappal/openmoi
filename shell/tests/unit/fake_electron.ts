@@ -31,6 +31,11 @@ export class FakeWebContents extends EventEmitter {
     this.on_send?.(channel, message)
   }
 
+  // A real click on this web contents, as the main process sees input.
+  press(): void {
+    this.emit("input-event", {}, { type: "mouseDown" })
+  }
+
   // Like Electron, the address changes as the load starts; a failure comes a moment later.
   async loadURL(url: string): Promise<void> {
     this.loads.push(url)

@@ -218,3 +218,18 @@ def test_the_journal_keeps_its_recent_two_weeks_as_day_files(paths, settings, se
     assert (paths.journal / "20261025.md").exists()
     assert "Recent" in " ".join(early_month.memory.journal_lines(early_month.clock()))
     early_month.http.close()
+
+
+def test_a_story_never_holds_two_items_of_one_source_even_through_a_chain():
+    first = item("rss:a", "1", "Apple announces iPhone event date for September launch")
+    other = item("rss:b", "2", "Apple announces iPhone event date for the September launch")
+    later = item("rss:a", "3", "Apple iPhone launch: what to expect from the September event")
+    placed = assign_clusters([first, other, later], [])
+    assert story_key(placed[1]) == first.item_id
+    assert story_key(placed[2]) == later.item_id
+    stored_first, stored_other = assign_clusters([first, other], [])
+    assert story_key(assign_clusters([later], [stored_first, stored_other])[0]) == later.item_id
+    third_source = item("x", "4", "Apple announces iPhone event date for September launch")
+    assert story_key(assign_clusters([third_source], [stored_first, stored_other])[0]) == first.item_id
+    # Once you saw the story, the outlet's follow up joins it, for the update pass to judge.
+    assert story_key(assign_clusters([later], [stored_first, stored_other], seen={stored_other.item_id})[0]) == first.item_id

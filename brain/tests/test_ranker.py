@@ -9,7 +9,7 @@ from moi_brain.compile import Condition, Rule
 from moi_brain.config import Paths
 from moi_brain.items import Event, normalize
 from moi_brain.rank import describe, rank, with_explore
-from moi_brain.ranker import MIN_EVENTS, Ranker, evaluate, features, history_days, main, ndcg, sigmoid
+from moi_brain.ranker import MIN_EVENTS, MIN_OPENS, Ranker, evaluate, features, history_days, main, ndcg, sigmoid
 from moi_brain.store import Store
 
 NOW = datetime(2026, 11, 12, 12, 0, tzinfo=UTC)
@@ -25,7 +25,7 @@ def post(number: int, author: str, topic: str, hours: float, now: datetime = NOW
 
 def test_features_say_what_an_item_is():
     found = features(post(1, "maya", "science", 24), NOW, boosts=10)
-    assert found == {"bias": 1.0, "source:x": 1.0, "family:x": 1.0, "recency": 0.5, "author:maya": 1.0, "topic:science": 1.0, "long": 1.0, "ragebait": 0.0, "boosts": 1.0}
+    assert found == {"bias": 1.0, "source:x": 1.0, "family:x": 1.0, "author:maya": 1.0, "topic:science": 1.0, "long": 1.0, "ragebait": 0.0, "boosts": 1.0}
     odd = post(2, "maya", "science", 1).model_copy(update={"extra": {"reading_minutes": "lots"}, "author_handle": None, "topics": [], "media_kind": "short_video"})
     assert {name: value for name, value in features(odd, NOW).items() if name in ("long", "ragebait", "media:short_video")} == {"long": 0.0, "ragebait": 0.0, "media:short_video": 1.0}
 
@@ -158,3 +158,41 @@ def test_a_rage_bait_judgment_counts_and_a_day_without_opens_still_teaches(tmp_p
     result = evaluate([quiet_day], tmp_path / "ranker.json")
     assert result == {"recency": 0.0, "model": 0.0, "days": 0.0}
     assert Ranker(tmp_path / "ranker.json").state.events == 1
+
+
+def test_scrolling_past_new_items_never_teaches_the_model_that_new_is_bad(tmp_path):
+    """One session where 40 fresh cards scroll past and 2 are opened is not enough to take over; with more opens the
+    model takes over and fresh items still come before stale ones it has no reason to prefer."""
+    ranker = Ranker(tmp_path / "ranker.json")
+    session = [(features(post(number, AUTHORS[number % 5], TOPICS[number % 4], number % 6), NOW), "seen") for number in range(40)]
+    ranker.learn([*session, (features(post(90, "ben", "sports", 1), NOW), "open"), (features(post(91, "news", "politics", 2), NOW), "open")])
+    assert not ranker.trained and ranker.state.opens == 2
+    ranker.learn([(features(post(92 + number, AUTHORS[number % 5], TOPICS[number % 4], 1), NOW), "open") for number in range(MIN_OPENS)])
+    assert ranker.trained
+    fresh = [post(300 + number, AUTHORS[number % 5], TOPICS[number % 4], number) for number in range(10)]
+    stale = [post(400 + number, AUTHORS[number % 5], TOPICS[number % 4], 72 + number * 8) for number in range(10)]
+    page, _ = rank(stale + fresh, [], NOW, learned=ranker, explore=False)
+    assert {entry.item.item_id for entry in page[:10]} == {item.item_id for item in fresh}
+
+
+def test_an_evaluation_starts_from_nothing_every_time(tmp_path):
+    days = synthetic_days(10)
+    assert evaluate(days, tmp_path / "evaluation.json") == evaluate(days, tmp_path / "evaluation.json")
+
+
+def test_explore_takes_one_place_in_ten_and_never_moves_pinned_or_untagged_items(tmp_path):
+    ranker = trained_on_maya(tmp_path)
+    science = [post(500 + index, "maya", "science", index) for index in range(15)]
+    pinned = post(600, "ben", "sports", 40)
+    untagged = post(601, "maya", "science", 0.5).model_copy(update={"topics": []})
+    outside = [post(700 + index, "ben", "sports", 30 + index) for index in range(3)]
+    rules = [Rule(when=Condition(field="author_handle", op="eq", value="ben"), unless=Condition(field="age_hours", op="lt", value=35), do="pin")]
+    page, _ = rank([*science, pinned, untagged, *outside], rules, NOW, learned=ranker, limit=40)
+    ids = [entry.item.item_id for entry in page]
+    assert ids[0] == pinned.item_id and "explore: outside your usual topics" not in page[0].reasons
+    assert ids.index(untagged.item_id) < 9
+    explored = [index for index, entry in enumerate(page) if "explore: outside your usual topics" in entry.reasons]
+    assert explored == [9, 19][: len(explored)] and explored
+    without, _ = rank([*science, pinned, untagged, *outside], rules, NOW, learned=ranker, limit=40, explore=False)
+    kept_order = [entry.item.item_id for entry in without if entry.item.item_id not in {page[index].item.item_id for index in explored}]
+    assert [item_id for item_id in ids if item_id in kept_order] == kept_order

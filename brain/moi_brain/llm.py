@@ -15,7 +15,7 @@ from pydantic import BaseModel, ValidationError
 from moi_brain.config import Settings, Slot
 from moi_brain.vectors import normalized
 
-SlotName = Literal["fast", "smart"]
+SlotName = Literal["fast", "smart", "vision"]
 ModelType = TypeVar("ModelType", bound=BaseModel)
 TIMEOUT_SECONDS = 180.0
 # Embedding runs while items are stored, so a model that hangs must not hold reading up for long.
@@ -25,6 +25,10 @@ MAX_ERROR_FEEDBACK = 1500
 
 class LlmError(Exception):
     """A model call failed or returned something unusable."""
+
+
+class InvalidReply(LlmError):
+    """The model answered, twice, with something that is not the JSON asked for."""
 
 
 class PrivacyBlocked(LlmError):
@@ -67,13 +71,16 @@ class Gateway:
         self.log_lock = threading.Lock()
 
     def slot(self, slot_name: SlotName) -> Slot:
-        return getattr(self.settings, slot_name)
+        slot = getattr(self.settings, slot_name)
+        if slot is None:
+            raise LlmError(f"no {slot_name} model is set up")
+        return slot
 
     def complete(
         self,
         slot_name: SlotName,
         task: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         contains_user_content: bool,
         json_mode: bool = False,
     ) -> str:
@@ -129,7 +136,7 @@ class Gateway:
         self,
         slot_name: SlotName,
         task: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         contains_user_content: bool,
         model_type: type[ModelType],
     ) -> ModelType:
@@ -147,7 +154,7 @@ class Gateway:
                     {"role": "assistant", "content": content},
                     {"role": "user", "content": f"That reply was invalid: {error_text}\nReply again with valid JSON only."},
                 ]
-        raise LlmError(f"{task} returned invalid JSON twice: {error_text}")
+        raise InvalidReply(f"{task} returned invalid JSON twice: {error_text}")
 
     def complete_text(
         self, slot_name: SlotName, task: str, messages: list[dict[str, str]], contains_user_content: bool

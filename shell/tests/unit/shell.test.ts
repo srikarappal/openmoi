@@ -314,6 +314,8 @@ function item(item_id: string, title: string) {
 }
 
 async function lens_says(contents: unknown, message: unknown): Promise<void> {
+  const type = (message as { type?: string }).type
+  if (type === "open" || type === "less_like_this") (contents as { press(): void }).press()
   ipcMain.emit("moi:lens_event", ipc_event(contents as never), message)
   await new Promise((resolve) => setTimeout(resolve, 10))
 }

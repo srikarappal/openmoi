@@ -1,5 +1,6 @@
 """HTTP API the shell calls. Thin on purpose: every handler delegates to the Brain."""
 
+import base64
 import hmac
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -17,6 +18,7 @@ from moi_brain.config import ModelChange, ModelInfo
 from moi_brain.edits import EditScope, Proposal, StaleProposal
 from moi_brain.extractors import ExtractorSpec
 from moi_brain.health import RunReport, Verdict
+from moi_brain.lens_gen import LensVerdict
 from moi_brain.items import Event, Item, ViewItem
 from moi_brain.llm import LlmError, PrivacyBlocked
 from moi_brain.rank import PAGE_SIZE
@@ -26,6 +28,8 @@ router = APIRouter()
 LensKind = Literal["feed", "article", "listing"]
 MAX_SKELETON = 250_000
 MAX_LENS_HTML = 400_000
+MAX_SCREENSHOT = 12_000_000
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 def get_brain(request: Request) -> Brain:
@@ -86,6 +90,13 @@ class LensAcceptRequest(BaseModel):
     view_id: str
     kind: LensKind = "feed"
     html: str = Field(min_length=1, max_length=MAX_LENS_HTML)
+
+
+class LensJudgeRequest(BaseModel):
+    view_id: str
+    kind: LensKind = "feed"
+    # A PNG screenshot of the lens with made up items, base64.
+    screenshot: str = Field(min_length=1, max_length=MAX_SCREENSHOT)
 
 
 class ExtractorGenerateRequest(BaseModel):
@@ -358,6 +369,17 @@ def lens(view_id: str, brain: BrainDep, kind: LensKind = "feed") -> str:
 @router.post("/lens/generate")
 def generate_lens(body: LensGenerateRequest, brain: BrainDep) -> dict[str, str]:
     return {"html": brain.generate_lens(body.view_id, body.kind, body.last_error)}
+
+
+@router.post("/lens/judge")
+def judge_lens(body: LensJudgeRequest, brain: BrainDep) -> LensVerdict:
+    try:
+        screenshot = base64.b64decode(body.screenshot, validate=True)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="the screenshot is not base64") from error
+    if not screenshot.startswith(PNG_SIGNATURE):
+        raise HTTPException(status_code=422, detail="the screenshot is not a PNG")
+    return brain.judge_lens(body.view_id, body.kind, screenshot)
 
 
 @router.post("/lens/accept")

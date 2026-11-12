@@ -100,6 +100,14 @@ describe("lens documents", () => {
     }
   })
 
+  it("puts the shared tokens after the CSP and before the lens's own styles, and a style end in them cannot close it early", () => {
+    const wrapped = wrap_lens("<html><head><style>body { color: var(--text) }</style></head></html>", ":root { --text: #111 }</style><script>x()</script>")
+    expect(wrapped.indexOf("Content-Security-Policy")).toBeLessThan(wrapped.indexOf('<style id="moi_tokens">'))
+    expect(wrapped.indexOf("--text: #111")).toBeLessThan(wrapped.indexOf("body { color"))
+    expect(wrapped).not.toContain("</style><script>")
+    expect(lens_data_url("<p>x</p>", ":root { --bg: #fff }")).not.toBe(lens_data_url("<p>x</p>"))
+  })
+
   it("lists the item images a lens may load, reader images included", () => {
     const article = { item: { item_id: "a", image_url: "https://i/a.jpg", extra: { blocks: JSON.stringify([{ type: "img", src: "https://i/b.jpg" }, { type: "p", text: "x" }]) } } }
     const broken = { item: { item_id: "b", image_url: null, extra: { blocks: "not json" } } }

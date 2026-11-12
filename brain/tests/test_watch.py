@@ -124,3 +124,13 @@ def test_a_change_the_model_could_not_judge_alerts_as_unchecked(timed, paths, se
         services.queue_model_reply("tag", None)
     alert = timed.post("/watches/report", json={"url": "https://school.example/news", "title": "School news", "text": "Lunch menu updated"}).json()["alert"]
     assert alert["checked"] is False and alert["view_id"] == "school"
+
+
+def test_a_change_item_is_enriched_and_searchable_like_any_item(timed):
+    report(timed, "Appointments\nNo slots this month")
+    report(timed, "Appointments\nThe slot for your visa interview is available on December 12")
+    brain = timed.app.state.brain
+    [(stored, _)] = [(entry, score) for entry, score in brain.store.search("interview", 5)]
+    assert stored.extra["lang"] == "en" and "reading_minutes" in stored.extra
+    assert set(brain.store.vectors_of([stored.item_id], "hashed")) == {stored.item_id}
+    assert [hit["item"]["item_id"] for hit in timed.get("/search", params={"q": "visa interview"}).json()] == [stored.item_id]

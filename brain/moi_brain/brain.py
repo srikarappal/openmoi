@@ -44,7 +44,7 @@ from moi_brain.items import (
     watch_source_id,
     youtube_source_id,
 )
-from moi_brain.lens_gen import generate_lens
+from moi_brain.lens_gen import LensVerdict, generate_lens, judge_lens
 from moi_brain.lenses import LENS_KINDS, SITE_PREFIX, LensStore, lens_key
 from moi_brain.llm import Gateway, LlmError
 from moi_brain.md import parse_sections, section_text
@@ -514,7 +514,7 @@ class Brain:
         recent = self.store.items_since(now - CLUSTER_WINDOW)
         new_items = [enriched(item) for item in items if item.item_id not in known]
         kind, vectors = self.item_vectors(new_items, [item for item, _ in recent])
-        fresh = assign_clusters(new_items, [item for item, _ in recent], vectors)
+        fresh = assign_clusters(new_items, [item for item, _ in recent], vectors, {item.item_id for item, seen_at in recent if seen_at})
         if tag_now:
             fresh, known = self.tag_now(fresh, known)
         stored = {item.item_id: item for item in self.store.upsert_items([*known.values(), *fresh], listed_at=now)}
@@ -599,7 +599,8 @@ class Brain:
         return self.store.add_follows(list_url, accounts, self.clock())
 
     def content_wanted(self, limit: int = 5) -> list[ContentWanted]:
-        """Fresh unseen items a view's summarize rules want, newest first; one that failed once is not asked for again."""
+        """Fresh unseen items a view's summarize rules want, newest first; one that failed once is not asked for again.
+        A summarize_only item is wanted even once seen: its card waits for the summary."""
         now = self.clock()
         circles = self.circles()
         found: dict[str, tuple[datetime, ContentWanted]] = {}
@@ -609,9 +610,10 @@ class Brain:
             if not rules:
                 continue
             for item, seen_at in self.store.items_with_seen(compiled.source_ids(), now - CONTENT_WINDOW):
-                if seen_at or "summary" in item.extra or recently_failed(item, now) or item.source_id.startswith("history:") or not self.readable_in_a_tab(item.url):
+                if "summary" in item.extra or recently_failed(item, now) or item.source_id.startswith("history:") or not self.readable_in_a_tab(item.url):
                     continue
-                if any(applies(rule, item, now, circles) for rule in rules):
+                matching = [rule for rule in rules if applies(rule, item, now, circles)]
+                if matching and (not seen_at or any(rule.do == "summarize_only" for rule in matching)):
                     found[item.item_id] = (item.published_at or item.fetched_at, ContentWanted(item_id=item.item_id, url=item.url, video=is_video(item.url)))
         newest = sorted(found.values(), key=itemgetter(0), reverse=True)
         return [wanted for _, wanted in newest[:limit]]
@@ -691,8 +693,10 @@ class Brain:
             return WatchReport(changed=False)
         source_id = watch_source_id(url)
         added, removed = changed_lines(before or [], lines)
-        item = change_item(source_id, url, title, added, removed, now)
+        item = enriched(change_item(source_id, url, title, added, removed, now))
         self.store.replace_item(item)
+        kind, (vector,) = make_vectors(self.gateway, [story_text(item)], "embed_items")
+        self.store.save_vectors({item.item_id: (kind, packed(vector))})
         alert = self.alert_for(item)
         self.tagger.enqueue([item])
         return WatchReport(changed=True, alert=alert)
@@ -739,7 +743,13 @@ class Brain:
 
     def generate_lens(self, view_id: str, kind: str, last_error: str | None) -> str:
         compiled = self.compiler.compiled(check_view_id(view_id))
-        return generate_lens(self.gateway, compiled.layout, kind, self.paths.default_lens.read_text(), last_error)
+        current = self.lenses.html(lens_key(view_id, kind))
+        tokens = self.paths.lens_tokens.read_text() if self.paths.lens_tokens.exists() else ""
+        return generate_lens(self.gateway, compiled.layout, kind, self.paths.default_lens.read_text(), last_error, current, tokens)
+
+    def judge_lens(self, view_id: str, kind: str, screenshot: bytes) -> LensVerdict:
+        compiled = self.compiler.compiled(check_view_id(view_id))
+        return judge_lens(self.gateway, compiled.layout, kind, screenshot)
 
     def accept_lens(self, view_id: str, kind: str, html: str) -> int:
         compiled = self.compiler.compiled(check_view_id(view_id))

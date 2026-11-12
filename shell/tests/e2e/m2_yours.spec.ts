@@ -56,9 +56,7 @@ test("less like this proposes a dislike and confirming hides the item everywhere
   const harness = await Harness.launch(world)
   try {
     await loaded(harness, "Local bakery wins national prize")
-    await harness.in_lenses(
-      `[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("Local bakery")).querySelector(".less").click()`,
-    )
+    await harness.click_lens(`[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("Local bakery")).querySelector(".less")`)
     await expect(harness.chrome.locator(".message.you").last()).toHaveText("Less like this: Local bakery wins national prize")
     await expect(harness.chrome.locator(".message.moi .diff").first()).toContainText("memory/dislikes.md")
     await harness.chrome.locator(".proposal_actions .confirm").click()

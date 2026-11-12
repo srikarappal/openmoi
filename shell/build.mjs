@@ -21,3 +21,4 @@ await build({ ...common, entryPoints: { content: "src/extension/content.ts", pop
 for (const file of ["manifest.json", "popup.html"]) cpSync(`extension/${file}`, `dist/extension/${file}`)
 cpSync("src/ui/index.html", "dist/ui/index.html")
 cpSync("src/ui/styles.css", "dist/ui/styles.css")
+cpSync("../lenses/tokens.css", "dist/lens_tokens.css")

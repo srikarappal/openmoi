@@ -4,18 +4,12 @@
 <meta charset="utf-8">
 <title>openMoi</title>
 <style>
-  :root {
-    --bg: #f6f5f2; --card: #ffffff; --text: #1d1d1f; --muted: #6e6e73;
-    --line: #e4e2dd; --accent: #3a5bd9; --chip: #eef0fb;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #141416; --card: #1e1e21; --text: #ececef; --muted: #9a9aa2; --line: #2c2c31; --accent: #8ea2ff; --chip: #262a3d; }
-  }
+  /* Colors, fonts and radii come from the shared tokens the host puts before this style. */
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 var(--font); }
   main { max-width: 760px; margin: 0 auto; padding: 20px 16px 8px; display: grid; gap: 12px; }
   main.grid { max-width: 1100px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; cursor: pointer; display: flex; flex-direction: column; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; cursor: pointer; display: flex; flex-direction: column; }
   .card:hover { border-color: var(--accent); }
   .thumb { width: 100%; max-height: 320px; object-fit: cover; background: var(--line); }
   .body { padding: 12px 14px 10px; display: grid; gap: 6px; }
@@ -23,7 +17,7 @@
   .title { font-weight: 650; font-size: 16.5px; line-height: 1.3; }
   .text { color: var(--text); opacity: 0.88; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
   .details { font-weight: 600; font-size: 14px; }
-  .summary { border-left: 3px solid var(--accent, #3b6cf6); padding-left: 8px; margin-top: 6px; }
+  .summary { border-left: 3px solid var(--accent); padding-left: 8px; margin-top: 6px; }
   .watching { font-size: 13px; opacity: 0.8; margin-top: 4px; }
   .summary.pending { color: var(--muted); font-style: italic; }
   .group { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; margin: 14px 2px 0; }
@@ -106,7 +100,7 @@
   }
 
   // A summary and what is worth watching, made after the card first showed, arrive as an update. A summary only card
-  // says its summary is on the way until then.
+  // keeps its own text, saying its summary is on the way, until then; a summary that never comes loses nothing.
   function summary_parts(item, summary_only) {
     const parts = []
     if (item.extra.summary) parts.push(element("div", "summary", item.extra.summary))
@@ -131,7 +125,7 @@
     const meta = [source_label(item.source_id), item.author_name || item.author_handle, time_ago(item.published_at)]
     body.append(element("div", "meta", meta.filter(Boolean).join(" · ")))
     if (item.title) body.append(element("div", "title", item.title))
-    if (item.text && item.text !== item.title && !view_item.summary_only) body.append(element("div", "text", item.text))
+    if (item.text && item.text !== item.title && !(view_item.summary_only && item.extra.summary)) body.append(element("div", "text", item.text))
     body.append(...summary_parts(item, view_item.summary_only))
     const details = [item.extra.price_text, item.extra.rating_text, item.extra.site].filter(Boolean).join(" · ")
     if (details) body.append(element("div", "details", details))
@@ -226,6 +220,7 @@
         const body = node && node.querySelector(".body")
         if (!body) continue
         for (const old of body.querySelectorAll(".summary, .watching")) old.remove()
+        if (node.dataset.summaryOnly === "1" && view_item.item.extra.summary) for (const text of body.querySelectorAll(".text")) text.remove()
         body.querySelector(".row").before(...summary_parts(view_item.item, node.dataset.summaryOnly === "1"))
       }
     })

@@ -10,6 +10,11 @@ import { allow_lens_images, forget_lens, lens_preferences } from "./sessions"
 // but a lens firing it for every item does not.
 const ACTION_INTERVAL_MS: Partial<Record<LensToHost["type"], number>> = { open: 800, less_like_this: 2_000 }
 const LESS_LIKE_THIS_PER_LENS_MS = 500
+// Gesture binding: opening an item or less like this counts only this soon after a real click, key press or touch on
+// that lens, as the main process saw it. A lens script can fire its own events but cannot fake these.
+export const GESTURE_WINDOW_MS = 1_000
+const REAL_INPUT = new Set(["mouseDown", "mouseUp", "keyDown", "rawKeyDown", "touchStart", "touchEnd", "gestureTap"])
+const NEEDS_GESTURE = new Set<LensToHost["type"]>(["open", "less_like_this"])
 
 export class LensContext {
   readonly rendered = new Map<string, Item>()
@@ -48,6 +53,7 @@ export class LensManager {
   private readonly contexts = new Map<string, LensContext>()
   private readonly by_contents = new Map<number, LensContext>()
   private readonly last_action = new Map<string, number>()
+  private readonly last_input = new Map<number, number>()
 
   constructor(
     private readonly host: ViewHost,
@@ -65,9 +71,13 @@ export class LensManager {
       if (context.ready) return
       context.ready = true
       this.events.on_ready(context)
-    } else if (this.in_time(context, message)) {
+    } else if (this.by_gesture(contents_id, message) && this.in_time(context, message)) {
       this.events.on_event(context, message)
     }
+  }
+
+  private by_gesture(contents_id: number, message: LensToHost): boolean {
+    return !NEEDS_GESTURE.has(message.type) || Date.now() - (this.last_input.get(contents_id) ?? -Infinity) <= GESTURE_WINDOW_MS
   }
 
   // Open is paced per lens (a double click opens once); less like this per item, so two items in a row both count.
@@ -92,6 +102,10 @@ export class LensManager {
     const view = new WebContentsView({ webPreferences: lens_preferences(this.host.lens_preload) })
     view.webContents.on("will-navigate", (event) => event.preventDefault())
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
+    const contents_id = view.webContents.id
+    view.webContents.on("input-event", (_event, input) => {
+      if (REAL_INPUT.has(input.type)) this.last_input.set(contents_id, Date.now())
+    })
     const context = new LensContext(key, view_id, view)
     this.contexts.set(key, context)
     this.by_contents.set(view.webContents.id, context)
@@ -104,7 +118,7 @@ export class LensManager {
   async load(context: LensContext, html: string): Promise<void> {
     context.ready = false
     context.rendered.clear()
-    await context.view.webContents.loadURL(lens_data_url(html))
+    await context.view.webContents.loadURL(lens_data_url(html, this.host.lens_tokens))
   }
 
   close(key: string): void {
@@ -112,6 +126,7 @@ export class LensManager {
     if (!context) return
     this.contexts.delete(key)
     this.by_contents.delete(context.view.webContents.id)
+    this.last_input.delete(context.view.webContents.id)
     forget_lens(context.view.webContents.id)
     this.host.detach(context.view)
     context.view.webContents.close()

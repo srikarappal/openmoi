@@ -22,6 +22,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from moi_brain.compile import CompiledView, Judgment, Rule
+from moi_brain.enrich import with_judged_rage
 from moi_brain.files import read_json, write_atomic
 from moi_brain.items import JUDGED_PREFIX, Item
 from moi_brain.llm import Gateway, LlmError
@@ -210,7 +211,7 @@ class Tagger:
             for item in batch:
                 topics_found, answers = replies.get(item.item_id, ([], {}))
                 judged = {judged_key(judgment): normalize_answer(judgment, answers.get(judgment.name)) for judgment in judgments}
-                tagged.append(item.model_copy(update={"topics": topics_found, "tagged": True, "extra": {**item.extra, **judged}}))
+                tagged.append(item.model_copy(update={"topics": topics_found, "tagged": True, "extra": with_judged_rage({**item.extra, **judged})}))
         return tagged
 
     def tag_batch(self, batch: list[Item], topics: list[str], judgments: list[Judgment]) -> dict[str, tuple[list[str], dict[str, object]]] | None:
