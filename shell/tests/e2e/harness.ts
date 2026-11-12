@@ -75,6 +75,8 @@ export interface LaunchOptions {
   fast_slot?: { base_url: string; model: string }
   // The fake model also judges lenses from screenshots.
   vision?: boolean
+  // Files to put in the assets folder (site policy, extractor specs), by path inside it.
+  assets?: Record<string, string>
   files?: Record<string, string>
   // The folder of an earlier run, to start openMoi again on the same home, as after a restart.
   root?: string
@@ -135,6 +137,10 @@ export class Harness {
     for (const [relative, text] of Object.entries(options.files ?? {})) {
       mkdirSync(path.dirname(path.join(home, relative)), { recursive: true })
       writeFileSync(path.join(home, relative), text)
+    }
+    for (const [relative, text] of Object.entries(options.assets ?? {})) {
+      mkdirSync(path.dirname(path.join(assets, relative)), { recursive: true })
+      writeFileSync(path.join(assets, relative), text)
     }
     const slot = { base_url: `${world.base_url}/llm/v1`, model: "fake" }
     writeFileSync(path.join(home, ".moi", "config.json"), JSON.stringify({ fast: options.fast_slot ?? slot, smart: slot, ...(options.vision ? { vision: slot } : {}) }))

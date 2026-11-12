@@ -1,0 +1,43 @@
+{
+  "domain": "x.com",
+  "path_pattern": "/*/status/*",
+  "page_type": "item",
+  "version": 1,
+  "item_root": "article[data-testid='tweet']",
+  "native_id": {
+    "select": "a[href*='/status/']",
+    "take": "attr:href",
+    "transform": "regex:/status/(\\d+)",
+    "optional": true
+  },
+  "fields": {
+    "text": {
+      "select": "[data-testid='tweetText']",
+      "take": "text",
+      "optional": true
+    }
+  },
+  "action_anchors": {
+    "like": {
+      "select": "[data-testid='like']",
+      "active_state": "[data-testid='unlike']"
+    },
+    "unlike": {
+      "select": "[data-testid='unlike']",
+      "active_state": "[data-testid='like']"
+    },
+    "follow": {
+      "select": "[data-testid$='-follow'], [data-testid='follow']",
+      "active_state": "[data-testid$='-unfollow'], [data-testid='unfollow']"
+    },
+    "repost": {
+      "select": "[data-testid='retweet']",
+      "active_state": "[data-testid='unretweet']"
+    },
+    "reply": {
+      "select": "[data-testid='reply']",
+      "input": "[data-testid='tweetTextarea_0'], [data-testid='tweetTextarea']",
+      "submit": "[data-testid='tweetButton']"
+    }
+  }
+}

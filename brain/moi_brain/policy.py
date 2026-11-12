@@ -19,6 +19,8 @@ class SitePolicy(BaseModel):
     daily_steps: int = Field(default=200, ge=0, le=1000)
     # Read the JSON the site's pages fetch by themselves (openMoi's own session only), on for sites where it helps.
     capture: bool = False
+    # Which actions openMoi may take on the site for you (like, follow, reply, add_to_cart...); all off unless listed.
+    writes: dict[str, bool] = Field(default_factory=dict)
 
 
 class PolicyFile(BaseModel):

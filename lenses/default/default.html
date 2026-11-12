@@ -27,6 +27,11 @@
   .chip { background: var(--chip); color: var(--muted); border-radius: 999px; padding: 1px 8px; font-size: 11.5px; }
   .less { border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
   .less:hover, .play:hover { color: var(--accent); }
+  .acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .acts .act, .send_reply { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; cursor: pointer; }
+  .acts .act[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+  .reply_tools { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .reply_box { min-width: 220px; min-height: 2.2em; font: inherit; font-size: 13px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
   .play, .save, .read_here { border: none; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 2px 4px; }
   .save[aria-pressed="true"] { color: var(--accent); font-weight: 600; }
   .inline_reader { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 8px; font-size: 16px; line-height: 1.6; cursor: auto; }
@@ -144,6 +149,7 @@
     const details = [item.extra.price_text, item.extra.rating_text, item.extra.site].filter(Boolean).join(" · ")
     if (details) body.append(element("div", "details", details))
     if (item.extra.price_note) body.append(element("div", "price_note", item.extra.price_note))
+    if ((item.available_actions || []).length) body.append(action_bar(item))
     const row = element("div", "row")
     const chips = element("div", "chips")
     for (const reason of view_item.reasons.filter((reason) => !reason.startsWith("from "))) chips.append(element("span", "chip", reason))
@@ -178,6 +184,52 @@
   }
 
   const SAVE_LABELS = { read_later: "Read later", watch_later: "Watch later" }
+  const ACT_LABELS = { like: "Like", follow: "Follow", repost: "Repost", bookmark: "Bookmark", add_to_cart: "Add to cart" }
+  const DONE_LABELS = { like: "Liked", follow: "Following", bookmark: "Bookmarked" }
+
+  // What openMoi can do on the site for you, asked on your click; the host's gate decides and confirms.
+  function action_bar(item) {
+    const bar = element("div", "acts")
+    const available = item.available_actions || []
+    for (const action of Object.keys(ACT_LABELS).filter((name) => available.includes(name))) {
+      const done = item.extra["acted:" + action] === "yes"
+      const undo = "un" + action
+      const button = element("button", "act", done ? DONE_LABELS[action] || ACT_LABELS[action] : ACT_LABELS[action])
+      button.dataset.action = done && available.includes(undo) ? undo : action
+      button.setAttribute("aria-pressed", done ? "true" : "false")
+      button.addEventListener("click", (event) => {
+        event.stopPropagation()
+        moi.act(item.item_id, button.dataset.action, "")
+      })
+      bar.append(button)
+    }
+    if (available.includes("reply")) bar.append(reply_tools(item))
+    return bar
+  }
+
+  function reply_tools(item) {
+    const tools = element("span", "reply_tools")
+    const open = element("button", "act", "Reply")
+    open.dataset.action = "reply"
+    const box = element("textarea", "reply_box")
+    box.setAttribute("aria-label", "Your reply")
+    box.hidden = true
+    const sendit = element("button", "send_reply", "Send reply")
+    sendit.hidden = true
+    open.addEventListener("click", (event) => {
+      event.stopPropagation()
+      box.hidden = sendit.hidden = false
+      box.focus()
+    })
+    box.addEventListener("click", (event) => event.stopPropagation())
+    sendit.addEventListener("click", (event) => {
+      event.stopPropagation()
+      if (!box.value.trim()) return
+      moi.act(item.item_id, "reply", box.value.trim())
+    })
+    tools.append(open, box, sendit)
+    return tools
+  }
 
   // Read later or Watch later, and Saved once it is; a second click takes it out again.
   function save_button(item, collection, collections) {
@@ -336,6 +388,8 @@
         const body = node && node.querySelector(".body")
         if (!body) continue
         if (Array.isArray(view_item.collections)) for (const button of body.querySelectorAll(".save")) show_saved(button, view_item.collections.includes(button.dataset.collection))
+        const acts = body.querySelector(".acts")
+        if (acts && (view_item.item.available_actions || []).length) acts.replaceWith(action_bar(view_item.item))
         if (view_item.item.extra.blocks && !body.querySelector(".read_here")) body.querySelector(".less").before(read_here_button(node, view_item.item))
         for (const old of body.querySelectorAll(".summary, .watching")) old.remove()
         if (node.dataset.summaryOnly === "1" && view_item.item.extra.summary) for (const text of body.querySelectorAll(".text")) text.remove()

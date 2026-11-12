@@ -17,6 +17,7 @@ from moi_brain.compile import BadInput, ViewInfo
 from moi_brain.config import ModelChange, ModelInfo
 from moi_brain.edits import EditScope, Proposal, StaleProposal
 from moi_brain.extractors import ExtractorSpec
+from moi_brain.actions import ActionDecision, ActionRequest, ActionResult
 from moi_brain.answers import Answer
 from moi_brain.health import RunReport, Verdict
 from moi_brain.lens_gen import LensVerdict
@@ -320,6 +321,21 @@ class HighlightRequest(BaseModel):
     item_id: str = Field(min_length=1, max_length=200)
     quote: str = Field(default="", max_length=5000)
     note: str = Field(default="", max_length=5000)
+
+
+@router.post("/actions/check")
+def check_action(body: ActionRequest, brain: BrainDep) -> ActionDecision:
+    return brain.check_action(body)
+
+
+@router.post("/actions/result")
+def action_result(body: ActionResult, brain: BrainDep) -> dict[str, Any]:
+    return {"recorded": True, "item": brain.action_result(body)}
+
+
+@router.get("/actions/log")
+def action_log(brain: BrainDep, limit: int = 50) -> list[dict[str, Any]]:
+    return brain.audit.entries()[-min(max(limit, 1), 500):]
 
 
 class ShopRequest(BaseModel):

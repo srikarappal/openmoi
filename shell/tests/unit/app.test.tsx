@@ -23,6 +23,7 @@ const BASE: ShellState = {
   stop: null,
   player: null,
   omnibox: null,
+  confirm: null,
 }
 
 // The preload bridge as the UI sees it: commands are recorded, states are pushed by the test.
@@ -355,5 +356,21 @@ describe("the omnibox", () => {
     expect(bridge.sent.slice(-2)).toEqual([{ type: "open_view", view_id: "lithium" }, { type: "omnibox", text: "" }])
     await show({ omnibox: null })
     expect(query(".omnibox")).toBeNull()
+  })
+})
+
+describe("the confirm sheet", () => {
+  it("shows the exact words, target and site, and confirms or cancels", async () => {
+    const pending = { request_id: "r1", action: "reply", label: "Reply", tier: 2 as const, allowed: true, confirm: true, undo_seconds: 0, reason: "", url: "https://x.com/maya/status/1", title: "Bakery opens", site: "x.com", text: "See you Saturday", anchor: null }
+    await show({ confirm: pending })
+    expect(texts(".confirm_title")).toEqual(["Reply on x.com, as you"])
+    expect(texts(".confirm_target")).toEqual(["Bakery opens"])
+    expect(texts(".confirm_text")).toEqual(["See you Saturday"])
+    await click(query(".confirm_actions .confirm"))
+    expect(last_sent()).toEqual({ type: "confirm_action", request_id: "r1" })
+    await click(query(".confirm_actions .decline"))
+    expect(last_sent()).toEqual({ type: "decline_action", request_id: "r1" })
+    await show({ confirm: null })
+    expect(query(".confirm_sheet")).toBeNull()
   })
 })

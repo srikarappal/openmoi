@@ -33,6 +33,8 @@ export interface ViewHooks {
   play(item: Item): boolean
   // An item went into a collection or came out of it.
   saved(info: CollectionInfo, saved: boolean): void
+  // You asked openMoi to act on the site for an item; the gate decides.
+  act(item: Item, action: string, text: string): Promise<void>
   notify(text: string, url?: string, tag?: string, action?: Notice["action"]): void
   retract(tag: string): void
   echo(text: string): void
@@ -224,6 +226,14 @@ export class ViewController {
   }
 
   // An item a summarize rule wants: read in full, then summarized by the brain onto its card for the next time it shows.
+  // An item an action changed (liked, followed) shows its new state in every lens showing it.
+  item_changed(item: Item): void {
+    for (const context of this.lenses.all()) {
+      if (!context.rendered.has(item.item_id)) continue
+      context.send({ type: "update", items: [{ item, reasons: [], collections: context.collections.get(item.item_id) }], cursor: null })
+    }
+  }
+
   // Every open lens showing an item learns which collections it is in now, so its Save button says so.
   private mark_saved(item_id: string, name: string, saved: boolean): void {
     for (const context of this.lenses.all()) {
@@ -500,6 +510,8 @@ export class ViewController {
       const info = await this.brain.save_item(message.collection, item.item_id, saved)
       this.mark_saved(item.item_id, info.name, saved)
       this.hooks.saved(info, saved)
+    } else if (message.type === "act" && item) {
+      await this.hooks.act(item, message.action, message.text)
     } else if (message.type === "highlight" && item) {
       this.hooks.echo(`Kept in memory/highlights.md: ${await this.brain.highlight(item.item_id, message.quote, message.note)}`)
     } else if (message.type === "less_like_this" && item) {

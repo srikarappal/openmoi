@@ -216,3 +216,29 @@ describe("default lens collections and reading", () => {
     expect(card.querySelector(".inline_reader")).toBeNull()
   })
 })
+
+describe("default lens actions", () => {
+  it("offers the actions an item allows, Like turning into Liked, and a reply box that sends your words", () => {
+    const { dom, moi } = run_lens(DEFAULT_LENS)
+    moi.render([view_item("p", { available_actions: ["like", "unlike", "follow", "reply"], extra: { "acted:like": "yes" } }), view_item("q")], null)
+    const document = dom.window.document
+    const card = document.querySelector("[data-item-id='p']") as HTMLElement
+    expect(Array.from(card.querySelectorAll(".acts > .act"), (button) => button.textContent)).toEqual(["Liked", "Follow"])
+    expect(document.querySelector("[data-item-id='q'] .acts")).toBeNull()
+    ;(card.querySelector(".act[data-action='unlike']") as HTMLElement).click()
+    ;(card.querySelector(".act[data-action='follow']") as HTMLElement).click()
+    ;(card.querySelector(".reply_tools .act") as HTMLElement).click()
+    const box = card.querySelector(".reply_box") as HTMLTextAreaElement
+    expect(box.hidden).toBe(false)
+    ;(card.querySelector(".send_reply") as HTMLElement).click()
+    box.value = "  See you Saturday "
+    ;(card.querySelector(".send_reply") as HTMLElement).click()
+    expect(moi.sent.slice(1)).toEqual([
+      { type: "act", item_id: "p", action: "unlike", text: "" },
+      { type: "act", item_id: "p", action: "follow", text: "" },
+      { type: "act", item_id: "p", action: "reply", text: "See you Saturday" },
+    ])
+    moi.update([{ item: view_item("p", { available_actions: ["like", "unlike", "follow", "reply"], extra: { "acted:like": "no", "acted:follow": "yes" } }).item, reasons: [] }])
+    expect(Array.from(card.querySelectorAll(".acts > .act"), (button) => button.textContent)).toEqual(["Like", "Following"])
+  })
+})

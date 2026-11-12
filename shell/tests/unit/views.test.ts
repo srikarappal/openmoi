@@ -20,7 +20,7 @@ function make_views(outcomes: FillOutcome[], pages: ViewPage[] = [], page_source
   const sources = { fill: vi.fn(async (..._args: unknown[]) => outcomes.shift() ?? ({ status: "skipped" } as FillOutcome)) }
   const lenses = { get: (key: string) => (key === context.key ? context : undefined), all: () => [context] }
   const { labels, track } = new Tracked()
-  const hooks = { open_original: vi.fn(), play: vi.fn((_item: { url: string }) => false), saved: vi.fn(), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), alert: vi.fn(), track, labels }
+  const hooks = { open_original: vi.fn(), play: vi.fn((_item: { url: string }) => false), saved: vi.fn(), act: vi.fn(async () => {}), notify: vi.fn(), retract: vi.fn(), echo: vi.fn(), less_like_this: vi.fn(), lens_stale: vi.fn(), alert: vi.fn(), track, labels }
   const views = new ViewController(brain as unknown as BrainClient, lenses as unknown as LensManager, sources as unknown as ReaderPool, hooks)
   return { views, context, sources, hooks, brain }
 }
@@ -278,6 +278,21 @@ describe("ViewController rendering", () => {
     expect(hooks.echo).toHaveBeenLastCalledWith('Kept in memory/highlights.md: highlight: "a line" from A (https://a.com/a)')
     await views.on_event(context, { type: "save", item_id: "ghost", collection: "read_later" })
     expect(brain.save_item).toHaveBeenCalledTimes(2)
+  })
+
+  it("passes an action you clicked to the gate, and an item it changed to every lens showing it", async () => {
+    const { views, context, hooks } = render_setup([])
+    context.rendered.set("p", { item_id: "p", url: "https://x.com/maya/status/1" } as never)
+    await views.on_event(context, { type: "act", item_id: "p", action: "like", text: "" })
+    await views.on_event(context, { type: "act", item_id: "ghost", action: "like", text: "" })
+    expect(hooks.act.mock.calls).toEqual([[{ item_id: "p", url: "https://x.com/maya/status/1" }, "like", ""]])
+    const lens_context = context as unknown as { collections: Map<string, string[]> }
+    lens_context.collections = new Map([["p", ["read_later"]]])
+    Object.assign(views, { lenses: { all: () => [context] } })
+    views.item_changed({ item_id: "p", url: "https://x.com/maya/status/1", extra: { "acted:like": "yes" } } as never)
+    views.item_changed({ item_id: "elsewhere" } as never)
+    const updates = (context.send as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0]).filter((message) => message.type === "update")
+    expect(updates).toEqual([{ type: "update", items: [{ item: { item_id: "p", url: "https://x.com/maya/status/1", extra: { "acted:like": "yes" } }, reasons: [], collections: ["read_later"] }], cursor: null }])
   })
 
   it("plays a video in the host's player, counting it as opened, and opens anything it cannot play", async () => {

@@ -43,6 +43,10 @@ export class FakeMoi {
     this.sent.push({ type: "unsave", item_id, collection })
   }
 
+  act(item_id: string, action: string, text = ""): void {
+    this.sent.push({ type: "act", item_id, action, text })
+  }
+
   highlight(item_id: string, quote = "", note = ""): void {
     this.sent.push({ type: "highlight", item_id, quote, note })
   }

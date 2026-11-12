@@ -31,6 +31,7 @@ import type {
   CollectionInfo,
   Answer,
   ShopStart,
+  ActionDecision,
   LensVerdict,
 } from "../shared/types"
 
@@ -175,6 +176,14 @@ export class BrainClient {
 
   moment(view_id: string, kind: MomentKind): Promise<{ status: string }> {
     return this.request("POST", "/moments", { view_id, kind })
+  }
+
+  check_action(item_id: string, action: string, text: string, origin: "gesture" | "plan" = "gesture"): Promise<ActionDecision> {
+    return this.request("POST", "/actions/check", { item_id, action, text, origin })
+  }
+
+  action_result(request_id: string, outcome: "done" | "failed" | "undone" | "declined", detail = ""): Promise<{ recorded: boolean; item: Item | null }> {
+    return this.request("POST", "/actions/result", { request_id, outcome, detail })
   }
 
   shop(query: string, view_id: string): Promise<ShopStart> {

@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
+from moi_brain.actions import ActionAnchor
 from moi_brain.files import write_atomic
 
 UNSAFE_NAME = re.compile(r"[^\w.]+")
@@ -37,6 +38,8 @@ class ExtractorSpec(BaseModel):
     native_id: FieldRule | None = None
     fields: dict[str, FieldRule]
     pagination: Pagination = Field(default_factory=Pagination)
+    # Where each action's control is on this kind of page, for the action executor.
+    action_anchors: dict[str, ActionAnchor] = Field(default_factory=dict)
 
 
 def page_domain(url: str) -> str:

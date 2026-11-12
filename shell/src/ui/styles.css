@@ -96,3 +96,10 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .omni_hit:hover { background: var(--chip, #eef0fb); }
 .omni_label { font-size: 13px; font-weight: 600; }
 .omni_detail { font-size: 11.5px; color: var(--muted, #6b6b70); }
+
+.confirm_sheet { margin: 6px 8px; padding: 10px 12px; border: 2px solid var(--accent, #3a5bd9); border-radius: 10px; display: grid; gap: 6px; }
+.confirm_title { font-weight: 700; font-size: 13.5px; }
+.confirm_target { font-size: 12.5px; color: var(--muted, #6b6b70); }
+.confirm_text { margin: 0; padding: 6px 8px; border-left: 3px solid var(--accent, #3a5bd9); white-space: pre-wrap; font-size: 13px; }
+.confirm_note { font-size: 11.5px; color: var(--muted, #6b6b70); }
+.confirm_actions { display: flex; gap: 6px; }

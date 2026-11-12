@@ -18,6 +18,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from moi_brain.compile import BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
+from moi_brain.actions import KINDS, RATE_CAPS, RATE_WINDOW, UNDO_SECONDS, ActionDecision, ActionKind, ActionRequest, ActionResult, AuditLog, new_request_id, policy_flag, state_key
 from moi_brain.answers import MAX_SOURCES, Answer, AnswerReply, answer_prompt, cited
 from moi_brain.collections import READ_LATER, collection_name, collection_title, export_json, export_markdown, is_collection_name
 from moi_brain.content import ContentSummary, caption_allowed, is_video, offline_blocks, summary_extra, summary_prompt, transcript_text
@@ -27,7 +28,7 @@ from moi_brain.enrich import enriched
 from moi_brain.edits import VIEW_SECTIONS, EditScope, Editor, Proposal
 from moi_brain.extractor_gen import generate_spec
 from moi_brain.exports import SOURCE_IDS, read_export
-from moi_brain.extractors import ExtractorSpec, ExtractorStore
+from moi_brain.extractors import ExtractorSpec, ExtractorStore, page_domain, path_pattern_for
 from moi_brain.files import read_json, write_atomic
 from moi_brain.google import GoogleAccount, GoogleError
 from moi_brain.health import HealthBook, OracleReply, RunReport, Verdict, oracle_prompt
@@ -306,6 +307,7 @@ class Brain:
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors, paths.packs / "extractors")
         self.policies = merged_policy(load_policy(paths.site_policy), installed_pack(paths.packs))
         self.health = HealthBook(paths.extractor_health)
+        self.audit = AuditLog(paths.state / "actions.jsonl")
         self.ranker = Ranker(paths.ranker)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
         self.relay = RelayHub(paths.relay_trust, self.queue_relay_event, self.relay_config)
@@ -595,6 +597,24 @@ class Brain:
                 by_url.setdefault(found[item_id].url, item_id)
         return [SearchHit(item=found[item_id], score=round(scores[item_id], 4)) for item_id in list(by_url.values())[:limit]]
 
+    def with_actions(self, ranked: list[ViewItem]) -> list[ViewItem]:
+        """Each item's actions openMoi can take for you: its page's spec knows the control and its site allows it."""
+        found = []
+        anchors: dict[tuple[str, str], list[str]] = {}
+        for view_item in ranked:
+            url = view_item.item.url
+            policy = policy_for(self.policies, url)
+            if policy.status != "active" or not any(policy.writes.values()):
+                found.append(view_item)
+                continue
+            kind_of_page = (page_domain(url), path_pattern_for(url))
+            if kind_of_page not in anchors:
+                spec = self.best_spec(url)
+                anchors[kind_of_page] = list(spec.action_anchors) if spec else []
+            actions = [action for action in anchors[kind_of_page] if KINDS.get(action) and KINDS[action].tier < 3 and policy.writes.get(policy_flag(action))]
+            found.append(view_item.model_copy(update={"item": view_item.item.model_copy(update={"available_actions": actions})}) if actions else view_item)
+        return found
+
     def with_price_notes(self, ranked: list[ViewItem]) -> list[ViewItem]:
         """Products whose price you saw on other days say how this one compares: the lowest you saw, or that it is."""
         priced = {view_item.item.item_id: price for view_item in ranked if (price := parse_price(view_item.item.extra.get("price_text", "")))}
@@ -750,6 +770,80 @@ class Brain:
             state.queries[chosen] = query
             write_atomic(self.paths.state / "shop.json", state.model_dump_json())
         return ShopStart(view_id=chosen, query=query, created=created)
+
+    def check_action(self, request: ActionRequest) -> ActionDecision:
+        """The gate: an action you asked for on an item, checked against its tier, its origin, the site's write flags,
+        the rate cap and whether openMoi knows where its control is. Every request and its decision is audited; an
+        allowed one comes back with the control to use, to confirm first (tier 2) or to undo within seconds (tier 1)."""
+        kind = KINDS.get(request.action)
+        if kind is None:
+            raise BadInput(f"openMoi does not know the action {request.action}.")
+        item = self.store.get_item(request.item_id)
+        if item is None:
+            raise BadInput("That item is gone.")
+        now = self.clock()
+        site = page_domain(item.url)
+        text = request.text.strip()
+        reason = self.action_refusal(request, kind, site, text, now)
+        spec = self.best_spec(item.url) if reason is None else None
+        anchor = spec.action_anchors.get(request.action) if spec else None
+        if reason is None and anchor is None:
+            reason = f"openMoi does not know where to {kind.label.lower()} on {site} yet."
+        allowed = reason is None
+        decision = ActionDecision(
+            request_id=new_request_id(),
+            action=request.action,
+            label=kind.label,
+            tier=kind.tier,
+            allowed=allowed,
+            confirm=allowed and (kind.tier >= 2 or request.origin == "plan"),
+            undo_seconds=UNDO_SECONDS if allowed and kind.tier == 1 and request.origin == "gesture" else 0,
+            reason=reason or "",
+            url=item.url,
+            title=WHITESPACE.sub(" ", item.title or item.text or item.url).strip()[:200],
+            site=site,
+            text=text,
+            anchor=anchor if allowed else None,
+        )
+        self.audit.append({
+            "kind": "request", "at": now.astimezone(UTC).isoformat(), "request_id": decision.request_id, "action": request.action, "tier": kind.tier,
+            "item_id": item.item_id, "url": item.url, "site": site, "origin": request.origin, "plan_id": request.plan_id, "allowed": allowed,
+            "reason": decision.reason, "text": text,
+        })
+        return decision
+
+    def action_refusal(self, request: ActionRequest, kind: ActionKind, site: str, text: str, now: datetime) -> str | None:
+        """Why the gate refuses a request, or None when it may go on."""
+        if kind.tier == 3:
+            return f"openMoi never does this for you. The page is open: {kind.label.lower()} there yourself if you want to."
+        if request.origin == "plan":
+            return "No plan you approved asks for this."
+        if kind.needs_text and not text:
+            return f"Write what to say first: {kind.label.lower()} needs your words."
+        if not kind.needs_text and text:
+            return f"{kind.label} takes no text."
+        policy = policy_for(self.policies, f"https://{site}/")
+        if policy.status != "active":
+            return f"{site} is {policy.status} in the site policy."
+        if not policy.writes.get(policy_flag(request.action)):
+            return f"Actions are off for {site}: turn on {policy_flag(request.action)} under writes in policy/sites.json."
+        cap = RATE_CAPS[kind.tier]
+        if self.audit.recent_requests(site, kind.tier, (now - RATE_WINDOW).astimezone(UTC)) >= cap:
+            return f"That makes more than {cap} in an hour on {site}; try again later."
+        return None
+
+    def action_result(self, result: ActionResult) -> Item | None:
+        """What became of an allowed request: done (the page shows it worked), failed, undone in time, or declined
+        at the confirm sheet. A done action is remembered on its item; the item comes back for the lens."""
+        request = self.audit.request(result.request_id)
+        if request is None or not request.get("allowed"):
+            raise BadInput("No allowed action has that id.")
+        self.audit.append({"kind": "result", "at": self.clock().astimezone(UTC).isoformat(), "request_id": result.request_id, "outcome": result.outcome, "detail": result.detail})
+        item_id, action = str(request["item_id"]), str(request["action"])
+        if result.outcome == "done":
+            self.store.update_extra(item_id, {state_key(action): "no" if action.startswith("un") and policy_flag(action) != action else "yes"})
+        item = self.store.get_item(item_id)
+        return self.with_actions([ViewItem(item=item)])[0].item if item else None
 
     def save_item(self, name: str, item_id: str, saved: bool = True) -> CollectionInfo:
         """Puts an item in a collection, or takes it out."""
@@ -963,7 +1057,7 @@ class Brain:
         ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles, seen, self.ranker, compiled.explore)
         saved_in = self.store.collections_of([view_item.item.item_id for view_item in ranked])
         ranked = [view_item.model_copy(update={"collections": saved_in.get(view_item.item.item_id, [])}) for view_item in ranked]
-        ranked = self.with_price_notes(ranked)
+        ranked = self.with_actions(self.with_price_notes(ranked))
         with self.lock:
             reading = view_id in self.refreshing
             refreshing = reading or self.tagger.busy or self.updater.busy

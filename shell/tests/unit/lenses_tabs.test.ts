@@ -243,3 +243,20 @@ describe("TabManager", () => {
     expect(tab.view.webContents.isDestroyed()).toBe(true)
   })
 })
+
+describe("LensManager pacing for actions", () => {
+  it("lets two different items be acted on in a row but not the same item twice in a moment", async () => {
+    const host = { page_preload: "/p.js", lens_preload: "/l.js", lens_tokens: "", attach: vi.fn(), attach_behind: vi.fn(), detach: vi.fn() }
+    const events = { on_ready: vi.fn(), on_event: vi.fn() }
+    const lenses = new LensManager(host as never, events)
+    const context = await lenses.open("view:feed", "feed", "<p>lens</p>")
+    const now = vi.spyOn(Date, "now").mockReturnValue(20_000)
+    const contents = context.view.webContents
+    for (const [item_id, action, at] of [["a", "reply", 20_000], ["b", "add_to_cart", 20_200], ["b", "add_to_cart", 20_400], ["b", "like", 20_600], ["c", "save", 20_610]] as const) {
+      now.mockReturnValue(at)
+      press(contents)
+      lens_event(contents, at === 20_610 ? { type: "save", item_id, collection: "read_later" } : { type: "act", item_id, action, text: "" })
+    }
+    expect(events.on_event.mock.calls.map((call) => `${call[1].type} ${call[1].item_id} ${call[1].action ?? ""}`.trim())).toEqual(["act a reply", "act b add_to_cart", "act b like", "save c"])
+  })
+})

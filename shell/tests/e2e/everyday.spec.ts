@@ -422,3 +422,102 @@ test("questions about what you read are answered with links, and the address bar
     await harness.close()
   }
 })
+
+const ACT_SPECS = (host: string) => ({
+  "policy/sites.json": JSON.stringify({ policy_version: 1, sites: { [host]: { status: "active", mode: "pilot", daily_steps: 200, writes: { like: true, follow: true, reply: true, add_to_cart: true } } } }),
+  "extractors/act_post.json": JSON.stringify({
+    domain: host,
+    path_pattern: "/pages/act_post*",
+    page_type: "item",
+    item_root: "article",
+    fields: { text: { select: "[data-testid='tweetText']", take: "text" } },
+    action_anchors: {
+      like: { select: "[data-testid='like']", active_state: "[data-testid='unlike']" },
+      unlike: { select: "[data-testid='unlike']", active_state: "[data-testid='like']" },
+      follow: { select: "[data-testid='follow']", active_state: "[data-testid='unfollow']" },
+      reply: { select: "[data-testid='reply']", input: "[data-testid='tweetTextarea']", submit: "[data-testid='tweetButton']" },
+    },
+  }),
+  "extractors/act_product.json": JSON.stringify({
+    domain: host,
+    path_pattern: "/pages/act_product*",
+    page_type: "item",
+    item_root: "#dp",
+    fields: { title: { select: "#title", take: "text" } },
+    action_anchors: { add_to_cart: { select: "#add-to-cart-button", changed: "#nav-cart-count" } },
+  }),
+})
+
+test("actions go through the gate: a like waits for undo, a reply and a cart wait for your confirm, the page shows each", async () => {
+  const feed = `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/acts.xml\n`
+  const harness = await Harness.launch(world, { views: { feed }, assets: ACT_SPECS(new URL(world.base_url).hostname) })
+  try {
+    await loaded(harness, "our bakery opens Saturday")
+    const post = `[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("bakery opens"))`
+    const product = `[...document.querySelectorAll("[data-item-id]")].find((node) => node.innerText.includes("desk lamp"))`
+    expect(await harness.last_lens_text()).toContain("Like")
+    const before = (await world.hits("/acted")).length
+    expect(before).toBe(0)
+
+    await harness.click_lens(`${post}.querySelector(".act[data-action='like']")`)
+    await expect(harness.chrome.locator(".notice", { hasText: "Like in 5 s" })).toBeVisible()
+    await harness.chrome.locator(".notice button", { hasText: "Undo" }).click()
+    await harness.chrome.waitForTimeout(6_000)
+    expect(await world.hits("/acted")).toEqual([])
+
+    await harness.click_lens(`${post}.querySelector(".act[data-action='like']")`)
+    await expect(harness.chrome.locator(".notice", { hasText: "Like done on" })).toBeVisible({ timeout: 20_000 })
+    expect((await world.hits("/acted?what=like")).length).toBe(1)
+    await harness.chrome.locator("button.tab.view", { hasText: "Feed" }).click()
+    await expect(harness.chrome.locator("button.tab.view.active")).toHaveText("Feed")
+    await eventually(
+      () => harness.last_lens_text(),
+      (text) => text.includes("Liked"),
+    )
+
+    await harness.click_lens(`${post}.querySelector(".reply_tools .act")`)
+    await harness.in_lenses(`(() => { const box = document.querySelector(".reply_box"); if (box) box.value = "See you Saturday!"; return 1 })()`)
+    await harness.click_lens(`${post}.querySelector(".send_reply")`)
+    await expect(harness.chrome.locator(".confirm_text")).toHaveText("See you Saturday!")
+    await expect(harness.chrome.locator(".confirm_title")).toContainText("Reply on")
+    expect(await world.hits("/acted?what=reply")).toEqual([])
+    await harness.chrome.locator(".confirm_actions .confirm").click()
+    await expect(harness.chrome.locator(".notice", { hasText: "Reply done on" })).toBeVisible({ timeout: 20_000 })
+    expect((await world.hits("/acted?what=reply")).map((hit) => decodeURIComponent(hit.path))).toEqual(["/acted?what=reply&text=See you Saturday!"])
+
+    await harness.chrome.locator("button.tab.view", { hasText: "Feed" }).click()
+    await expect(harness.chrome.locator("button.tab.view.active")).toHaveText("Feed")
+    await harness.click_lens(`${product}.querySelector(".act[data-action='add_to_cart']")`)
+    await harness.chrome.locator(".confirm_actions .decline").click()
+    // The same button on the same item is paced like a double click; a second thought takes a moment.
+    await harness.chrome.waitForTimeout(900)
+    await harness.click_lens(`${product}.querySelector(".act[data-action='add_to_cart']")`)
+    await harness.chrome.locator(".confirm_actions .confirm").click()
+    await expect(harness.chrome.locator(".notice", { hasText: "Add to cart done on" })).toBeVisible({ timeout: 20_000 })
+    expect((await world.hits("/acted?what=add_to_cart")).length).toBe(1)
+    expect(await world.hits("/acted?what=place_order")).toEqual([])
+
+    const log = await harness.brain<Array<{ kind: string; action?: string; origin?: string; outcome?: string }>>("/actions/log")
+    expect(log.filter((entry) => entry.kind === "result").map((entry) => entry.outcome)).toEqual(["undone", "done", "done", "declined", "done"])
+    expect(log.every((entry) => entry.kind !== "request" || entry.origin === "gesture")).toBe(true)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("no click, no action: a lens or the injected words in a post cannot act", async () => {
+  const feed = `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/acts.xml\n\n## Rules\n* Summarize everything.\n`
+  const harness = await Harness.launch(world, { views: { feed }, assets: ACT_SPECS(new URL(world.base_url).hostname), env: { MOI_MINUTE_MS: "1500" } })
+  try {
+    await loaded(harness, "our bakery opens Saturday")
+    const acted_before = (await world.hits("/acted")).length
+    await harness.in_lenses(`(() => { for (const node of document.querySelectorAll("[data-item-id]")) { moi.act(node.dataset.itemId, "like", ""); moi.act(node.dataset.itemId, "add_to_cart", ""); moi.act(node.dataset.itemId, "place_order", "") } return 1 })()`)
+    await harness.chat("summarize what the bakery post says")
+    await harness.chrome.waitForTimeout(8_000)
+    expect((await world.hits("/acted")).length).toBe(acted_before)
+    expect(await harness.brain("/actions/log")).toEqual([])
+    await expect(harness.chrome.locator(".confirm_sheet")).toHaveCount(0)
+  } finally {
+    await harness.close()
+  }
+})

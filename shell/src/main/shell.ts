@@ -36,6 +36,7 @@ import { LensManager, type LensContext } from "./lenses"
 import { MineController, chrome_mine_key, tab_mine_key } from "./mine"
 import { ActivityTracker } from "./activity"
 import { RelayLink } from "./relay_link"
+import { ActionController, TabPage, loaded, type ActionPage } from "./actions"
 import { Player } from "./player"
 import { SmokeTester } from "./smoke"
 import { ReaderPool } from "./readers"
@@ -87,6 +88,7 @@ export class Shell implements ViewHost {
   readonly chat: ChatController
   readonly lens_gen: LensGenerator
   readonly player: Player
+  readonly actions: ActionController
   private omnibox: Omnibox | null = null
   private omnibox_ticket = 0
   readonly electron: ElectronDriver
@@ -159,6 +161,14 @@ export class Shell implements ViewHost {
       changed: () => this.push_state(),
     })
     this.player = new Player(this, { open_original: (url) => this.open_original(url), changed: () => this.push_state() })
+    this.actions = new ActionController(brain, {
+      open_page: (url) => this.open_action_page(url),
+      open_original: (url) => this.open_original(url),
+      notify: (text, url, action, tag) => this.notify(text, url, action, tag),
+      retract: (tag) => this.retract(tag),
+      changed: () => this.push_state(),
+      item_changed: (item) => this.views.item_changed(item),
+    })
     this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload, this.lens_tokens, path.join(dist_dir, "axe.min.js")), {
       say: (text) => this.chat.say(text),
       on_new_lens: (view_id, kind) => this.reload_lens(view_id, kind),
@@ -168,6 +178,7 @@ export class Shell implements ViewHost {
       open_original: (url) => this.open_original(url),
       play: (item) => this.player.play(item),
       saved: (info, saved) => this.on_saved(info, saved),
+      act: (item, action, text) => this.actions.request(item, action, text),
       notify: (text, url, tag, action) => this.notify(text, url, action, tag),
       retract: (tag) => this.retract(tag),
       echo: (text) => this.chat.say(text),
@@ -182,6 +193,7 @@ export class Shell implements ViewHost {
       lens_stale: (view_id, kind, layout_hash) => this.lens_gen.ensure(view_id, kind, layout_hash),
       less_like_this: (view_id, item) => this.less_like_this(view_id, item),
       play: (item) => this.player.play(item),
+      act: (item, action, text) => this.actions.request(item, action, text),
     })
     this.scheduler = new Scheduler(
       brain,
@@ -598,6 +610,14 @@ export class Shell implements ViewHost {
     this.notify(`Saved to ${info.title} (${info.count}).`, undefined, action, `collection:${info.name}`)
   }
 
+  // Actions run where you can watch them: a tab on the item's page, in your session, in front.
+  private async open_action_page(url: string): Promise<ActionPage> {
+    const tab = this.tabs.open(url)
+    this.activate({ kind: "tab", tab_id: tab.tab_id })
+    await loaded(tab.view.webContents)
+    return new TabPage(tab.view.webContents)
+  }
+
   private async on_shopping(view_id: string, created: boolean): Promise<void> {
     if (created) await this.on_view_created(view_id)
     else await this.open_view(view_id)
@@ -681,6 +701,15 @@ export class Shell implements ViewHost {
         return
       case "omnibox":
         await this.search_reality(command.text)
+        return
+      case "confirm_action":
+        await this.actions.confirm(command.request_id)
+        return
+      case "decline_action":
+        await this.actions.decline(command.request_id)
+        return
+      case "undo_action":
+        await this.actions.undo(command.request_id)
         return
       case "collection_view": {
         const view = await this.brain.collection_view(command.name)
@@ -769,6 +798,7 @@ export class Shell implements ViewHost {
       stop: this.stop,
       player: this.player.playing,
       omnibox: this.omnibox,
+      confirm: this.actions.pending,
     }
   }
 

@@ -4,6 +4,7 @@
     "facebook.com": {"status": "active", "mode": "assist", "daily_steps": 60},
     "instagram.com": {"status": "active", "mode": "pilot", "daily_steps": 60},
     "linkedin.com": {"status": "active", "mode": "pilot", "daily_steps": 60},
-    "x.com": {"status": "active", "mode": "pilot", "daily_steps": 200}
+    "x.com": {"status": "active", "mode": "pilot", "daily_steps": 200, "writes": {"like": true, "follow": true, "reply": true, "repost": false, "post": false}},
+    "amazon.com": {"status": "active", "mode": "pilot", "daily_steps": 200, "writes": {"add_to_cart": true}}
   }
 }

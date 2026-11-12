@@ -338,6 +338,30 @@ function OmniboxResults({ state }: { state: ShellState }) {
   )
 }
 
+// What an action will say and where, word for word, before it is done for you.
+function ConfirmSheet({ state }: { state: ShellState }) {
+  const decision = state.confirm
+  if (!decision) return null
+  return (
+    <section className="confirm_sheet" aria-label={`Confirm: ${decision.label}`}>
+      <div className="confirm_title">
+        {decision.label} on {decision.site}, as you
+      </div>
+      <div className="confirm_target">{decision.title}</div>
+      {decision.text && <blockquote className="confirm_text">{decision.text}</blockquote>}
+      <div className="confirm_note">openMoi does this in a tab on the real page, where you can watch it.</div>
+      <div className="confirm_actions">
+        <button className="confirm primary" onClick={() => send({ type: "confirm_action", request_id: decision.request_id })}>
+          {decision.label}
+        </button>
+        <button className="decline" onClick={() => send({ type: "decline_action", request_id: decision.request_id })}>
+          Cancel
+        </button>
+      </div>
+    </section>
+  )
+}
+
 function PlayerBar({ state }: { state: ShellState }) {
   if (!state.player) return null
   return (
@@ -355,6 +379,7 @@ function SidePanel({ state }: { state: ShellState }) {
   return (
     <aside className="side">
       <StatusLine activities={state.activities} />
+      <ConfirmSheet state={state} />
       <OmniboxResults state={state} />
       <PlayerBar state={state} />
       <section className="notices">

@@ -9,13 +9,16 @@ import { forget_lens, lens_preferences } from "./sessions"
 // A lens may open an item or ask for less like it at most this often: a click, not a script looping over items.
 // Less like this is paced per item (2 s) and per lens (one every 500 ms), so two different items in a row both count
 // but a lens firing it for every item does not.
-const ACTION_INTERVAL_MS: Partial<Record<LensToHost["type"], number>> = { open: 800, play: 800, less_like_this: 2_000, save: 300, unsave: 300, highlight: 500 }
+const ACTION_INTERVAL_MS: Partial<Record<LensToHost["type"], number>> = { open: 800, play: 800, less_like_this: 2_000, save: 300, unsave: 300, highlight: 500, act: 800 }
 const LESS_LIKE_THIS_PER_LENS_MS = 500
+// Actions, saves and less like this are paced per item; across items only this short gap per lens, so clicking two
+// cards in a row counts but a lens firing one for every item does not.
+const PER_LENS_MS: Partial<Record<LensToHost["type"], number>> = { less_like_this: LESS_LIKE_THIS_PER_LENS_MS, act: 150, save: 150, unsave: 150 }
 // Gesture binding: opening an item or less like this counts only this soon after a real click, key press or touch on
 // that lens, as the main process saw it. A lens script can fire its own events but cannot fake these.
 export const GESTURE_WINDOW_MS = 1_000
 const REAL_INPUT = new Set(["mouseDown", "mouseUp", "keyDown", "rawKeyDown", "touchStart", "touchEnd", "gestureTap"])
-const NEEDS_GESTURE = new Set<LensToHost["type"]>(["open", "play", "less_like_this", "save", "unsave", "highlight"])
+const NEEDS_GESTURE = new Set<LensToHost["type"]>(["open", "play", "less_like_this", "save", "unsave", "highlight", "act"])
 
 export class LensContext {
   readonly rendered = new Map<string, Item>()
@@ -90,13 +93,18 @@ export class LensManager {
     return !NEEDS_GESTURE.has(message.type) || Date.now() - (this.last_input.get(contents_id) ?? -Infinity) <= GESTURE_WINDOW_MS
   }
 
-  // Open is paced per lens (a double click opens once); less like this per item, so two items in a row both count.
+  // Open is paced per lens (a double click opens once); less like this, saves and actions per item and kind, so two
+  // items in a row both count.
   private in_time(context: LensContext, message: LensToHost): boolean {
     const interval = ACTION_INTERVAL_MS[message.type]
     if (interval === undefined) return true
     const now = Date.now()
-    const paces: Array<[string, number]> = [[`${context.key}\0${message.type}`, message.type === "less_like_this" ? LESS_LIKE_THIS_PER_LENS_MS : interval]]
-    if (message.type === "less_like_this") paces.push([`${context.key}\0${message.type}\0${message.item_id}`, interval])
+    const per_lens = PER_LENS_MS[message.type]
+    const paces: Array<[string, number]> = [[`${context.key}\0${message.type}`, per_lens ?? interval]]
+    if (per_lens !== undefined && "item_id" in message) {
+      const kind = message.type === "act" ? message.action : ""
+      paces.push([`${context.key}\0${message.type}\0${message.item_id}\0${kind}`, interval])
+    }
     if (paces.some(([key, wait]) => now - (this.last_action.get(key) ?? 0) < wait)) return false
     for (const [key] of paces) this.last_action.set(key, now)
     return true

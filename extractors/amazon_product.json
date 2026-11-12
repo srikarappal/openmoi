@@ -1,0 +1,24 @@
+{
+  "domain": "amazon.com",
+  "path_pattern": "/*dp/*",
+  "page_type": "item",
+  "version": 1,
+  "item_root": "#dp, #ppd",
+  "fields": {
+    "title": {
+      "select": "#productTitle, #title",
+      "take": "text"
+    },
+    "extra.price_text": {
+      "select": ".a-price .a-offscreen",
+      "take": "text",
+      "optional": true
+    }
+  },
+  "action_anchors": {
+    "add_to_cart": {
+      "select": "#add-to-cart-button",
+      "changed": "#nav-cart-count"
+    }
+  }
+}

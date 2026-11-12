@@ -223,6 +223,7 @@ export type LensToHost =
   | { type: "save"; item_id: string; collection: string }
   | { type: "unsave"; item_id: string; collection: string }
   | { type: "highlight"; item_id: string; quote: string; note: string }
+  | { type: "act"; item_id: string; action: string; text: string }
 
 export type PageOp = "info" | "challenge" | "extract" | "scroll" | "skeleton" | "readability" | "text" | "transcript" | "structured"
 
@@ -277,6 +278,31 @@ export interface Citation {
 export interface Answer {
   answer: string
   citations: Citation[]
+}
+
+export interface ActionAnchor {
+  select: string
+  active_state: string | null
+  changed: string | null
+  input: string | null
+  submit: string | null
+}
+
+// The gate's answer to an action you asked for: allowed or why not, and how it goes on.
+export interface ActionDecision {
+  request_id: string
+  action: string
+  label: string
+  tier: 0 | 1 | 2 | 3
+  allowed: boolean
+  confirm: boolean
+  undo_seconds: number
+  reason: string
+  url: string
+  title: string
+  site: string
+  text: string
+  anchor: ActionAnchor | null
 }
 
 export interface ShopStart {
@@ -451,6 +477,8 @@ export interface ShellState {
   stop: StopScreen | null
   player: PlayerInfo | null
   omnibox: Omnibox | null
+  // An action waiting for you to confirm the exact text, target and site.
+  confirm: ActionDecision | null
 }
 
 export type ShellCommand =
@@ -459,6 +487,9 @@ export type ShellCommand =
   | { type: "open_link"; url: string }
   | { type: "close_player" }
   | { type: "omnibox"; text: string }
+  | { type: "confirm_action"; request_id: string }
+  | { type: "decline_action"; request_id: string }
+  | { type: "undo_action"; request_id: string }
   | { type: "collection_view"; name: string }
   | { type: "select_tab"; tab_id: number }
   | { type: "close_tab"; tab_id: number }

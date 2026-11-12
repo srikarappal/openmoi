@@ -90,6 +90,10 @@ export function parse_lens_message(raw: unknown): LensToHost | null {
     case "save":
     case "unsave":
       return is_id(message.item_id) && is_collection(message.collection) ? { type: message.type, item_id: message.item_id, collection: message.collection } : null
+    case "act":
+      if (!is_id(message.item_id) || typeof message.action !== "string" || !/^[a-z_]{1,40}$/.test(message.action)) return null
+      if (message.text !== undefined && !is_text(message.text)) return null
+      return { type: "act", item_id: message.item_id, action: message.action, text: typeof message.text === "string" ? message.text : "" }
     case "highlight":
       if (!is_id(message.item_id) || !is_text(message.quote) || !is_text(message.note) || !(message.quote || message.note)) return null
       return { type: "highlight", item_id: message.item_id, quote: message.quote, note: message.note }

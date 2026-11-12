@@ -182,7 +182,7 @@ function make_mine(page: Record<string, unknown>, brain_fields: Record<string, u
     events: vi.fn(async () => ({ recorded: 1 })),
     ...brain_fields,
   }
-  const hooks = { notify: vi.fn(), open_original: vi.fn(), lens_stale: vi.fn(), less_like_this: vi.fn(), play: vi.fn((_item: { url: string }) => false) }
+  const hooks = { notify: vi.fn(), open_original: vi.fn(), lens_stale: vi.fn(), less_like_this: vi.fn(), play: vi.fn((_item: { url: string }) => false), act: vi.fn(async () => {}) }
   const mine = new MineController(brain as unknown as BrainClient, lenses as unknown as LensManager, hooks)
   const target = { key: tab_mine_key(1), driver: driver as unknown as PageDriver, handle: "contents:5", url: "https://news.example.com/?p=2" }
   return { mine, brain, lenses, hooks, driver, target, context }

@@ -66,6 +66,10 @@ contextBridge.exposeInMainWorld("moi", {
   unsave: (item_id: string, collection = "read_later") => {
     if (by_you()) send({ type: "unsave", item_id: String(item_id), collection: String(collection) })
   },
+  // Asks openMoi to act on the site for you (like, follow, reply, add to cart); the gate decides, on your click only.
+  act: (item_id: string, action: string, text = "") => {
+    if (by_you()) send({ type: "act", item_id: String(item_id), action: String(action), text: String(text) })
+  },
   highlight: (item_id: string, quote = "", note = "") => {
     if (by_you()) send({ type: "highlight", item_id: String(item_id), quote: String(quote), note: String(note) })
   },

@@ -795,3 +795,18 @@ describe("Shell shopping", () => {
     expect(created).toHaveBeenCalledWith("shop")
   })
 })
+
+describe("Shell actions", () => {
+  it("hands confirm, cancel and undo to the action controller and shows what waits on the sheet", async () => {
+    const { shell, window } = await started()
+    const confirm = vi.spyOn(shell.actions, "confirm").mockResolvedValue()
+    const decline = vi.spyOn(shell.actions, "decline").mockResolvedValue()
+    const undo = vi.spyOn(shell.actions, "undo").mockResolvedValue()
+    await command(window, { type: "confirm_action", request_id: "r1" })
+    await command(window, { type: "decline_action", request_id: "r2" })
+    await command(window, { type: "undo_action", request_id: "r3" })
+    expect([confirm.mock.calls, decline.mock.calls, undo.mock.calls]).toEqual([[["r1"]], [["r2"]], [["r3"]]])
+    shell.actions.pending = { request_id: "r9" } as never
+    expect(state_of(shell).confirm).toEqual({ request_id: "r9" })
+  })
+})

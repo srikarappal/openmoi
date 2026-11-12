@@ -170,6 +170,8 @@ describe("parse_lens_message", () => {
     [{ type: "save", item_id: "a", collection: "read_later", x: 1 }, { type: "save", item_id: "a", collection: "read_later" }],
     [{ type: "unsave", item_id: "a", collection: "watch_later" }, { type: "unsave", item_id: "a", collection: "watch_later" }],
     [{ type: "highlight", item_id: "a", quote: "a line", note: "" }, { type: "highlight", item_id: "a", quote: "a line", note: "" }],
+    [{ type: "act", item_id: "a", action: "like" }, { type: "act", item_id: "a", action: "like", text: "" }],
+    [{ type: "act", item_id: "a", action: "reply", text: "hi" }, { type: "act", item_id: "a", action: "reply", text: "hi" }],
   ])("accepts %j", (raw, expected) => {
     expect(parse_lens_message(raw)).toEqual(expected)
   })
@@ -191,6 +193,9 @@ describe("parse_lens_message", () => {
     { type: "highlight", item_id: "a", quote: "", note: "" },
     { type: "highlight", item_id: "a", quote: "x".repeat(6000), note: "" },
     { type: "highlight", item_id: "a", quote: 5, note: "" },
+    { type: "act", item_id: "a", action: "Place Order" },
+    { type: "act", item_id: "a", action: "like", text: "x".repeat(6000) },
+    { type: "act", item_id: "a" },
   ])("rejects %j", (raw) => {
     expect(parse_lens_message(raw)).toBeNull()
   })
