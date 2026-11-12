@@ -305,6 +305,9 @@ export interface ActionDecision {
   site: string
   text: string
   anchor: ActionAnchor | null
+  // Your click, or an agent's plan you approved.
+  origin: "gesture" | "plan"
+  plan_id: string | null
 }
 
 export type AgentKind = "digest" | "shop" | "research" | "cleanup" | "watch"

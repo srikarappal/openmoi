@@ -241,7 +241,22 @@ export class ActionController {
     const decision = this.pending
     if (!decision || decision.request_id !== request_id) return
     this.next()
+    // An agent's action runs only while its plan still stands: not after you stopped it or it expired.
+    if (decision.origin === "plan" && !(await this.brain.pending_actions()).some((waiting) => waiting.request_id === request_id)) {
+      this.hooks.notify(`${decision.label} was withdrawn: the agent that proposed it was stopped or its plan expired.`)
+      return
+    }
     await this.execute(decision)
+  }
+
+  // Agent actions no longer waiting (their plan stopped or expired) leave the sheet and its queue.
+  withdraw(request_ids: string[]): void {
+    const gone = new Set(request_ids)
+    const kept = this.queued.filter((decision) => !gone.has(decision.request_id))
+    const changed = kept.length !== this.queued.length || (this.pending !== null && gone.has(this.pending.request_id))
+    this.queued.splice(0, this.queued.length, ...kept)
+    if (this.pending && gone.has(this.pending.request_id)) this.pending = this.queued.shift() ?? null
+    if (changed) this.hooks.changed()
   }
 
   async decline(request_id: string): Promise<void> {

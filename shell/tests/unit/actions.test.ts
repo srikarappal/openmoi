@@ -21,6 +21,8 @@ function decision(fields: Partial<ActionDecision> = {}): ActionDecision {
     site: "x.com",
     text: "",
     anchor: { within: FOCAL, select: "[data-testid='like']", active_state: "[data-testid='unlike']", changed: null, input: null, submit: null },
+    origin: "gesture",
+    plan_id: null,
     ...fields,
   }
 }
@@ -173,6 +175,7 @@ function make_controller(answer: ActionDecision) {
   const brain = {
     check_action: vi.fn(async () => answer),
     action_result: vi.fn(async () => ({ recorded: true, item: { ...ITEM, extra: { "acted:like": "yes" } } })),
+    pending_actions: vi.fn(async (): Promise<ActionDecision[]> => []),
   }
   const hooks = { open_page: vi.fn(async () => page), open_original: vi.fn(), notify: vi.fn(), retract: vi.fn(), changed: vi.fn(), item_changed: vi.fn() }
   return { controller: new ActionController(brain as unknown as BrainClient, hooks), brain, hooks, page }
@@ -291,6 +294,35 @@ describe("ActionController offers from agents", () => {
     const confirming = controller.confirm("a2")
     await vi.advanceTimersByTimeAsync(20_000)
     await confirming
+    expect(controller.pending).toBeNull()
+  })
+
+  it("runs an agent's action only while its plan still stands", async () => {
+    const { controller, brain, hooks, page } = make_controller(decision())
+    const planned = decision({ request_id: "p1", confirm: true, origin: "plan", plan_id: "plan1" })
+    controller.offer(planned)
+    await controller.confirm("p1")
+    expect(hooks.open_page).not.toHaveBeenCalled()
+    expect(hooks.notify).toHaveBeenLastCalledWith("Like was withdrawn: the agent that proposed it was stopped or its plan expired.")
+    const still = decision({ request_id: "p2", confirm: true, origin: "plan", plan_id: "plan1" })
+    brain.pending_actions.mockResolvedValueOnce([still])
+    controller.offer(still)
+    const confirming = controller.confirm("p2")
+    await vi.advanceTimersByTimeAsync(7_000)
+    await confirming
+    expect(page.clicks).toHaveLength(1)
+    expect(brain.action_result).toHaveBeenLastCalledWith("p2", "done", "the page shows it")
+  })
+
+  it("takes withdrawn agent actions off the sheet and out of its queue", () => {
+    const { controller, hooks } = make_controller(decision())
+    for (const request_id of ["a1", "a2", "a3"]) controller.offer(decision({ request_id, confirm: true, origin: "plan", plan_id: "plan1" }))
+    hooks.changed.mockClear()
+    controller.withdraw(["a1", "a2"])
+    expect(controller.pending?.request_id).toBe("a3")
+    controller.withdraw(["nothing"])
+    expect(hooks.changed).toHaveBeenCalledTimes(1)
+    controller.withdraw(["a3"])
     expect(controller.pending).toBeNull()
   })
 })

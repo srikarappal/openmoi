@@ -19,7 +19,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from moi_brain.compile import VIEW_ID, BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
-from moi_brain.agents import AgentKind, AgentRun, AgentRunner, ComposerReply, ItemSummary, PlanDraft, PlanStep, composer_messages, load_runs, plan_expiry, planner_messages, summary_messages
+from moi_brain.agents import AgentKind, AgentRun, AgentRunner, Budget, ComposerReply, ItemSummary, PlanDraft, PlanStep, composer_messages, load_runs, plan_expiry, planner_messages, summary_messages
 from moi_brain.actions import KINDS, RATE_CAPS, RATE_WINDOW, UNDO_SECONDS, ActionAnchor, ActionDecision, ActionKind, ActionRequest, ActionResult, AuditLog, new_request_id, plain_url, policy_flag, state_key
 from moi_brain.answers import MAX_SOURCES, Answer, AnswerReply, answer_prompt, cited
 from moi_brain.collections import READ_LATER, collection_name, collection_title, export_json, export_markdown, is_collection_name
@@ -319,6 +319,9 @@ class Brain:
         self.agent_runs: dict[str, AgentRun] = load_runs(paths.state / "agents")
         self.runners: dict[str, AgentRunner] = {}
         self.plan_decisions: dict[str, ActionDecision] = {}
+        # Approve, stop, answer and decline of plans, one at a time.
+        self.agent_lock = threading.Lock()
+        self.close_waiting_plan_actions("openMoi restarted before you confirmed")
         self.ranker = Ranker(paths.ranker)
         self.lenses = LensStore(paths.default_lens, paths.lenses)
         self.relay = RelayHub(paths.relay_trust, self.queue_relay_event, self.relay_config)
@@ -828,6 +831,8 @@ class Brain:
             site=site,
             text=text,
             anchor=anchor if allowed else None,
+            origin=request.origin,
+            plan_id=request.plan_id if request.origin == "plan" else None,
         )
         self.audit.append({
             "kind": "request", "at": now.astimezone(UTC).isoformat(), "request_id": decision.request_id, "action": request.action, "tier": kind.tier,
@@ -888,7 +893,7 @@ class Brain:
         memory = {name: self.memory.topic_text(name) for name in TOPIC_FILES}
         views = self.compiler.view_ids()
         draft = self.gateway.complete_json("smart", "agent_plan", planner_messages(kind, request, memory, views, now), True, PlanDraft)
-        steps, dropped = self.checked_steps(draft.steps, views)
+        steps, dropped = self.checked_steps(draft.steps, views, draft.budget)
         run = AgentRun(
             plan_id=uuid.uuid4().hex, kind=kind, request=request, summary=draft.summary or f"{kind}: {request}", steps=steps, budget=draft.budget,
             created_at=now, expires_at=plan_expiry(kind, now), reason="; ".join(dropped),
@@ -896,13 +901,17 @@ class Brain:
         self.save_run(run)
         return run
 
-    def checked_steps(self, steps: list[PlanStep], views: list[str]) -> tuple[list[PlanStep], list[str]]:
-        """The steps a plan may take: known views, actions of tier 2 at most, real items. The rest are left out."""
+    def checked_steps(self, steps: list[PlanStep], views: list[str], budget: Budget) -> tuple[list[PlanStep], list[str]]:
+        """The steps a plan may take: within its step budget, known views, actions of tier 2 at most on real items (or
+        on the result's first pick). The rest are left out."""
         kept, dropped = [], []
         for step in steps:
             problem = ""
             view_id = step.args.get("view_id")
-            if step.tool in ("search_store", "open_source_page") and view_id is not None and view_id not in views:
+            item_id = step.args.get("item_id")
+            if len(kept) >= budget.max_steps:
+                problem = f"beyond its budget of {budget.max_steps} steps"
+            elif step.tool in ("search_store", "open_source_page") and view_id is not None and view_id not in views:
                 problem = f"there is no view {view_id}"
             elif step.tool == "build_view" and not VIEW_ID.fullmatch(str(step.args.get("view_id", ""))):
                 problem = "a new view needs a plain name"
@@ -910,7 +919,7 @@ class Brain:
                 kind = KINDS.get(str(step.args.get("action", "")))
                 if kind is None or kind.tier > 2:
                     problem = f"an agent may not {step.args.get('action')}"
-                elif self.store.get_item(str(step.args.get("item_id", ""))) is None:
+                elif item_id and self.store.get_item(str(item_id)) is None:
                     problem = "an action on an item that is not there"
             elif step.tool == "open_source_page" and view_id is None:
                 problem = "which view to read"
@@ -931,45 +940,63 @@ class Brain:
         return run
 
     def approve_agent(self, plan_id: str) -> AgentRun:
-        """You approved the plan: it runs now. A standing task you approved runs again when it is due."""
-        run = self.agent_run(plan_id)
-        if run.status not in ("proposed", "done") or (run.status == "done" and run.kind != "watch"):
-            raise BadInput(f"That plan is {run.status}.")
-        if self.clock() > run.expires_at:
-            raise BadInput("That plan has expired; ask again.")
-        run.trace, run.result = [], None
-        runner = AgentRunner(self, run)
-        self.runners[plan_id] = runner
-        runner.start()
-        return run
+        """You approved the plan: it runs now, marked running before its thread starts, so a second approve or a Stop
+        sees it. A standing task you approved runs again when it is due, each run starting fresh."""
+        with self.agent_lock:
+            run = self.agent_run(plan_id)
+            again = run.kind == "watch" and run.status in ("done", "failed", "stopped") and run.next_run_at is not None
+            if run.status != "proposed" and not again:
+                raise BadInput(f"That plan is {run.status}.")
+            if self.clock() > run.expires_at:
+                raise BadInput("That plan has expired; ask again.")
+            run.trace, run.result, run.refs, run.notices, run.proposal_ids, run.action_ids = [], None, [], [], [], []
+            run.status, run.reason, run.question, run.answer, run.cost_usd, run.runs = "running", "", "", "", 0.0, run.runs + 1
+            self.save_run(run)
+            runner = AgentRunner(self, run)
+            self.runners[plan_id] = runner
+            runner.start()
+            return run
 
     def decline_agent(self, plan_id: str) -> AgentRun:
-        run = self.agent_run(plan_id)
-        if run.status == "proposed":
-            run.status = "declined"
-            self.save_run(run)
-        return run
+        with self.agent_lock:
+            run = self.agent_run(plan_id)
+            if run.status == "proposed":
+                run.status = "declined"
+                self.save_run(run)
+            return run
 
     def stop_agent(self, plan_id: str) -> AgentRun:
-        run = self.agent_run(plan_id)
-        if plan_id in self.runners:
-            self.runners[plan_id].stop()
-        if run.status in ("proposed", "done") and run.kind == "watch":
-            run.status, run.next_run_at, run.reason = "stopped", None, "you stopped it"
+        """Stop ends a run now, ends a standing task for good and withdraws the actions it left on your confirm sheet."""
+        with self.agent_lock:
+            run = self.agent_run(plan_id)
+            if plan_id in self.runners:
+                self.runners[plan_id].stop()
+            if run.status == "proposed":
+                run.status, run.reason = "declined", "you stopped it"
+            elif run.kind == "watch" and run.status in ("done", "failed", "stopped"):
+                run.status, run.reason = "stopped", "you stopped it"
+            run.next_run_at = None
             self.save_run(run)
-        return run
+            self.close_waiting_plan_actions("you stopped the agent", plan_id)
+            return run
 
     def answer_agent(self, plan_id: str, answer: str) -> AgentRun:
-        run = self.agent_run(plan_id)
-        if run.status != "paused" or plan_id not in self.runners:
-            raise BadInput("That plan is not waiting for an answer.")
-        self.runners[plan_id].give_answer(answer)
-        return run
+        with self.agent_lock:
+            run = self.agent_run(plan_id)
+            if run.status != "paused" or plan_id not in self.runners:
+                raise BadInput("That plan is not waiting for an answer.")
+            self.runners[plan_id].give_answer(answer)
+            return run
 
     def agents_due(self) -> list[str]:
-        """Standing tasks whose next run is due and whose plan has not expired."""
+        """Standing tasks whose next run is due and whose plan has not expired; only your Stop or the plan's expiry ends
+        one, not a run that failed or ran out of budget."""
         now = self.clock()
-        return [run.plan_id for run in self.agent_runs.values() if run.kind == "watch" and run.status == "done" and run.next_run_at and run.next_run_at <= now < run.expires_at]
+        return [
+            run.plan_id
+            for run in self.agent_runs.values()
+            if run.kind == "watch" and run.status in ("done", "failed", "stopped") and run.next_run_at and run.next_run_at <= now < run.expires_at
+        ]
 
     def find_items(self, query: str, view_id: str | None, limit: int) -> list[Item]:
         if view_id and not query:
@@ -983,15 +1010,15 @@ class Brain:
     def get_item(self, item_id: str) -> Item | None:
         return self.store.get_item(item_id)
 
-    def summarize_item(self, item: Item) -> tuple[ItemSummary, float]:
-        before = self.gateway.spent()
-        summary = self.gateway.complete_json("fast", "agent_read", summary_messages(item), True, ItemSummary)
-        return summary, self.gateway.spent() - before
+    def summarize_item(self, item: Item) -> ItemSummary:
+        return self.gateway.complete_json("fast", "agent_read", summary_messages(item), True, ItemSummary)
 
-    def compose(self, run: AgentRun, sources: list[dict[str, object]]) -> tuple[ComposerReply, float]:
-        before = self.gateway.spent()
-        reply = self.gateway.complete_json("smart", "agent_compose", composer_messages(run.kind, run.request, sources, run.answer), True, ComposerReply)
-        return reply, self.gateway.spent() - before
+    def compose(self, run: AgentRun, sources: list[dict[str, object]]) -> ComposerReply:
+        return self.gateway.complete_json("smart", "agent_compose", composer_messages(run.kind, run.request, sources, run.answer), True, ComposerReply)
+
+    def spent(self) -> float:
+        """What this thread's model calls have cost so far."""
+        return self.gateway.spent()
 
     def propose_view(self, view_id: str, description: str) -> str:
         return self.propose_edit(view_id, description, None, "view").proposal_id
@@ -1010,9 +1037,25 @@ class Brain:
         return decision.request_id
 
     def pending_plan_actions(self) -> list[ActionDecision]:
-        """Allowed actions agents proposed that have no outcome yet: for the confirm sheet."""
+        """Allowed actions agents proposed that have no outcome yet, from runs not stopped or expired: for the confirm
+        sheet, and checked again when you confirm one."""
+        now = self.clock()
         done = {str(entry.get("request_id")) for entry in self.audit.entries() if entry.get("kind") == "result"}
-        return [decision for request_id, decision in self.plan_decisions.items() if decision.allowed and request_id not in done]
+        live = {plan_id for plan_id, run in self.agent_runs.items() if run.status in ("running", "paused", "done") and now <= run.expires_at}
+        return [decision for request_id, decision in self.plan_decisions.items() if decision.allowed and request_id not in done and decision.plan_id in live]
+
+    def close_waiting_plan_actions(self, why: str, plan_id: str | None = None) -> None:
+        """Declines the allowed plan actions still waiting for you (of one plan, or all of them), so none is left
+        half open: at a restart they are gone from the sheet, and after Stop they must not run."""
+        with self.audit.lock:
+            entries = self.audit.entries()
+            done = {entry.get("request_id") for entry in entries if entry.get("kind") == "result"}
+            waiting = [
+                entry for entry in entries
+                if entry.get("kind") == "request" and entry.get("allowed") and entry.get("origin") == "plan" and entry.get("request_id") not in done and (plan_id is None or entry.get("plan_id") == plan_id)
+            ]
+            for entry in waiting:
+                self.audit.append({"kind": "result", "at": self.clock().astimezone(UTC).isoformat(), "request_id": entry["request_id"], "outcome": "declined", "detail": why})
 
     def notify(self, run: AgentRun, text: str) -> None:
         run.notices.append(text)

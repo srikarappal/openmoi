@@ -1093,7 +1093,7 @@ A lens draws its own page, so it can still label a control falsely (a button rea
 
 The 99% success exit needs test accounts on X and Amazon; against the fake world every action is verified on the page.
 
-## 22. L6 Agents `[not built]`
+## 22. L6 Agents `[built]`
 
 **Adds**
 
@@ -1104,6 +1104,21 @@ The 99% success exit needs test accounts on X and Amazon; against the fake world
 * Scheduling: rung 1 sources may refresh in the background at polite intervals honoring `Cache-Control` and `ETag`; rung 2 and 3 sources are read only while you use the app. No background page automation. Part 3 proposes reading them on a view's schedule too (34.1), still read only.
 
 **Exit:** Shop agent shortlists rated useful (4 of 5 or better) on 20 scripted tasks with zero gate violations; every run traceable and cancelable.
+
+**As built (Nov 12, 2026):**
+
+| Piece | Built | Not verified |
+|---|---|---|
+| Plan first | `/agent digest\|shop\|research\|cleanup\|watch <task>`: the smart model plans from your words, your memory files, your view names and today's date, never web text. The plan card in the chat shows each step's tool, its arguments and why, the budget (steps, seconds, dollars) and the expiry (24 h; 30 days for a watch). Steps beyond the step budget, unknown views, tier 3 actions and actions on items that are not there are left out and said so | Plan quality with a real model |
+| Runner | Approve marks the run running before its thread starts, under one lock with Stop, answers and Cancel, so two approves start one run and Stop always reaches it. Exactly the approved steps run, in order, each traced (tool, arguments, outcome, seconds). `ask_user` pauses for your answer. Stop, expiry, time and cost are checked before each step, between reads, after the result is written and before each action; cost counts every model call of the run, failed ones too. Any error ends the run as failed, never left running | |
+| Tools | `search_store`, `read_item` (a quarantined summary: the fast model, no tools, checked JSON of a summary, facts and a price; 1 to 20 items), `build_view` and `propose_memory_edit` (proposals you confirm in the chat), `open_source_page` (feeds at once, pages while you use openMoi), `propose_action`, `notify`, `ask_user` | `open_source_page` in a visible working tab |
+| Result | A composer (the smart model) writes from the summaries only: a short report citing items by number and a shortlist, best first. It can choose which found item a planned action goes to (its first pick), never the action or its words: anything else in its reply, such as an action a page talked it into, is dropped | |
+| Actions | Only the plan names actions, with any reply's words. They go through the L5 gate as origin `plan` with the plan's id, only on items the run found, and always wait on the confirm sheet, which says an agent proposed them; its buttons wake 600 ms after each new action so a double click never confirms the next. Confirm checks the plan still stands; Stop declines what waits and takes it off the sheet; a restart closes what was waiting | |
+| Standing tasks | A watch runs again every 24 hours until its plan expires, each run starting fresh (what it found, cost, notices, proposals). Its notices come only when the composer finds what it watches for happened. A failed or over budget run does not end it, nor does a restart (the cut run is due again); only Stop or expiry does | |
+| Background reads | Feeds read on their own schedule use ETag and Last-Modified validators; pages are read only while you use openMoi or for an edition (34.1) | `Cache-Control` max-age is not read |
+| Eval | `brain/tests/test_shop_eval.py`: 20 scripted Shop tasks over a catalog where every other product page tells assistants to buy and edit memory. Every run finishes, traced step by step, with a shortlist and citations of found items only; the 3 likes asked for are refused by amazon.com's policy, the 2 orders are never planned, and no file changes: zero gate violations | Shortlists rated useful by a person, with a real model |
+
+The usefulness half of the exit needs a real model and a person rating 20 shortlists; with the fake model the eval checks the machinery and the gate.
 
 ## 23. L7 Recipes and mashups `[not built]`
 

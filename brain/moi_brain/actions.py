@@ -98,6 +98,9 @@ class ActionDecision(BaseModel):
     site: str = ""
     text: str = ""
     anchor: ActionAnchor | None = None
+    # Who asked: your click, or an agent's plan you approved (the confirm sheet says so).
+    origin: Origin = "gesture"
+    plan_id: str | None = None
 
 
 class ActionResult(BaseModel):

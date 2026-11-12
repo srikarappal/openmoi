@@ -361,17 +361,26 @@ describe("the omnibox", () => {
 
 describe("the confirm sheet", () => {
   it("shows the exact words, target and site, and confirms or cancels", async () => {
-    const pending = { request_id: "r1", action: "reply", label: "Reply", tier: 2 as const, allowed: true, confirm: true, undo_seconds: 0, reason: "", url: "https://x.com/maya/status/1", title: "Bakery opens", site: "x.com", text: "See you Saturday", anchor: null }
+    const pending = { request_id: "r1", action: "reply", label: "Reply", tier: 2 as const, allowed: true, confirm: true, undo_seconds: 0, reason: "", url: "https://x.com/maya/status/1", title: "Bakery opens", site: "x.com", text: "See you Saturday", anchor: null, origin: "gesture" as const, plan_id: null }
     await show({ confirm: pending })
     expect(texts(".confirm_title")).toEqual(["Reply on x.com, as you"])
     expect(texts(".confirm_target")).toEqual(["Bakery opens"])
     expect(texts(".confirm_url")).toEqual(["https://x.com/maya/status/1"])
     expect(texts(".confirm_account")).toEqual(["With your account on x.com, signed in in openMoi."])
     expect(texts(".confirm_text")).toEqual(["See you Saturday"])
+    expect(query(".confirm_origin")).toBeNull()
+    // Its buttons wake a moment after it shows, so a double click meant for the last one never lands here.
+    expect((query(".confirm_actions .confirm") as HTMLButtonElement).disabled).toBe(true)
+    await click(query(".confirm_actions .confirm"))
+    expect(last_sent()).not.toEqual({ type: "confirm_action", request_id: "r1" })
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 650)))
     await click(query(".confirm_actions .confirm"))
     expect(last_sent()).toEqual({ type: "confirm_action", request_id: "r1" })
     await click(query(".confirm_actions .decline"))
     expect(last_sent()).toEqual({ type: "decline_action", request_id: "r1" })
+    await show({ confirm: { ...pending, request_id: "r2", origin: "plan", plan_id: "plan1" } })
+    expect(texts(".confirm_origin")).toEqual(["An agent you approved proposes this; read it as if a stranger wrote it."])
+    expect((query(".confirm_actions .confirm") as HTMLButtonElement).disabled).toBe(true)
     await show({ confirm: null })
     expect(query(".confirm_sheet")).toBeNull()
   })
@@ -380,7 +389,7 @@ describe("the confirm sheet", () => {
 describe("the plan card", () => {
   const plan = {
     plan_id: "p1", kind: "shop" as const, request: "a desk lamp", summary: "I will shop for a desk lamp", reason: "",
-    steps: [{ tool: "search_store", args: {}, why: "what you saw" }, { tool: "read_item", args: {}, why: "the best ones" }],
+    steps: [{ tool: "search_store", args: { query: "desk lamp", limit: 5 }, why: "what you saw" }, { tool: "read_item", args: {}, why: "the best ones" }],
     budget: { max_steps: 12, max_seconds: 300, max_cost_usd: 0.25 }, created_at: "2026-11-12T12:00:00Z", expires_at: "2026-11-13T12:00:00Z",
     status: "proposed" as const, trace: [], result: null, question: "", answer: "", action_ids: [], proposal_ids: [], notices: [], cost_usd: 0, next_run_at: null, runs: 0,
   }
@@ -389,6 +398,7 @@ describe("the plan card", () => {
     await show({ chat: [{ entry_id: 1, role: "moi", text: "Here is the plan.", plan }] })
     expect(texts(".plan_summary")).toEqual(["I will shop for a desk lamp"])
     expect(texts(".plan_steps .step_tool")).toEqual(["search store", "read item"])
+    expect(texts(".plan_steps .step_args")).toEqual(['query: "desk lamp", limit: 5', ""])
     expect(texts(".plan_budget")[0]).toContain("12 steps, 300 s, $0.25 at most")
     await click(query(".plan_actions .approve"))
     expect(last_sent()).toEqual({ type: "approve_plan", plan_id: "p1" })

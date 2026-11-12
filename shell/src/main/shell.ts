@@ -176,6 +176,7 @@ export class Shell implements ViewHost {
       notify: (text) => this.notify(text),
       offer_proposal: (proposal, why) => this.chat.offer_proposal(proposal, why),
       offer_action: (decision) => this.actions.offer(decision),
+      withdraw_actions: (request_ids) => this.actions.withdraw(request_ids),
     })
     this.lens_gen = new LensGenerator(brain, new SmokeTester(this.lens_preload, this.lens_tokens, path.join(dist_dir, "axe.min.js")), {
       say: (text) => this.chat.say(text),
@@ -732,9 +733,15 @@ export class Shell implements ViewHost {
         this.agents.follow(command.plan_id)
         return
       case "decline_plan":
-      case "stop_plan":
-        this.chat.update_plan(await this.brain.agent_step(command.plan_id, command.type === "stop_plan" ? "stop" : "decline"))
+        this.chat.update_plan(await this.brain.agent_step(command.plan_id, "decline"))
         return
+      case "stop_plan": {
+        // Stop also takes what the agent left on your confirm sheet off it; the brain has declined those.
+        const run = await this.brain.agent_step(command.plan_id, "stop")
+        this.chat.update_plan(run)
+        this.actions.withdraw(run.action_ids)
+        return
+      }
       case "answer_plan":
         this.chat.update_plan(await this.brain.answer_agent(command.plan_id, command.answer))
         return

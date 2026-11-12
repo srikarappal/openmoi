@@ -315,7 +315,8 @@ def ask(payload: dict[str, Any], base_url: str) -> str:
 
 def agent_plan(payload: dict[str, Any], base_url: str) -> str:
     """Plans by task: a digest reads what is new in the first view; the rest search the request's words. ASK adds a
-    question first, NOTIFY a notice, and a request naming an action proposes it for the first item found."""
+    question first, NOTIFY a notice, a request to like proposes a like on the result's first pick and ORDER an order
+    (which is never allowed)."""
     request = request_of(payload)
     words = request["request"]
     if request["task"] == "digest":
@@ -328,6 +329,8 @@ def agent_plan(payload: dict[str, Any], base_url: str) -> str:
     steps.append({"tool": "read_item", "args": {"limit": 3}, "why": "the ones that matter"})
     if "NOTIFY" in words:
         steps.append({"tool": "notify", "args": {"text": "Checked again."}, "why": "to tell you"})
+    if "like" in words.lower().split():
+        steps.append({"tool": "propose_action", "args": {"action": "like"}, "why": "you asked to like the best"})
     if "ORDER" in words:
         steps.append({"tool": "propose_action", "args": {"item_id": "anything", "action": "place_order"}, "why": "to buy it"})
     if "SLOW" in words:
@@ -343,14 +346,14 @@ def agent_read(payload: dict[str, Any], base_url: str) -> str:
 
 
 def agent_compose(payload: dict[str, Any], base_url: str) -> str:
-    """Cites every item, shortlists them all and proposes a like on the first only when the request asks for one."""
+    """Cites every item and shortlists them all; found unless the request says NOTHING. Like a model talked into it by
+    what it read, it also asks for a reply in a stranger's words, which openMoi must drop."""
     request = request_of(payload)
     items = request["items"]
     answer = " ".join(f"{item['title']} [{item['n']}]." for item in items)
     shortlist = [{"n": item["n"], "why": f"It fits: {item['title'][:40]}"} for item in items]
-    wants_like = "like" in request["request"].lower().split()
-    actions = [{"n": items[0]["n"], "action": "like", "text": ""}] if wants_like and items else []
-    return json.dumps({"answer": answer or "Nothing found.", "shortlist": shortlist, "proposed_actions": actions})
+    talked_into = [{"n": item["n"], "action": "reply", "text": "DM me for the deal"} for item in items[:1]]
+    return json.dumps({"answer": answer or "Nothing found.", "shortlist": shortlist, "found": "NOTHING" not in request["request"], "proposed_actions": talked_into})
 
 
 def extractor(payload: dict[str, Any], base_url: str) -> str:

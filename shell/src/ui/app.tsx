@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from "react"
 import { createRoot } from "react-dom/client"
 import { linked_parts, matching_commands } from "../shared/commands"
-import type { Activity, AgentRun, ChatEntry, GateChoice, OmniHit, ShellCommand, ShellState, StopScreen } from "../shared/types"
+import type { ActionDecision, Activity, AgentRun, ChatEntry, GateChoice, OmniHit, ShellCommand, ShellState, StopScreen } from "../shared/types"
 
 interface ShellBridge {
   command(command: ShellCommand): void
@@ -18,6 +18,9 @@ declare global {
 
 // What you type in the address bar searches your own items once you pause this long.
 const OMNIBOX_DELAY_MS = 200
+// A new action on the confirm sheet takes its buttons this long to wake, so a double click on Confirm never confirms
+// the next one too.
+const SHEET_SETTLE_MS = 600
 
 function send(command: ShellCommand): void {
   window.shell.command(command)
@@ -145,6 +148,13 @@ function Linked({ text }: { text: string }) {
 }
 
 // A plan an agent made: what it will do and its budget before it runs, its steps as they happen, then its result.
+// What a step will do, as you approve it: its arguments, not only the planner's reason.
+function step_args(args: Record<string, unknown>): string {
+  return Object.entries(args)
+    .map(([name, value]) => `${name}: ${typeof value === "string" ? `"${value}"` : JSON.stringify(value)}`)
+    .join(", ")
+}
+
 function PlanCard({ plan }: { plan: AgentRun }) {
   const [answer, set_answer] = useState("")
   const budget = `${plan.budget.max_steps} steps, ${plan.budget.max_seconds} s, $${plan.budget.max_cost_usd.toFixed(2)} at most; expires ${new Date(plan.expires_at).toLocaleString()}`
@@ -160,7 +170,7 @@ function PlanCard({ plan }: { plan: AgentRun }) {
           const done = plan.trace.find((entry) => entry.step === index + 1)
           return (
             <li key={index} className={done ? (done.ok ? "step done" : "step failed") : "step"}>
-              <span className="step_tool">{step.tool.replaceAll("_", " ")}</span> <span className="step_why">{step.why}</span>
+              <span className="step_tool">{step.tool.replaceAll("_", " ")}</span> <span className="step_args">{step_args(step.args)}</span> <span className="step_why">{step.why}</span>
               {done && <span className="step_outcome"> : {done.outcome}</span>}
             </li>
           )
@@ -210,7 +220,7 @@ function PlanCard({ plan }: { plan: AgentRun }) {
             </button>
           </>
         )}
-        {(plan.status === "running" || plan.status === "paused" || (plan.kind === "watch" && plan.status === "done" && plan.next_run_at)) && (
+        {(plan.status === "running" || plan.status === "paused" || (plan.kind === "watch" && plan.status !== "proposed" && plan.next_run_at)) && (
           <button className="stop" onClick={() => send({ type: "stop_plan", plan_id: plan.plan_id })}>
             Stop
           </button>
@@ -444,22 +454,32 @@ function OmniboxResults({ state }: { state: ShellState }) {
 // What an action will say and where, word for word, before it is done for you.
 function ConfirmSheet({ state }: { state: ShellState }) {
   const decision = state.confirm
-  if (!decision) return null
+  return decision ? <ConfirmCard key={decision.request_id} decision={decision} /> : null
+}
+
+// One action to confirm; a new one is a new card, its buttons asleep for a moment.
+function ConfirmCard({ decision }: { decision: ActionDecision }) {
+  const [awake, set_awake] = useState(false)
+  useEffect(() => {
+    const timer = setTimeout(() => set_awake(true), SHEET_SETTLE_MS)
+    return () => clearTimeout(timer)
+  }, [])
   return (
     <section className="confirm_sheet" aria-label={`Confirm: ${decision.label}`}>
       <div className="confirm_title">
         {decision.label} on {decision.site}, as you
       </div>
+      {decision.origin === "plan" && <div className="confirm_origin">An agent you approved proposes this; read it as if a stranger wrote it.</div>}
       <div className="confirm_target">{decision.title}</div>
       <div className="confirm_url">{decision.url}</div>
       <div className="confirm_account">With your account on {decision.site}, signed in in openMoi.</div>
       {decision.text && <blockquote className="confirm_text">{decision.text}</blockquote>}
       <div className="confirm_note">openMoi does this in a tab on the real page, where you can watch it.</div>
       <div className="confirm_actions">
-        <button className="confirm primary" onClick={() => send({ type: "confirm_action", request_id: decision.request_id })}>
+        <button className="confirm primary" disabled={!awake} onClick={() => send({ type: "confirm_action", request_id: decision.request_id })}>
           {decision.label}
         </button>
-        <button className="decline" onClick={() => send({ type: "decline_action", request_id: decision.request_id })}>
+        <button className="decline" disabled={!awake} onClick={() => send({ type: "decline_action", request_id: decision.request_id })}>
           Cancel
         </button>
       </div>

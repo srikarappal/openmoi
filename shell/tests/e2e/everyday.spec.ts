@@ -597,12 +597,29 @@ test("an action an agent proposes waits on the confirm sheet and runs only when 
     await card.locator(".approve").click()
     await expect(card.locator(".plan_status")).toHaveText("Done", { timeout: 20_000 })
     await expect(harness.chrome.locator(".confirm_title")).toContainText("Like on")
+    await expect(harness.chrome.locator(".confirm_origin")).toContainText("An agent you approved proposes this")
     expect((await world.hits("/acted?what=like")).length).toBe(acted_before)
     await harness.chrome.locator(".confirm_actions .confirm").click()
     await expect(harness.chrome.locator(".notice", { hasText: "Like done on" })).toBeVisible({ timeout: 20_000 })
     expect((await world.hits("/acted?what=like")).length).toBe(acted_before + 1)
-    const log = await harness.brain<Array<{ kind: string; origin?: string }>>("/actions/log")
+    let log = await harness.brain<Array<{ kind: string; origin?: string; outcome?: string; detail?: string }>>("/actions/log")
     expect(log.filter((entry) => entry.kind === "request").map((entry) => entry.origin)).toEqual(["plan"])
+
+    // A standing task's like waits on the sheet; Stop ends the task and takes the like off the sheet.
+    await harness.chat("/agent watch bakery opens saturday and like it")
+    const watch = harness.chrome.locator(".plan").last()
+    await watch.locator(".approve").click()
+    await expect(watch.locator(".plan_status")).toHaveText("Done", { timeout: 20_000 })
+    await expect(harness.chrome.locator(".confirm_origin")).toBeVisible()
+    await watch.locator(".stop").click()
+    await expect(harness.chrome.locator(".confirm_sheet")).toHaveCount(0)
+    await expect(watch.locator(".plan_status")).toContainText("Stopped")
+    log = await harness.brain("/actions/log")
+    expect(log.filter((entry) => entry.kind === "result").map((entry) => [entry.outcome, entry.detail ?? ""])).toEqual([
+      ["done", "the page shows it"],
+      ["declined", "you stopped the agent"],
+    ])
+    expect((await world.hits("/acted?what=like")).length).toBe(acted_before + 1)
   } finally {
     await harness.close()
   }

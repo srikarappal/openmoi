@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { AgentWatcher } from "../../src/main/agent_watch"
-import type { BrainClient } from "../../src/main/brain"
+import { BrainError, type BrainClient } from "../../src/main/brain"
 import type { AgentRun } from "../../src/shared/types"
 
 function run(fields: Partial<AgentRun> = {}): AgentRun {
@@ -37,7 +37,7 @@ function make(answers: AgentRun[]) {
     proposal: vi.fn(async (proposal_id: string) => ({ proposal_id, view_id: "feed", changes: [], lens_action: null, reply: "" })),
     pending_actions: vi.fn(async () => [{ request_id: "a1", allowed: true, confirm: true }, { request_id: "other", allowed: true, confirm: true }]),
   }
-  const hooks = { update: vi.fn(), notify: vi.fn(), offer_proposal: vi.fn(), offer_action: vi.fn() }
+  const hooks = { update: vi.fn(), notify: vi.fn(), offer_proposal: vi.fn(), offer_action: vi.fn(), withdraw_actions: vi.fn() }
   return { watcher: new AgentWatcher(brain as unknown as BrainClient, hooks, 100), brain, hooks }
 }
 
@@ -61,6 +61,18 @@ describe("AgentWatcher", () => {
     expect(watcher.watching()).toEqual([])
     await vi.advanceTimersByTimeAsync(500)
     expect(brain.agent_run).toHaveBeenCalledTimes(3)
+  })
+
+  it("skips a proposal already applied or discarded and withdraws actions no longer waiting", async () => {
+    const { watcher, brain, hooks } = make([run({ proposal_ids: ["gone", "e2"], action_ids: ["a1", "a_stopped"] }), run({ status: "stopped", action_ids: ["a1", "a_stopped"] })])
+    brain.proposal.mockRejectedValueOnce(new BrainError(400, "bad_input", "No proposal has that id."))
+    brain.pending_actions.mockResolvedValueOnce([{ request_id: "a1", allowed: true, confirm: true }] as never).mockResolvedValueOnce([] as never)
+    watcher.follow("p1")
+    await vi.advanceTimersByTimeAsync(250)
+    expect(hooks.offer_proposal.mock.calls.map((call) => call[0].proposal_id)).toEqual(["e2"])
+    expect(hooks.withdraw_actions.mock.calls).toEqual([[["a_stopped"]], [["a1", "a_stopped"]]])
+    expect(hooks.notify).not.toHaveBeenCalled()
+    expect(watcher.watching()).toEqual([])
   })
 
   it("stops following a run it cannot read and says so", async () => {

@@ -2,7 +2,7 @@
 // they tell you becomes a notice, edits they propose wait in the chat and actions they propose wait on the confirm
 // sheet. Standing tasks (watch) run again when the brain says they are due.
 import type { ActionDecision, AgentRun, Proposal } from "../shared/types"
-import type { BrainClient } from "./brain"
+import { BrainError, type BrainClient } from "./brain"
 
 const POLL_MS = 700
 const FINAL = new Set<AgentRun["status"]>(["done", "stopped", "failed", "declined"])
@@ -12,6 +12,7 @@ export interface AgentWatchHooks {
   notify(text: string): void
   offer_proposal(proposal: Proposal, why: string): void
   offer_action(decision: ActionDecision): void
+  withdraw_actions(request_ids: string[]): void
 }
 
 interface Following {
@@ -59,10 +60,18 @@ export class AgentWatcher {
       following.notices = run.notices.length
       for (const proposal_id of run.proposal_ids.filter((id) => !following.proposals.has(id))) {
         following.proposals.add(proposal_id)
-        this.hooks.offer_proposal(await this.brain.proposal(proposal_id), `An agent proposes this, for "${run.request}".`)
+        const proposal = await this.brain.proposal(proposal_id).catch((error) => {
+          // One you already applied or discarded is gone; that is no reason to stop following.
+          if (error instanceof BrainError && error.status < 500) return null
+          throw error
+        })
+        if (proposal) this.hooks.offer_proposal(proposal, `An agent proposes this, for "${run.request}".`)
       }
       if (run.action_ids.length) {
-        for (const decision of await this.brain.pending_actions()) if (run.action_ids.includes(decision.request_id)) this.hooks.offer_action(decision)
+        const waiting = (await this.brain.pending_actions()).filter((decision) => run.action_ids.includes(decision.request_id))
+        for (const decision of waiting) this.hooks.offer_action(decision)
+        const still = new Set(waiting.map((decision) => decision.request_id))
+        this.hooks.withdraw_actions(run.action_ids.filter((request_id) => !still.has(request_id)))
       }
       if (FINAL.has(run.status)) this.unfollow(plan_id)
     } catch (error) {
