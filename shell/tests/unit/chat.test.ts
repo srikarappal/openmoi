@@ -31,6 +31,7 @@ function make_chat(brain: Partial<BrainClient>) {
     on_applied: vi.fn(async () => {}),
     view_created: vi.fn(async () => {}),
     shopping: vi.fn(async () => {}),
+    app_allowed: vi.fn(async () => {}),
     model_changed: vi.fn(),
     open_folder: vi.fn(),
     set_background: vi.fn((on: boolean) => (on ? "on now" : "off now")),
@@ -380,6 +381,27 @@ describe("ChatController sharing", () => {
     expect(share_view).toHaveBeenCalledWith("feed")
     expect(hooks.show_file).toHaveBeenCalledWith("/Users/me/openMoi/shared/feed.md")
     expect(last_reply(chat)).toBe("Saved a copy of feed to send: /Users/me/openMoi/shared/feed.md. People, following lists and watched pages are left out.")
+  })
+})
+
+describe("ChatController apps", () => {
+  it("says what openMoi may read on this Mac and asks macOS for one app when you say so", async () => {
+    const apps = vi.fn(async (): Promise<{ status: Record<string, string>; message: string }> => ({ status: { calendar: "not_asked", mail: "allowed" }, message: "" }))
+    const allow_app = vi.fn(async () => ({ status: { calendar: "allowed" }, message: "openMoi can read calendar now, to show today's meetings." }))
+    const { chat, labels, hooks } = make_chat({ apps, allow_app } as unknown as Partial<BrainClient>)
+    await chat.send("/allow")
+    expect(last_reply(chat)).toBe("What openMoi may read on this Mac: calendar: not asked, mail: allowed. Say /allow calendar, mail or notes to ask for one.")
+    await chat.send("/allow calendar")
+    expect(allow_app).toHaveBeenCalledWith("calendar")
+    expect(labels).toContain("Asking macOS about calendar")
+    expect(last_reply(chat)).toBe("openMoi can read calendar now, to show today's meetings.")
+    expect(hooks.app_allowed).toHaveBeenCalledTimes(1)
+    allow_app.mockResolvedValueOnce({ status: { calendar: "denied" }, message: "Calendar access is denied." })
+    await chat.send("/allow calendar")
+    expect(hooks.app_allowed).toHaveBeenCalledTimes(1)
+    apps.mockResolvedValueOnce({ status: {}, message: "the Mac helper is not built yet: run helper/build.sh" })
+    await chat.send("/allow")
+    expect(last_reply(chat)).toBe("Apps on this Mac are out of reach: the Mac helper is not built yet: run helper/build.sh")
   })
 })
 

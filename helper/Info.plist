@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>app.openmoi.mac-helper</string>
+  <key>CFBundleName</key>
+  <string>moi_mac_helper</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>openMoi reads your events to show today's meetings in your views. It never changes them.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>openMoi reads newsletters and order confirmations from Mail, and your notes, to show them in your views. It never sends, moves or changes anything.</string>
+</dict>
+</plist>

@@ -177,6 +177,10 @@ describe("Shell originals", () => {
     const { shell, brain } = await started()
     inside(shell).open_original("javascript:alert(1)")
     expect(state_of(shell).notices.at(-1)?.text).toBe("openMoi only opens web links, not javascript:alert(1)")
+    inside(shell).open_original("moi-app://calendar/e1")
+    expect(state_of(shell).notices.at(-1)?.text).toBe("This is in Calendar on your Mac; openMoi only reads it there.")
+    inside(shell).open_original("moi-app://shell/rm")
+    expect(state_of(shell).notices.at(-1)?.text).toBe("openMoi only opens web links, not moi-app://shell/rm")
     inside(shell).open_original("https://a.example/story")
     expect(shell.tabs.infos().map((tab) => tab.url)).toEqual(["https://a.example/story"])
     shell.relay.status = { connected: true, waiting_for_approval: null, paired: true }

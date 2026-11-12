@@ -377,6 +377,12 @@ export interface ShopStart {
   created: boolean
 }
 
+// What macOS lets openMoi read on this Mac, per app ("allowed", "not_asked", "denied"), and what a request found.
+export interface AppAccess {
+  status: Record<string, string>
+  message: string
+}
+
 export interface LookupStart {
   view_id: string
   entity: string

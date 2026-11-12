@@ -294,6 +294,35 @@ def enrich_related(lead: Item, candidates: list[Item]) -> list[Related]:
     return [as_related(candidate, f"from {site_of(candidate) or candidate.source_id}") for _, candidate in scored[:MAX_RELATED]]
 
 
+def attendees_of(event: Item) -> tuple[set[str], set[str]]:
+    """The names and the addresses (with their local parts, which often are handles) of an event's attendees."""
+    try:
+        people = json.loads(event.extra.get("attendees") or "[]")
+    except ValueError:
+        return set(), set()
+    names = {" ".join(str(person.get("name", "")).split()).casefold() for person in people if isinstance(person, dict)} - {""}
+    emails = {str(person.get("email", "")).lower() for person in people if isinstance(person, dict)} - {""}
+    return names, emails | {email.partition("@")[0] for email in emails}
+
+
+def day_related(event: Item, candidates: list[Item]) -> list[Related]:
+    """For a Day board: what other sources hold by an event's attendees, or about its title, best first."""
+    names, addresses = attendees_of(event)
+    words = story_words(event)
+    found = []
+    for candidate in candidates:
+        if candidate.item_id == event.item_id:
+            continue
+        author = " ".join((candidate.author_name or "").split()).casefold()
+        handle = (candidate.author_handle or "").lower()
+        if (author and author in names) or (handle and handle in addresses):
+            found.append((2.0, as_related(candidate, f"from {candidate.author_name or handle}")))
+        elif words and (score := overlap(words, story_words(candidate))) >= ENRICH_LIKENESS:
+            found.append((score, as_related(candidate, "about this")))
+    found.sort(key=lambda entry: -entry[0])
+    return [related for _, related in found[:MAX_RELATED]]
+
+
 def mention_messages(items: list[Item]) -> list[dict[str, str]]:
     payload = {"items": [{"n": number, "title": (item.title or "")[:200], "text": (item.text or "")[:1500]} for number, item in enumerate(items, start=1)]}
     return [{"role": "system", "content": MENTIONS_PROMPT}, {"role": "user", "content": json.dumps(payload)}]

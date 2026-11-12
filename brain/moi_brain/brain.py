@@ -18,10 +18,11 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from moi_brain.compile import VIEW_ID, BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
+from moi_brain.compile import VIEW_ID, AppRef, BadInput, CompiledView, Compiler, Judgment, Rule, ViewInfo, check_view_id
 from moi_brain.agents import AgentKind, AgentRun, AgentRunner, Budget, ComposerReply, ItemSummary, PlanDraft, PlanStep, composer_messages, load_runs, plan_expiry, planner_messages, summary_messages
 from moi_brain.actions import KINDS, RATE_CAPS, RATE_WINDOW, UNDO_SECONDS, ActionAnchor, ActionDecision, ActionKind, ActionRequest, ActionResult, AuditLog, new_request_id, plain_url, policy_flag, state_key
 from moi_brain.answers import MAX_SOURCES, Answer, AnswerReply, answer_prompt, cited
+from moi_brain.apps import WHY, AppError, Capability, MacHelper, permission_text, read_app
 from moi_brain.collections import READ_LATER, collection_name, collection_title, export_json, export_markdown, is_collection_name
 from moi_brain.content import ContentSummary, caption_allowed, is_video, offline_blocks, summary_extra, summary_prompt, transcript_text
 from moi_brain.config import ModelChange, ModelInfo, Paths, Settings, apply_model_change, ensure_home, model_info, save_settings
@@ -46,6 +47,7 @@ from moi_brain.items import (
     is_private_host,
     normalize,
     page_source_id,
+    parse_time,
     profile_handle,
     rss_source_id,
     site_host,
@@ -62,6 +64,7 @@ from moi_brain.mashups import (
     as_related,
     best_match,
     collapse_products,
+    day_related,
     enrich_related,
     in_source,
     link_line,
@@ -168,6 +171,13 @@ class LookupStart(BaseModel):
     view_id: str
     entity: str
     site: str
+
+
+class AppAccess(BaseModel):
+    """What macOS lets openMoi read now, per app, and what the last request found."""
+
+    status: dict[str, str] = Field(default_factory=dict)
+    message: str = ""
 
 
 class PeopleReply(BaseModel):
@@ -283,7 +293,9 @@ MAX_LOOKUPS = 10
 # Names matched against what openMoi already holds, per open of a mentions view.
 MAX_RESOLVE = 30
 PEOPLE_WINDOW = timedelta(days=30)
-DAY_BOARD_LATER = "Day boards need your calendar, which comes with native apps; until then this view shows one stream."
+DAY_BOARD_NEEDS = "A Day board needs Calendar in its Sources, such as * Calendar: today."
+# Items from other sources a Day board looks through for each meeting: the last two days.
+DAY_WINDOW = timedelta(days=2)
 NEW_VIEW = "# {title}\n\n## Sources\n\n## Rules\n\n## Layout\n"
 
 
@@ -346,6 +358,7 @@ class Brain:
         youtube_base: str = YOUTUBE_BASE,
         clock: Callable[[], datetime] = utc_now,
         settings_problems: list[str] | None = None,
+        mac_helper: Path | None = None,
     ):
         ensure_home(paths)
         self.paths = paths
@@ -363,6 +376,7 @@ class Brain:
         self.tagger = Tagger(self.store, self.gateway, paths.tagging_state, self.watch_list, self.watch_judgments)
         self.updater = Updater(self.store, self.gateway)
         self.mention_finder = MentionFinder(self.store, self.gateway, self.clock)
+        self.mac = MacHelper(mac_helper)
         self.editor = Editor(paths, self.gateway)
         self.extractors = ExtractorStore(paths.builtin_extractors, paths.extractors, paths.packs / "extractors")
         self.policies = merged_policy(load_policy(paths.site_policy), installed_pack(paths.packs))
@@ -415,6 +429,8 @@ class Brain:
                     self.source_status[key] = "ok"
                 except FeedError as error:
                     self.source_status[key] = str(error)
+                except AppError as error:
+                    self.source_status[key] = permission_text(location, error.kind, str(error))
                 except Exception as error:
                     print(f"refresh of {source_id} failed: {error!r}", file=sys.stderr)
                     self.source_status[key] = f"could not be stored: {error}"
@@ -428,7 +444,40 @@ class Brain:
         for source in compiled.sources:
             readers += [(youtube_source_id(channel), channel, partial(self.fetcher.fetch_youtube, channel)) for channel in source.channels]
             readers += [(rss_source_id(feed), feed, partial(self.fetcher.fetch_rss, feed)) for feed in source.feeds]
+            readers += [(app.source_id, app.app, partial(self.read_app_source, app)) for app in source.apps]
         return readers
+
+    def read_app_source(self, ref: AppRef) -> list[dict[str, Any]]:
+        """An app's records now; for Calendar, which events are current, so a moved or deleted one leaves the view."""
+        records = read_app(self.mac, ref, self.clock())
+        if ref.app == "calendar":
+            write_atomic(self.paths.state / "calendar.json", json.dumps({"ids": [record["native_id"] for record in records]}))
+        return records
+
+    def current_events(self) -> set[str] | None:
+        """The native ids of events in the last Calendar read, or None before the first one."""
+        found = read_json(self.paths.state / "calendar.json", None)
+        return set(found.get("ids", [])) if isinstance(found, dict) else None
+
+    def app_access(self) -> AppAccess:
+        try:
+            return AppAccess(status=self.mac.status())
+        except AppError as error:
+            return AppAccess(message=str(error))
+
+    def allow_app(self, capability: Capability) -> AppAccess:
+        """You said /allow for one app: macOS asks you, once, for read access to it alone."""
+        try:
+            status = self.mac.allow(capability)
+        except AppError as error:
+            return AppAccess(message=str(error))
+        if status == "allowed":
+            message = f"openMoi can read {capability} now, {WHY[capability]}"
+        elif status == "not_running":
+            message = f"Open {capability.title()} once, then say /allow {capability} again."
+        else:
+            message = f"{capability.title()} access is {status.replace('_', ' ')}. Turn it on in System Settings, Privacy and Security, then refresh."
+        return AppAccess(status={capability: status}, message=message)
 
     def judgment_conflicts(self, compiled: CompiledView) -> list[str]:
         """A question this view names that another view already asks differently: one name, one set of answers."""
@@ -952,6 +1001,19 @@ class Brain:
                 mentions.setdefault(item.item_id, []).append(Mention(entity=entity, status=status, can_look_up=status == "unresolved" and searchable))
         return cards, related, mentions
 
+    def current_calendar(self, items: list[Item], now: datetime) -> list[Item]:
+        """Calendar events still on: in the last read of Calendar, and not over before today began."""
+        current = self.current_events()
+        today = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        kept = []
+        for item in items:
+            if item.source_id == "app:calendar":
+                end = parse_time(item.extra.get("end"))
+                if (current is not None and item.native_id not in current) or (end and end < today):
+                    continue
+            kept.append(item)
+        return kept
+
     def enrich_page(self, ranked: list[ViewItem], target: str) -> dict[str, list[Related]]:
         """For an enrich recipe: items of the target source about each card, from what openMoi already read."""
         attached = {}
@@ -1467,6 +1529,14 @@ class Brain:
             items, related, mentions = self.mention_cards(compiled, items, now)
         elif match.kind == "enrich" and match.lead:
             items = [item for item in items if in_source(item.source_id, match.lead)]
+        items = self.current_calendar(items, now)
+        if match.kind == "time_window":
+            events = [item for item in items if item.source_id == "app:calendar"]
+            others = [item for item in items if item.source_id != "app:calendar" and (item.published_at or item.fetched_at) >= now - DAY_WINDOW]
+            related = {event.item_id: found for event in events if (found := day_related(event, others))}
+            items = events
+        if items and all(item.source_id == "app:calendar" for item in items):
+            items, order = sorted(items, key=lambda item: item.published_at or item.fetched_at), "page"
         seen = {item.item_id for item, seen_at in entries if seen_at}
         ranked, has_more = rank(items, compiled.rules, now, set(exclude_ids) | long_seen, limit, order, circles, seen, self.ranker, compiled.explore, people, match.kind == "same_story")
         if match.kind == "enrich" and match.target:
@@ -1490,8 +1560,8 @@ class Brain:
         if circles.empty and any(condition.field == "author_in" for rule in compiled.rules for condition in rule.conditions()):
             problems.append(NOBODY_KNOWN)
         problems += self.policy_warnings(compiled) + self.judgment_conflicts(compiled)
-        if match.kind == "time_window":
-            problems.append(DAY_BOARD_LATER)
+        if match.kind == "time_window" and not any(app.app == "calendar" for source in compiled.sources for app in source.apps):
+            problems.append(DAY_BOARD_NEEDS)
         return ViewPage(
             view_id=view_id,
             items=ranked,

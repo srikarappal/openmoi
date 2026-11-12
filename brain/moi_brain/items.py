@@ -15,7 +15,11 @@ ItemKind = Literal["post", "article", "video", "product", "link"]
 EventKind = Literal["open", "seen", "less_like_this"]
 
 ITEM_KINDS = set(get_args(ItemKind))
-DEFAULT_KINDS: dict[str, ItemKind] = {"x": "post", "youtube": "video", "rss": "article", "site": "link", "page": "post", "watch": "link", "history": "post"}
+DEFAULT_KINDS: dict[str, ItemKind] = {"x": "post", "youtube": "video", "rss": "article", "site": "link", "page": "post", "watch": "link", "history": "post", "app": "post"}
+# Order confirmations from Mail are your own shopping history, like an export: they count however old.
+MAIL_ORDERS = "history:mail"
+# Where an item from an app on this Mac lives (an event, a message, a note, a file): it opens nowhere, it says where.
+APP_URL = re.compile(r"^moi-app://(calendar|mail|notes|files)/[\w.~%-]{1,600}$")
 TRACKING_PARAMS = {"fbclid", "gclid", "igshid", "mc_cid", "mc_eid", "ref", "ref_src", "si"}
 HOST_NOISE = {"www", "feeds", "feed", "rss", "m"}
 WEB_SCHEMES = {"http", "https"}
@@ -279,7 +283,7 @@ def normalize(source_id: str, record: dict[str, Any], now: datetime, base_url: s
     text = clean_text(record.get("text"))
     if not raw_url or not (title or text):
         return None
-    url = web_url(raw_url, base_url)
+    url = raw_url if (source_id.startswith("app:") or source_id == MAIL_ORDERS) and APP_URL.match(raw_url) else web_url(raw_url, base_url)
     if url is None:
         return None
     native_id = clean_text(record.get("native_id"), 500) or url

@@ -22,6 +22,7 @@ from moi_brain.feeds import CHANNEL_ID, read_takeout
 from moi_brain.files import read_text, write_atomic
 from moi_brain.items import (
     JUDGED_PREFIX,
+    MAIL_ORDERS,
     page_source_id,
     rss_source_id,
     watch_source_id,
@@ -294,8 +295,59 @@ def watch_minutes(rest: str) -> int:
 HISTORIES = ("facebook", "amazon")
 
 
+AppName = Literal["calendar", "mail", "notes", "files"]
+# "Calendar: next 7 days", "Calendar: this week".
+CALENDAR_DAYS = re.compile(r"\b(?:next\s+(\d{1,2})\s+days?|(this\s+)?week)\b", re.IGNORECASE)
+
+
+class AppRef(BaseModel):
+    """An app on this Mac a view reads: Calendar some days ahead, Mail newsletters or orders, Notes, or folders you
+    opted into."""
+
+    app: AppName
+    # Mail: "newsletters" or "orders".
+    what: str = ""
+    days: int = Field(default=1, ge=1, le=31)
+    folders: list[str] = Field(default_factory=list)
+
+    @property
+    def source_id(self) -> str:
+        if self.app == "mail":
+            return MAIL_ORDERS if self.what == "orders" else "app:mail"
+        return f"app:{self.app}"
+
+
+def opted_folder(raw: str) -> str | None:
+    """A folder you may opt into: inside your home folder, not the home folder itself; else None."""
+    home = Path.home().resolve()
+    try:
+        folder = Path(raw.strip()).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return str(folder) if folder != home and folder.is_relative_to(home) else None
+
+
+def app_refs(key: str, rest: str) -> tuple[list[AppRef], list[str]]:
+    """The apps a source line names: Calendar, Mail (newsletters, orders), Notes or Files (folders in your home)."""
+    if key == "calendar":
+        match = CALENDAR_DAYS.search(rest)
+        days = int(match.group(1)) if match and match.group(1) else 7 if match else 1
+        return [AppRef(app="calendar", days=max(1, min(days, 31)))], []
+    if key == "mail":
+        wanted = [what for what in ("newsletters", "orders") if what in rest.lower()] or ["newsletters"]
+        return [AppRef(app="mail", what=what) for what in wanted], []
+    if key == "notes":
+        return [AppRef(app="notes")], []
+    folders = [part.strip() for part in rest.split(",") if part.strip()]
+    kept = [found for part in folders if (found := opted_folder(part))]
+    warnings = [f"Files: {part} is not a folder inside your home folder, so it is not read." for part in folders if not opted_folder(part)]
+    if not folders:
+        warnings.append("Files needs the folders to read, such as Files: ~/Documents/Papers")
+    return ([AppRef(app="files", folders=kept)] if kept else []), warnings
+
+
 class SourceRef(BaseModel):
-    source_id: Literal["x", "youtube", "rss", "page", "history", "collection", "shop"]
+    source_id: Literal["x", "youtube", "rss", "page", "history", "collection", "shop", "app"]
     page_type: str | None = None
     channels: list[str] = Field(default_factory=list)
     feeds: list[str] = Field(default_factory=list)
@@ -315,6 +367,8 @@ class SourceRef(BaseModel):
     modes: dict[str, Literal["pilot", "assist"]] = Field(default_factory=dict)
     # Pages watched for changes: a change becomes an item your rules judge, and an alert if they keep it.
     watches: list[WatchRef] = Field(default_factory=list)
+    # Apps on this Mac, read through moi_mac_helper.
+    apps: list[AppRef] = Field(default_factory=list)
 
 
 class MatchSpec(BaseModel):
@@ -371,6 +425,7 @@ def check_view_id(view_id: str) -> str:
 def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRef], list[str]]:
     """Bullets such as 'X home timeline', 'YouTube: @a, @b', 'RSS: https://...', 'Page: https://... (newest first)' or a bare feed URL."""
     has_x, channels, feeds, pages, ordered, following, watches, histories, collections, stores, warnings = False, [], [], [], [], [], [], [], [], [], []
+    apps: list[AppRef] = []
     modes: dict[str, Literal["pilot", "assist"]] = {}
     for line in bullets(body):
         label, _, rest = line.partition(":")
@@ -418,6 +473,10 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
             following += found_lists
             if not found_lists:
                 warnings.append(f"No page address found in: {line}")
+        elif key in ("calendar", "mail", "notes", "files"):
+            found_apps, app_warnings = app_refs(key, rest)
+            apps += found_apps
+            warnings += app_warnings
         elif X_LINE.match(line):
             has_x = True
         else:
@@ -433,6 +492,10 @@ def parse_sources(body: str, takeout_channels: list[str]) -> tuple[list[SourceRe
         sources.append(SourceRef(source_id="collection", collections=list(dict.fromkeys(collections))))
     if stores:
         sources.append(SourceRef(source_id="shop", stores=list(dict.fromkeys(stores))))
+    if apps:
+        folders = list(dict.fromkeys(folder for app in apps for folder in app.folders))
+        merged = {app.source_id: app for app in apps if app.app != "files"} | ({"app:files": AppRef(app="files", folders=folders)} if folders else {})
+        sources.append(SourceRef(source_id="app", apps=list(merged.values())))
     if pages or following or watches:
         unique_watches = list({watch.url: watch for watch in watches}.values())
         sources.append(
@@ -500,6 +563,7 @@ def source_ids(sources: list[SourceRef]) -> list[str]:
         ids += [f"{COLLECTION_PREFIX}{name}" for name in source.collections]
         ids += [page_source_id(page) for page in source.pages]
         ids += [watch_source_id(watch.url) for watch in source.watches]
+        ids += [app.source_id for app in source.apps]
     return list(dict.fromkeys(ids))
 
 

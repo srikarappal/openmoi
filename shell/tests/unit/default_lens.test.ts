@@ -64,6 +64,8 @@ describe("default lens", () => {
     moi.render([view_item("p1", { kind: "product", title: "Lamp", extra: { price_text: "$24.99", rating_text: "4.6 out of 5 stars", price_note: "Lowest you saw: $19.99 on Nov 2" } })], null)
     expect(dom.window.document.querySelector(".details")?.textContent).toBe("$24.99 · 4.6 out of 5 stars")
     expect(dom.window.document.querySelector(".price_note")?.textContent).toBe("Lowest you saw: $19.99 on Nov 2")
+    moi.render([view_item("e1", { title: "Standup", extra: { when: "09:00 to 09:15", location: "Room 4" } })], null)
+    expect(dom.window.document.querySelector(".details")?.textContent).toBe("09:00 to 09:15 · Room 4")
   })
 
   it("uses a grid for listings and a reader for one article", () => {

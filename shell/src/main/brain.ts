@@ -30,6 +30,7 @@ import type {
   SearchHit,
   CollectionInfo,
   Answer,
+  AppAccess,
   LookupStart,
   PeopleReply,
   ShopStart,
@@ -220,6 +221,14 @@ export class BrainClient {
 
   lookup(view_id: string, item_id: string, entity: string): Promise<LookupStart> {
     return this.request("POST", "/lookup", { view_id, item_id, entity })
+  }
+
+  apps(): Promise<AppAccess> {
+    return this.request("GET", "/apps")
+  }
+
+  allow_app(capability: "calendar" | "mail" | "notes"): Promise<AppAccess> {
+    return this.request("POST", "/apps/allow", { capability })
   }
 
   people_suggest(): Promise<PeopleReply> {

@@ -15,6 +15,8 @@ export interface ChatHooks {
   // A view was given something to shop for: show it, made just now or not, and read its stores.
   shopping(view_id: string, created: boolean): Promise<void>
   model_changed(): void
+  // macOS let openMoi read an app: the view you are on reads again.
+  app_allowed(): Promise<void>
   open_folder(path: string): void
   // Turns reading in the background on or off; the reply says what that means.
   set_background(on: boolean): string
@@ -149,6 +151,19 @@ export class ChatController {
         const { path } = await this.brain.share_view(view_id)
         this.hooks.show_file(path)
         this.say(`Saved a copy of ${view_id} to send: ${path}. People, following lists and watched pages are left out.`)
+        return
+      }
+      case "allow": {
+        if (!command.capability) {
+          const access = await this.brain.apps()
+          const lines = Object.entries(access.status).map(([app, status]) => `${app}: ${status.replaceAll("_", " ")}`)
+          this.say(lines.length ? `What openMoi may read on this Mac: ${lines.join(", ")}. Say /allow calendar, mail or notes to ask for one.` : `Apps on this Mac are out of reach: ${access.message}`)
+          return
+        }
+        const capability = command.capability
+        const access = await this.hooks.track(`Asking macOS about ${capability}`, () => this.brain.allow_app(capability))
+        this.say(access.message)
+        if (access.status[capability] === "allowed") await this.hooks.app_allowed()
         return
       }
       case "people": {

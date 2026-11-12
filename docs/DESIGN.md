@@ -876,8 +876,8 @@ Packaging from L9 moves earlier the day builds go to people outside the team.
 | L4 Intent views | Read, Watch, Shop, Chat Q&A, collections | View as a .md file | built |
 | L5 Actions and gate | Tiers, executors, verify, audit, injection defense | Read only boundary, shell and brain split | built |
 | L6 Agents | Runtime, tools, standing tasks | Brain, gate | built |
-| L7 Recipes and mashups | Match kinds, identity and entity links | View as a .md file | built (time_window waits for L8) |
-| L8 Native apps | Swift helper, app ladder | Source adapter | not built |
+| L7 Recipes and mashups | Match kinds, identity and entity links | View as a .md file | built |
+| L8 Native apps | Swift helper, app ladder | Source adapter | built (rungs A, B and folders) |
 | L9 Launch hardening | Packaging, socket RPC, privacy modes, kill switch, legal | LLM gateway, shell and brain split | not built |
 
 ## 17. L1 Robust reading `[built]`
@@ -1201,12 +1201,12 @@ view .md -> ## Match in words -> fast model -> {kind, lead, target} -> checked a
 | same_product | One card per product, its cheapest listing, the product's other listings under it ("also at amazon.com", each store once): the same listing, a barcode number in the item's fields or a model number in the title (WH-1000XM5 is WH1000XM5; sizes such as 16GB or 1080p are not models) join for sure; titles alike across different stores join as "possible match"; titles with different numbers never do | |
 | mentions | The fast model reads the lead source's posts in the background, ten a call, once each, for the names of things they mention (data, never instructions). A name is matched against what openMoi already holds from the target store (a model number, or most of its words: found; some: possible match). The rest show Look up: one press reads that store's search page once, within the site's budget, and the name is found there or marked not found, never looked up again. A view reads no store page on its own: its summary says so. At most 10 lookups wait per view | Real store pages in a real session |
 | enrich | The lead source's items, each with up to five items of the target source about it (a shared model number, or titles alike), from what openMoi already read | |
-| time_window | Compiles, then warns that a Day board needs the calendar | Waits for L8 |
+| time_window | A Day board, built with L8: each of today's meetings with what its attendees posted and what is about it | |
 | Lens | Related items show under a card and open their own original; mentions show with their state and a Look up button; after a lookup the shown cards update in place. Look up needs your click and is paced per name | |
 
 Two changes to the data above: `resolved_at` stays empty while a name waits to be looked up, and a second small table, `mention_checks`, records which posts were read for names, so a post naming nothing is not read again.
 
-## 24. L8 Native apps and System OS `[not built]`
+## 24. L8 Native apps and System OS `[built]`
 
 **Adds**
 
@@ -1225,6 +1225,28 @@ A system frameworks (EventKit, Contacts)
 * macOS permissions asked one at a time, each explained; every feature degrades cleanly without it.
 
 **Exit:** Mail and Calendar items in views with zero synthetic clicks.
+
+**As built (Nov 12, 2026):**
+
+```
+view .md: * Calendar | * Mail: newsletters, orders | * Notes | * Files: ~/Documents/Papers
+  -> brain refresh -> moi_mac_helper <command>, JSON on stdin -> records -> items in views
+  -> no permission yet -> the view says why and "say /allow calendar" -> /allow calendar -> macOS asks once -> the view reads again
+```
+
+| Piece | Built | Not verified |
+|---|---|---|
+| Helper | `helper/main.swift`, built by `helper/build.sh` with swiftc: one command per run, one JSON answer. `status` never asks macOS; `request` asks for one capability. An Info.plist inside the binary says why it asks. It only reads: no command writes to an app, clicks or types | Signed and notarized (L9) |
+| Calendar (rung A, EventKit) | Today, or the next days a line names ("next 3 days", "this week"). A view of only Calendar is a Today card in time order, each event with when and where; an event moved or deleted leaves the view at the next read, and one over before today began is gone | The prompt from the packaged app |
+| Mail (rung B, JXA) | Newsletters (they carry List-Unsubscribe) as articles that open their web copy; order confirmations (by subject) as your own shopping history with their price, counting however old, like an export. Two weeks of newsletters, three months of orders | A real inbox of thousands |
+| Notes (rung B, JXA) | Notes as articles | |
+| Files | Folders inside your home folder that a view names, two levels deep, newest first, no hidden files and no links out of them; the text of .txt and .md files is read | Search inside them with Spotlight |
+| Day board | `time_window` with Calendar in Sources: each meeting with posts by its attendees (name or address) and items about its title from the last two days | |
+| Permissions | Asked one at a time by `/allow calendar`, `mail` or `notes`; a view says which app it cannot read, why openMoi would read it and how to allow it, and every other source keeps working; `/allow` alone lists what openMoi may read. Mail and Notes must be open once for macOS to ask | |
+| App items | Open nowhere: a click says where the item lives ("This is in Calendar on your Mac") | |
+| Rungs C and D | The accessibility tree and screen capture | Not built: no first app needs them |
+
+Checked end to end with a fake helper that keeps the real helper's commands and permission rules, and with the real helper's commands that never ask; Mail and Calendar through the packaged app and its permission prompts wait for L9.
 
 ## 25. L9 Launch hardening `[not built]`
 

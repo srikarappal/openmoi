@@ -50,6 +50,9 @@ function ignore(): void {}
 const TOP_BAR_HEIGHT = 48
 const SIDE_PANEL_WIDTH = 340
 const MAX_NOTICES = 6
+// An item from an app on this Mac (an event, a message, a note, a file) says where it is instead of opening.
+const APP_ITEM = /^moi-app:\/\/(calendar|mail|notes|files)\//
+const APP_NAMES: Record<string, string> = { calendar: "Calendar", mail: "Mail", notes: "Notes", files: "your files" }
 const MIN_OMNIBOX = 2
 const OMNIBOX_HITS = 6
 const OMNIBOX_LABEL = 90
@@ -148,6 +151,7 @@ export class Shell implements ViewHost {
       on_applied: (proposal) => this.on_applied(proposal),
       view_created: (view_id) => this.on_view_created(view_id),
       shopping: (view_id, created) => this.on_shopping(view_id, created),
+      app_allowed: () => this.run({ type: "refresh" }),
       model_changed: () => {
         this.views.recheck(this.chat_view_id).catch((error) => this.notify(String(error)))
       },
@@ -469,6 +473,11 @@ export class Shell implements ViewHost {
 
   // Originals open where your sessions are: your Chrome when connected, an openMoi tab otherwise.
   private open_original(url: string): void {
+    const app = APP_ITEM.exec(url)
+    if (app) {
+      this.notify(`This is in ${APP_NAMES[app[1]]} on your Mac; openMoi only reads it there.`)
+      return
+    }
     if (!is_web_url(url)) {
       this.notify(`openMoi only opens web links, not ${url.slice(0, 40)}`)
       return

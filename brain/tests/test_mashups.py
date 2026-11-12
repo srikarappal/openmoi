@@ -295,10 +295,3 @@ def test_a_review_wall_attaches_videos_to_each_product(recipes, paths):
     ])
     cards = {entry["item"]["title"]: [related["title"] for related in entry["related"]] for entry in client.post("/view/reviews", json={}).json()["items"]}
     assert cards == {"Sony WH-1000XM5 Wireless Headphones": ["WH1000XM5 review after a year"], "Pasta maker deluxe": []}
-
-
-def test_a_day_board_waits_for_native_apps_and_says_so(recipes, paths):
-    _, client, _ = recipes
-    view(paths, "day", ["X home timeline"], "Today's meetings with related posts by attendees.")
-    page = client.post("/view/day", json={}).json()
-    assert any("Day boards need your calendar" in warning for warning in page["warnings"])
