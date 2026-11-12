@@ -381,3 +381,44 @@ test("Read later: save with a click, make its tab, read the offline copy there, 
     await harness.close()
   }
 })
+
+test("/shop searches the view's store, shows products with prices and never sends page text to a model", async () => {
+  const feed = `# Feed\n\n## Sources\n* RSS: ${world.base_url}/rss/tech.xml\n`
+  const shop = `# Shop\n\n## Sources\n* Shop: ${world.base_url}/pages/shop.html?k={query}\n`
+  const harness = await Harness.launch(world, { views: { feed, shop } })
+  try {
+    await loaded(harness, "New laptop chip")
+    await harness.chat("/shop desk lamp")
+    await expect(harness.chrome.locator(".message.moi").last()).toHaveText('Looking for "desk lamp" in shop.')
+    await expect(harness.chrome.locator("button.tab.view.active")).toHaveText("Shop")
+    const text = await eventually(
+      () => harness.last_lens_text(),
+      (value) => value.includes("Dimmable LED desk lamp with USB port") && value.includes("$24.99"),
+      60_000,
+    )
+    expect(text).toContain("Architect clamp lamp")
+    expect(JSON.parse(harness.file(".moi/shop.json"))).toEqual({ queries: { shop: "desk lamp" } })
+    const calls = await world.model_calls("extractor")
+    expect(calls.every((call) => !JSON.stringify(call.payload).includes("CANARY_PAGE_TEXT"))).toBe(true)
+  } finally {
+    await harness.close()
+  }
+})
+
+test("questions about what you read are answered with links, and the address bar finds your items first", async () => {
+  const harness = await Harness.launch(world)
+  try {
+    await loaded(harness, "New laptop chip")
+    await harness.chat("What did I read about the laptop chip?")
+    const answer = harness.chrome.locator(".message.moi").last()
+    await expect(answer).toContainText("You read about it in New laptop chip doubles battery life [1].")
+    await expect(answer.locator("a")).toHaveText([/\/articles\/tech1/])
+    await harness.chrome.locator(".address input").pressSequentially("battery life")
+    await expect(harness.chrome.locator(".omnibox_title")).toHaveText('Yours for "battery life"')
+    await harness.chrome.locator(".omni_hit", { hasText: "New laptop chip doubles battery life" }).click()
+    await expect(harness.chrome.locator(".tab.web.active")).toHaveCount(1)
+    await expect(harness.chrome.locator(".omnibox")).toHaveCount(0)
+  } finally {
+    await harness.close()
+  }
+})

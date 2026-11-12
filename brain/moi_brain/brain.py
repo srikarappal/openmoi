@@ -588,8 +588,12 @@ class Brain:
             nearest = sorted(closeness, key=closeness.__getitem__, reverse=True)[: limit * SEARCH_DEPTH]
             found |= self.store.get_items([item_id for item_id in nearest if item_id not in found])
         scores = {item_id: TEXT_WEIGHT * text_scores.get(item_id, 0.0) + (1 - TEXT_WEIGHT) * closeness.get(item_id, 0.0) for item_id in found}
-        ranked = sorted(found, key=scores.__getitem__, reverse=True)[:limit]
-        return [SearchHit(item=found[item_id], score=round(scores[item_id], 4)) for item_id in ranked if scores[item_id] > 0]
+        # One hit per link: the same story from two sources shows once, its best scored copy.
+        by_url: dict[str, str] = {}
+        for item_id in sorted(found, key=scores.__getitem__, reverse=True):
+            if scores[item_id] > 0:
+                by_url.setdefault(found[item_id].url, item_id)
+        return [SearchHit(item=found[item_id], score=round(scores[item_id], 4)) for item_id in list(by_url.values())[:limit]]
 
     def with_price_notes(self, ranked: list[ViewItem]) -> list[ViewItem]:
         """Products whose price you saw on other days say how this one compares: the lowest you saw, or that it is."""

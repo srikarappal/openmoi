@@ -233,3 +233,11 @@ def test_a_story_never_holds_two_items_of_one_source_even_through_a_chain():
     assert story_key(assign_clusters([third_source], [stored_first, stored_other])[0]) == first.item_id
     # Once you saw the story, the outlet's follow up joins it, for the update pass to judge.
     assert story_key(assign_clusters([later], [stored_first, stored_other], seen={stored_other.item_id})[0]) == first.item_id
+
+
+def test_one_link_from_two_sources_is_one_hit(client, brain):
+    shared = {"native_id": "1", "url": "https://news.example/story", "title": "Lithium recycling scales up", "published_at": NOW.isoformat()}
+    brain.store_records("rss:a", [shared])
+    brain.store_records("rss:b", [{**shared, "native_id": "9"}])
+    hits = client.get("/search", params={"q": "lithium"}).json()
+    assert [hit["item"]["url"] for hit in hits] == ["https://news.example/story"]
